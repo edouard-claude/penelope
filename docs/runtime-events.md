@@ -106,7 +106,7 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `turn.loop_aborted` | le détecteur de boucles arrête les outils du tour | `report` |
 | `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) |
 | `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |
-| `llm.fallback_used` | la réponse vient d'un autre modèle que celui demandé (repli fait par OpenRouter) | `requested`, `served` |
+| `llm.fallback_used` | la réponse vient d'un autre modèle que celui demandé : repli fait par OpenRouter entre ses modèles. Un repli joué par la boucle elle-même vers un autre fournisseur (1.0.22, #259 : serveur local arrêté, la suite part chez OpenRouter) ne l'écrit pas ; il ne laisse qu'un `conv.attempt` de cause `fallback`, puis le `conv.assistant` du modèle qui a répondu | `requested`, `served` |
 | `llm.attachment_rejected` | le fournisseur refuse une image jointe (400) : les images de la requête sont retirées de la copie envoyée, une relance, et plus jamais renvoyées dans la session ; l'historique les garde (#231) | `model`, `motif`, `error`, `images` (SHA-256 de chaque image, jamais son contenu) |
 | `approval.decided` | une carte d'approbation, ou un effet au sort incertain, est tranchée ; la première décision gagne | `id`, `approved`, `via`, `window` ; pour un effet incertain, `effect` et `choice` |
 | `approval.judged` | le juge d'approbation (#203) a jugé une ligne `shell_exec` sans motif possible, ou n'a pas pu | `command_sha` (seize caractères du SHA-256 de la ligne, jamais la ligne), `mode`, `outcome` (`carte`, `auto_read`, `regle_pouvoirs`, `echec`) ; jugée : `verdict`, `powers`, `hosts`, `model`, `duration_ms`, `cost_usd`, `rule` ; en échec : `failure` (`indisponible`, `delai`, `schema`) et `detail` |
@@ -116,6 +116,21 @@ base64 et 8 000 px de côté pour Anthropic) est réduite par l'outil du systèm
 sous macOS) : `media.image_reduced`, attaché à la session, porte `model`, `path` (la
 photo reçue, gardée intacte), `before_bytes`, `after_bytes`, `before` et `after`
 (`LxH`). Sans outil ou en échec, la photo part telle quelle (#242).
+
+D'autres événements suivent la conversation hors de la boucle : le préfixe et les skills
+(écrits par le moteur de contexte et l'exécuteur, attachés à la session), la mémoire
+(écrits par le tour suivant et par la consolidation nocturne ; ceux de la consolidation ne
+sont pas attachés à une session) et la livraison d'un plan (attachés à la session du run).
+
+| Kind | Écrit quand | Payload |
+|---|---|---|
+| `prompt.updated` | la différence du préfixe retenu part en fin de prompt avec le message qui suit un changement (#236) ; une fois par différence | `base` (l'empreinte du préfixe retenu ; absent : skills seules), `rendered` (le préfixe décrit, entier, pour la différence suivante), `tiles`, `changed` (les tuiles changées), `rewritten` (celles dites réécrites, au-delà de 1 500 caractères), `skills` (nom → empreinte du corps ; vide : retirée), `chars` (la taille du bloc envoyé) |
+| `skill.loaded` | `skill_load` a donné le corps d'une skill à la session ; sa modification ultérieure sera dite en `<mise-a-jour>` | `name`, `body_hash` |
+| `memory.outcome` | le message suivant du propriétaire a jugé un souvenir servi par la réponse d'avant (#230) | `uid`, `success` (`true` sans marqueur de correction, `false` pour une correction qui reprend un mot du souvenir) |
+| `memory.contested` | la consolidation soumet au propriétaire une entrée assez jugée dont la confiance est passée sous `contested_confidence` | `uid`, `approval` (la carte), `successes`, `contradictions` |
+| `memory.contested_kept` | la carte a répondu « Rien » : l'entrée reste et ses signaux repartent de zéro | `uid`, `approval` |
+| `memory.contested_retired` | la carte a répondu « Tout » : l'entrée est retirée | `approval`, `uid`, `retired` |
+| `workflow.delivery` | une étape `delivery` d'un plan livré s'est terminée (PR, CI, E2E, bilan ou PR prod) | `run`, `stage`, `result`, `content` |
 
 Les événements `conv.*` portent le **contenu** de la conversation, pour que le journal
 se suffise (épopée #208, `design/v1/source-de-verite.md` §2.2). Chaque payload a

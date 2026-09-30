@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 27 septembre 2026.
+Dernière mise à jour : 30 septembre 2026.
 
 ## Version 1
 
@@ -11,6 +11,40 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.23
+
+Documentation seulement, remise à l'état de `main` à la 1.0.22. La 1.0.7 avait rattrapé la
+prose à la 1.0.3 ; les quinze lots suivants (cache de prompt en fin de prompt, signaux
+d'usage de la mémoire, trace des outils, plans en phases, livraison et gate de production,
+carte de l'environnement, inférence locale) n'avaient pas été reportés, et le README disait
+encore l'inverse de ce que le code fait sur trois points (préfixe qui « attend » un cache
+froid sans rien dire, usage mesuré qui « ne promeut rien seul », suites réseau « jamais
+lancées »).
+
+- `README.md` : une section « Comment un message est traité » avec le parcours en ASCII,
+  vérifié case par case contre les crates ; les sous-sections complétées avec ce que la
+  1.0.x a livré, une sous-section « Un plan, pas un formulaire », l'inférence locale sur Mac
+  en tête des portes vers les modèles, « Ce qu'elle ne fait pas » corrigée (Linux non
+  prévu, suites réseau datées, gate qui ne déploie pas). Les tableaux comparatifs quittent
+  le README pour `docs/comparaison.md`, présentés comme un instantané du 18/09/2026 non
+  revérifié depuis.
+- `docs/architecture.md` : refait à la 1.0.22 (lignes par crate, 221 679 en tout, 75
+  scénarios, daemon 14 730/14 800, cinq fichiers au-dessus de 800 lignes, 46 traits
+  publics), `penelope-cli` → `penelope-hitl`, port `FallbackProviders`, `ImageShrinker`,
+  rôles complétés, `prompt.updated` et `skill.loaded` dans le journal.
+- `docs/README.md` : index des commandes CLI (`penelope --help` compilé), ancres vers
+  l'inférence locale, Codex, les plans, la livraison, le gate, le juge, le jeu de
+  décisions, la carte de l'environnement, la trace des outils, `comparaison.md`.
+- `docs/runtime-events.md` : `prompt.updated`, `skill.loaded`, `memory.outcome`,
+  `memory.contested*`, `workflow.delivery` avec leurs champs lus dans le code ; le repli
+  joué par la boucle ne laisse pas de `llm.fallback_used`.
+- `docs/install-headless.md`, `docs/telegram.md`, `docs/workflows.md`, `docs/mcp.md`,
+  `docs/context.md`, décision 0008 (complétée par #236, l'histoire gardée), `CLAUDE.md`
+  (suites réseau à lancer à la main), `.github/workflows/README.md` (version de la branche,
+  cliquet) : chaque constat revérifié dans le code avant d'écrire.
+- Vérification : `cargo test -p penelope-evals --test docs` (liens, ancres, sections
+  « limites », tables générées).
 
 ### 1.0.22
 

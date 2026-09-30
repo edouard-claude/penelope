@@ -8,9 +8,9 @@
 
 Un agent personnel qui tourne en permanence sur un Mac sans écran. On lui parle depuis
 Telegram ou en SSH. Elle garde ce qu'elle apprend dans des fichiers Markdown que l'on
-peut relire et corriger à la main, appelle des serveurs MCP, exécute des workflows qui
+peut relire et corriger à la main, appelle des serveurs MCP, exécute des plans qui
 survivent à un redémarrage, et demande l'accord de son propriétaire avant tout ce qui
-engage.
+engage. Le modèle peut tourner sur le Mac lui-même.
 
 Rust, 27 crates, `#![forbid(unsafe_code)]` dans chacun. La suite de tests
 fonctionne hors réseau externe.
@@ -32,13 +32,23 @@ le code décide. Un souvenir promu peut en remplacer un autre (`supersede`, `rep
 `retire`), pas seulement s'empiler ; chaque opération garde sa pré-image dans
 `mem_history` et le vault est commité dans git.
 
+Le propriétaire garde le dernier mot. Un remplacement qui vise son profil, ou une entrée
+qu'il a écrite, devient une carte (Remplacer, Exception, Ignorer) au lieu de passer en
+silence ; la substitution d'une valeur par une autre (tu contre vous, une langue, une
+devise, un jour) compte comme une contradiction. « Retiens que… » reste sa parole même
+reformulé : une phrase de son message du même tour endosse le candidat. Ses réponses
+jugent ensuite chaque souvenir servi : un « non, … » compte une contradiction, un message
+ordinaire un succès ; une entrée contestée n'est plus servie d'office et lui est soumise
+une fois.
+
 Le vault est un wiki Markdown valide à tout instant : frontmatter YAML, identifiants de
 bloc `^uid`, wikilinks. On le lit et on le corrige en SSH pendant que l'agent tourne,
-l'écriture est optimiste et rejoue l'opération ligne à ligne si le fichier a bougé.
-Sept niveaux, de l'instruction permanente à l'épisodique, avec la provenance de chaque
-entrée : ce qui vient d'un document ingéré est marqué comme non fiable. Les clés et les
-jetons repérés dans un candidat partent au magasin de secrets, la mémoire ne garde que
-`${SECRET:nom}`.
+l'écriture est optimiste et rejoue l'opération ligne à ligne si le fichier a bougé. Les
+outils de fichiers y écrivent par le préfixe `vault:`, qui n'ouvre que lui ; une note de
+forme vault écrite ailleurs est signalée. Sept niveaux, de l'instruction permanente à
+l'épisodique, avec la provenance de chaque entrée : ce qui vient d'un document ingéré est
+marqué comme non fiable. Les clés et les jetons repérés dans un candidat partent au
+magasin de secrets, la mémoire ne garde que `${SECRET:nom}`.
 
 Le rappel ne dépend pas d'un modèle : recherche déterministe bornée à 150 ms au début du
 tour, recherche sémantique quand la phrase montre une intention de rappel, embeddings
@@ -48,18 +58,20 @@ calculés en fond avec repli lexical si le budget de 1,5 s est dépassé.
 
 Le prompt est bâti en cinq tuiles, de l'identité (T0) au volatil de fin de prompt (T4).
 Le préfixe T0 à T2 est identique octet pour octet d'un tour à l'autre : ce n'est pas une
-intention, c'est un test (`ca_5_3_prefix_is_byte_identical_across_turns`). La
-conséquence est assumée et écrite : un souvenir, une skill ou un serveur MCP ajoutés en
-pleine conversation n'entrent dans le prompt qu'au prochain cache froid ou à la
-compaction suivante, parce que les faire entrer tout de suite coûterait plus cher que ce
-qu'ils rapportent.
+intention, c'est un test (`ca_5_3_prefix_is_byte_identical_across_turns`). Un souvenir,
+une skill ou un serveur MCP ajoutés en pleine conversation n'y entrent qu'au prochain
+cache froid ; d'ici là, leur différence part **en fin de prompt**, une seule fois, dans un
+bloc `<mise-a-jour>` du message suivant. La liste d'outils suit la même règle : gelée
+entre deux frontières, un outil découvert entre-temps s'appelle par `tool_call`.
 
-Cinq niveaux de compaction, dont un seul appelle un modèle. `context.max_prompt_tokens`
-borne le contexte indépendamment de la fenêtre annoncée par le modèle, la compaction de
-fond se déclenche sur le prompt réellement facturé au dernier appel, et une réserve
-budgétaire empêche le plafond du jour de bloquer les résumés. Chaque raté de cache est
-attribué à une cause — la tuile du prompt qui a bougé, quand c'est le préfixe — et visible
-par `penelope usage --by miss`. Le prompt système envoyé est gardé sous son empreinte :
+Cinq niveaux de compaction, dont un seul appelle un modèle ; le résumé peut relire le
+préfixe de la conversation au prix du cache plutôt que tout au prix fort
+(`context.compaction_on_prefix`). `context.max_prompt_tokens` borne le contexte
+indépendamment de la fenêtre annoncée par le modèle, la compaction de fond se déclenche
+sur le prompt réellement facturé au dernier appel, et une réserve budgétaire empêche le
+plafond du jour de bloquer les résumés. Chaque raté de cache est attribué à une cause (la
+tuile du prompt qui a bougé, quand c'est le préfixe) et visible par
+`penelope usage --by miss`. Le prompt système envoyé est gardé sous son empreinte :
 `penelope audit show --turn <id>` rend ce que le modèle avait sous les yeux, et dit ce
 qu'il ne peut pas reconstituer.
 
@@ -71,6 +83,14 @@ par un ledger avant exécution ; un effet dont l'issue est incertaine devient un
 question posée au propriétaire, jamais une relance automatique. Un run de workflow écrit
 son étape courante, ses sorties et son journal dans la même transaction, et reprend à
 cette étape après un redémarrage. Le tour interrompu est remis en file une seule fois.
+
+La machine aussi est prise en compte. Un tour, un job ou un run tiennent l'anti-veille ;
+une sortie de veille est remarquée, une passe de santé revérifie le canal et relance les
+serveurs MCP dégradés, puis les créneaux manqués partent une fois, en disant leur retard.
+Une planification qui échoue en série n'alerte qu'au premier échec, quand le motif change
+et à des paliers, jamais 24 fois par jour. Chaque arrêt dit qui l'a demandé et pourquoi,
+et le démarrage suivant cite l'arrêt précédent, propre ou non.
+
 Le [flux runtime](docs/runtime-events.md) permet à un observateur local authentifié de
 suivre ces événements en direct et de les rejouer depuis un identifiant durable. Il
 est désactivé sans consommateur configuré : ce WebSocket de lecture seule n'est pas
@@ -85,114 +105,104 @@ un changement de configuration. Les motifs refusent tout enchaînement (`;`, `&&
 substitution, redirection). Une règle est visible et révocable, la première décision
 gagne, et le contenu rapporté par un outil est une donnée, jamais une instruction.
 
-### Trois portes vers les modèles
+Une ligne de commande sans motif possible peut être décrite par un juge (un modèle
+auxiliaire, sous des planchers déterministes) avant d'aller sur la carte ; ses décisions,
+carte ou pas, peuvent être gardées dans un jeu local, opt-in, exportable en JSONL pour
+évaluer un autre juge plus tard.
 
-OpenRouter (clé d'API, coût facturé à l'appel), un endpoint compatible OpenAI (serveur
-local, autre fournisseur), et le backend Codex d'un abonnement ChatGPT — celui-là ne
-facture rien à l'appel, il consomme le quota du plan. L'abonnement ne sert que les tours
-ouverts par le propriétaire : rêve, veille, compaction, workflows et autres travaux de
-fond repassent par OpenRouter, sans un mot. Cet usage est toléré par OpenAI, jamais
-garanti par contrat, et Pénélope le dit là où ça compte
-([décision 0010](docs/decisions/0010-fournisseur-codex-oauth.md)).
+### Un plan, pas un formulaire
+
+Un travail qui écrit du code ne se lance pas par un formulaire : on en parle, Pénélope
+propose un plan (but, pas, paramètres, brief) dans le sujet de la conversation, on le
+corrige, et « Vas-y » porte l'empreinte de la révision montrée. Un clic périmé est
+refusé, un double clic ne lance qu'un run.
+
+Le plan approuvé devient un run durable : une phase par pas, chacune dans un agent à
+contexte neuf, le modèle choisi par phase, des cartes d'OK après la spécification, les
+tests et le code, une revue contradictoire bornée à deux reprises. Un plan qui écrit du
+code est ensuite livré en dev : PR sur le forgeur (GitHub ou GitLab, lus dans
+`.penelope/delivery.toml` et dans le dépôt, rien n'est supposé), CI du commit poussé, E2E
+depuis l'extérieur ; une seule PR par run, même après un arrêt brutal. Puis un bilan
+vérifié et un gate humain : « Proposer la PR prod », « Re-vérifier », « Refuser ». Le clic
+n'est pas cru sur parole, un bilan périmé refait PR, CI et E2E. Pénélope ne fusionne pas
+et ne déploie rien.
+
+### Les modèles : l'inférence locale d'abord
+
+Un Mac Apple Silicon peut servir le modèle lui-même : `mlx_lm.server` (MLX d'Apple) en
+LaunchAgent, installé par `penelope local install <modèle>`, visé par un alias
+`local:<modèle>`. Rien ne sort de la machine, un appel compte 0 $, et `doctor` surveille
+chaque endpoint (`local.<endpoint>`) : joignable, modèles servis, fenêtre, part de
+l'entrée relue du cache. Plusieurs serveurs coexistent (`providers.extra`) : le texte
+d'un côté, la voix de l'autre. Mesuré sur un MacBook Air M2 avec Qwen3-1.7B : premier
+jeton de 8,9 à 13,6 s à froid pour 4 420 jetons, 0,86 s au tour suivant avec le cache. Un
+modèle local homonyme d'un modèle du cloud a sa propre entrée au catalogue et son propre
+prix. C'est la direction du projet : macOS, Apple Silicon ; un portage Linux n'est pas
+prévu (issues #196 à #202, fermées le 29/09/2026 comme non planifiées).
+
+Les deux autres portes : OpenRouter (clé d'API, coût facturé à l'appel), et le backend
+Codex d'un abonnement ChatGPT, qui ne facture rien à l'appel mais consomme le quota du
+plan. L'abonnement ne sert que les tours ouverts par le propriétaire : rêve, veille,
+compaction, workflows et autres travaux de fond repassent par OpenRouter, sans un mot.
+Cet usage est toléré par OpenAI, jamais garanti par contrat, et Pénélope le dit là où ça
+compte ([décision 0010](docs/decisions/0010-fournisseur-codex-oauth.md)).
+
+Les replis s'enchaînent d'un fournisseur à l'autre, joués par la boucle : un serveur
+local arrêté cède la main à OpenRouter, et l'inverse. Un appel d'outil qu'un petit modèle
+rend en texte est relu comme un appel.
 
 ### Le coût est mesuré, pas estimé
 
 Le coût enregistré est celui facturé par le fournisseur, pas une multiplication de
-tokens par un tarif de catalogue. Il se lit par session, par tour, par modèle, par jour,
-par rôle, par fournisseur amont et par cause de raté de cache. Plafonds jour, session et
-run, alerte à 80 %, point de contrôle au-delà d'un dollar dans un même tour, délégation
-à un sous-agent après dix appels d'outils.
+tokens par un tarif de catalogue ; un appel local est compté en jetons et facturé 0 $. Il
+se lit par session, par tour, par modèle, par jour, par rôle, par fournisseur amont et
+par cause de raté de cache. Plafonds jour, session et run, alerte à 80 %, point de
+contrôle au-delà d'un dollar dans un même tour, délégation à un sous-agent après dix
+appels d'outils.
 
 ### Un travail long ne bloque pas la conversation
 
 `shell_exec` et `sub_agent_spawn` acceptent `background: true` : l'appel rend la main tout
 de suite, la commande continue hors du tour, et son résultat revient seul dans la
-conversation — même si le tour d'origine est clos depuis longtemps, même si la session
+conversation, même si le tour d'origine est clos depuis longtemps, même si la session
 était fermée entre-temps. Pendant ce temps un message reste traité sans attendre, `/stop`
 coupe le job et son groupe de processus, et deux plafonds empêchent d'en accumuler. Un job
 est un effet comme un autre : planifié dans le ledger avant de partir, jamais relancé tout
 seul après un redémarrage.
+
+Ce qu'elle exécute se voit : une bulle par tour sur Telegram, modifiée en place, une
+ligne par outil avec son argument principal, les appels identiques groupés (×4), ✅ ❌ 🚫 ⏹
+(`telegram.tool_trace` : `off`, `compact`, `full`). Une photo trop lourde pour le
+fournisseur est réduite avant l'envoi ; une photo qu'il refuse quand même est retirée de
+la copie envoyée, le tour le dit, et la session n'en souffre plus.
 
 ### Elle sait ce qu'elle est
 
 Sa documentation est compilée dans son binaire : elle la cherche, la lit par section, et
 cite le lien GitHub au tag de la version qui tourne. `self_status` lui rend sa version,
 son modèle du tour, sa configuration effective, ses coûts, sa file, l'état de la machine
-et l'inventaire de ses outils, workflows, skills, serveurs MCP et limites. Les tables de
-référence de la documentation (outils et clés de configuration) sont générées
-depuis le code, et un test refuse une section « limites » qui décrirait comme manquant
-quelque chose de livré.
+et l'inventaire de ses outils, workflows, skills, serveurs MCP et limites. Une carte de
+l'environnement, dressée au démarrage et chaque heure, jamais dans un tour, relève la
+puce et la mémoire, tous les exécutables du PATH avec leur source et leur version, les
+applications, les MCP exposés par des applications (Safari 27, le pont MCP de Xcode) et
+les serveurs d'inférence locaux ; `env_explore` y cherche par besoin, et une capacité non
+branchée est proposée une fois, jamais imposée. Les tables de référence de la
+documentation (outils et clés de configuration) sont générées depuis le code, et un test
+refuse une section « limites » qui décrirait comme manquant quelque chose de livré.
 
 ## Comparaison
 
-Les deux projets les plus proches sont [OpenClaw](https://github.com/openclaw/openclaw)
-(TypeScript, 390 000 étoiles) et [Hermes](https://github.com/NousResearch/hermes-agent)
-(Python, 246 000 étoiles). Pénélope en compte zéro, tourne sur une seule machine et n'a
-qu'un utilisateur. La comparaison qui suit ne porte donc pas sur l'écosystème, où il n'y
-a pas de match, mais sur les mécanismes. Relevé du 18 septembre 2026, sources dans la
-documentation de chaque projet.
-
-### Mémoire
-
-| | Pénélope | OpenClaw | Hermes |
-|---|---|---|---|
-| Forme | wiki Markdown, 7 niveaux, identifiants de bloc et wikilinks, index SQLite | fichiers Markdown (`USER.md`, `MEMORY.md`, notes du jour), index SQLite | 2 fichiers Markdown plafonnés à 2 200 et 1 375 caractères, SQLite FTS5 |
-| Écriture | candidats typés, jamais écrits directement en mémoire | l'agent écrit, tour silencieux de rappel avant compaction | l'agent écrit, erreur rendue si le plafond est franchi |
-| Consolidation automatique | oui, 3 h 30, grille à 5 critères, le modèle argumente, le code décide | oui, 3 h, score à 6 signaux et triple seuil | non, l'agent doit faire le ménage lui-même |
-| Réversibilité | `supersede`, `replace`, `retire`, pré-image de chaque opération, vault commité dans git | suppression par session, édition manuelle | édition manuelle, revue par `/journey` |
-| Provenance | origine par entrée, contenu ingéré marqué non fiable | classe d'origine, consolidation protégée du contenu non fiable | non documenté |
-| Secrets rencontrés | extraits vers le magasin, la mémoire ne garde que `${SECRET:nom}` | non documenté | non documenté |
-
-### Contexte et sessions longues
-
-| | Pénélope | OpenClaw | Hermes |
-|---|---|---|---|
-| Découpage | 5 tuiles T0 à T4, stabilité déclarée par tuile | moteur enfichable, pas de couches documentées | pas de couches, double seuil 85 % puis 50 % |
-| Compaction | 5 niveaux, un seul appelle un modèle | automatique et `/compact`, garde les tours récents | résumé structuré à gabarit fixe, mis à jour d'une compression à l'autre, repli déterministe |
-| Préfixe de cache | identique octet pour octet, vérifié par un test | élagage au TTL, battement conseillé pour garder le cache chaud | règle écrite de non-mutation, 4 points de rupture |
-| Plafond de contexte | indépendant de la fenêtre du modèle, déclenché sur le prompt réellement facturé, seuil abaissé sur fenêtre courte ; chiffres dans [docs/context.md](docs/context.md), vérifiés contre le code | plafonds de contexte configurables | seuils par modèle, queue bornée |
-| Journal | événements chaînés par hachage, altération détectée, écriture refusée plutôt que maillon forgé | événements typés, « best-effort », rétention 30 jours | SQLite WAL, pas de registre d'audit |
-| Effets | ledger avant exécution, un effet incertain devient une question | non | non |
-| Reprise | run repris à son étape, écrit dans la même transaction, tests dédiés | deux bugs de reprise fautive ouverts | instantanés git avant écriture et `/rollback`, suite crash/reprise encore à l'état de demande |
-
-### Sécurité et coût
-
-| | Pénélope | OpenClaw | Hermes |
-|---|---|---|---|
-| Approbation | bornée par motif d'arguments, enchaînements refusés, règle visible et révocable | demande hors liste d'autorisation, registre des octrois | mode « smart » par défaut, liste noire infranchissable |
-| Bac à sable | Seatbelt, toujours appliqué, profil `workspace-write` par défaut, réseau fermé et accordé appel par appel, aucun interrupteur pour le couper | désactivé par défaut | durcissement conteneur si le backend Docker est choisi |
-| Secrets | trousseau du système | fichiers en clair, permissions restreintes | `.env` en clair, coffre chiffré optionnel |
-| Contenu non fiable | donnée jamais instruction, détecteur d'injection, adresses privées revérifiées à chaque redirection | balisage explicite du contenu externe | scan des fichiers de contexte avant inclusion |
-| Coût | celui facturé par le fournisseur, lisible par session, tour, modèle, jour, rôle, fournisseur amont et cause de raté de cache | suivi par message et session | suivi par session |
-| Plafonds de dépense | jour, session, run, alerte à 80 %, point de contrôle dans le tour ; sur abonnement ChatGPT, le quota du plan avec la même alerte | aucun | aucun, hors plafond de compte |
-
-### Ce que les autres font mieux
-
-Il faut le dire aussi, sinon le tableau ci-dessus ne vaut rien.
-
-- **Écosystème et portabilité.** OpenClaw tourne sur macOS, Linux, Windows, Docker et
-  Nix, avec une douzaine de canaux et autant de fournisseurs de modèles. Hermes offre
-  sept backends d'exécution dont des bacs à sable distants qui hibernent. Pénélope fait
-  macOS et Telegram, point.
-- **Scoring de mémoire.** Les six signaux de promotion d'OpenClaw sont plus riches que
-  notre grille à cinq critères, même si notre chemin d'écriture est plus réversible.
-  L'usage mesuré (rappels jugés utiles sur la réponse, succès) ordonne désormais le
-  rappel, borné, et sert de preuve à la grille ; il ne promeut encore rien seul.
-- **Bac à sable par défaut.** Comme Codex CLI, le shell n'a plus le réseau par défaut :
-  une commande le demande, la carte d'approbation le dit, et « Toujours » l'accorde à une
-  famille de commandes. Codex coupe aussi ses autres outils ; nos appels MCP et
-  `http_fetch` passent par leurs propres garde-fous, pas par le bac à sable.
-- **Maturité.** Ces projets encaissent des millions d'heures d'usage et publient leurs
-  vulnérabilités. Pénélope a une instance en service : ce qu'elle sait de ses propres
-  défauts vient d'une revue adversariale de son code, pas encore de l'usage de milliers
-  de gens.
+Les projets les plus proches sont OpenClaw et Hermes. Une comparaison mécanisme par
+mécanisme, relevée le 18 septembre 2026 et non revérifiée depuis, est dans
+[docs/comparaison.md](docs/comparaison.md), avec ce que les autres font mieux.
 
 ## Ce qu'elle ne fait pas
 
 Version 1.0 : la V1 est sur `main` depuis le 27 septembre 2026 et publiée en release
 (plus en pre-release depuis la 1.0.0). Une seule instance réelle en service.
 
-- macOS seulement. Les backends Linux et Windows compilent et renvoient `Unsupported`.
+- macOS seulement. Les backends Linux et Windows compilent et renvoient `Unsupported` ;
+  un portage Linux n'est pas prévu (issues #196 à #202, fermées le 29 septembre 2026).
 - Telegram seulement, en long polling. Le mode webhook n'est pas servi.
 - Un seul propriétaire par instance, tout autre expéditeur est refusé.
 - Les requêtes `sampling/createMessage` d'un serveur MCP sont refusées.
@@ -201,7 +211,13 @@ Version 1.0 : la V1 est sur `main` depuis le 27 septembre 2026 et publiée en re
 - La recherche vectorielle est exhaustive, à revoir au-delà de 200 000 entrées.
 - La signature minisign des releases est implémentée mais la clé n'est pas créée : seule
   la somme SHA-256 est vérifiée aujourd'hui.
-- Les suites qui parlent à de vrais services sont écrites et n'ont pas encore tourné.
+- Les suites qui parlent à de vrais services ne tournent pas en CI et pas à chaque lot.
+  Elles ont tourné à la main : `live_openrouter` 5/5 et `ctx_recall` le 26 septembre 2026,
+  `mem_longitudinal` le même jour à 71 % pour un seuil de 85 % (défaut de qualité de la
+  mémoire, corrigé depuis par les 1.0.8 et 1.0.11 ; le rejeu n'est pas consigné ici),
+  `live-local` verte le 29 septembre contre un vrai `mlx_lm.server`.
+- Le gate de production ne fusionne pas la PR et ne déploie rien ; seule la CI du forgeur
+  est lue, pas celle d'un autre système.
 - Le bac à sable n'existe que sur macOS : la suite entière tourne aussi sur Linux (la CI
   la rejoue sur `ubuntu-latest`), mais les tests de Seatbelt, de launchd et du trousseau
   ne tournent que sur `macos-14`.
@@ -220,11 +236,58 @@ cargo build --release
 ```
 
 L'installation complète sur un Mac sans écran (service `launchd`, secrets, Telegram,
-veille, signature) est décrite dans [docs/install-headless.md](docs/install-headless.md).
+inférence locale, veille, signature) est décrite dans
+[docs/install-headless.md](docs/install-headless.md) ; l'index des commandes est dans
+[docs/README.md](docs/README.md#commandes-en-ligne).
 
 Toutes les commandes acceptent `--home <répertoire>` (ou `PENELOPE_HOME`) pour déplacer
 l'intégralité de l'état : c'est ce qui rend les bacs à sable et les tests possibles sans
 toucher au vrai profil.
+
+## Comment un message est traité
+
+Du message Telegram à la mémoire, dans l'ordre. Chaque case est un crate ou un module
+nommé dans [docs/architecture.md](docs/architecture.md).
+
+```
+ propriétaire ── Telegram ──► passerelle     commandes, cartes, bulle de trace des outils
+                                 │
+                                 ▼
+                              daemon         file des tours, RPC locale, superviseur :
+                                 │           ordonnanceur (planifications, rêve à 3 h 30),
+                                 │           inventaire horaire, jobs d'outils
+                                 ▼
+          ┌──────────── construction du prompt (penelope-context) ──────────────┐
+  stable, │ T0 identité et règles · T1 skills, méta-outils, MCP, machine        │
+  en cache│ T2 AGENTS.md, instantanés mémoire                                   │
+          │ T3 historique : résumés puis fin verbatim                           │
+  volatil │ T4 date, rappel mémoire (150 ms), notes, <mise-a-jour>              │
+          └───────────────────────────────┬────────────────────────────────────┘
+                                          ▼
+                    boucle d'agent ──► modèle de l'alias : local (MLX), OpenRouter
+                                          │           ou Codex ; replis joués en chaîne
+                                          ▼
+                   politique d'approbation : auto, carte Telegram, juge ; règle bornée
+                                          │
+                                       exécuteur
+                    ┌─────────────────────┼─────────────────────┐
+              outils natifs             skills              serveurs MCP
+        fs_*, shell_exec, http_fetch  skill_load,        paresseux : tool_search,
+        mem_*, env_explore, vault:    à la demande       tool_describe, tool_call
+                    └─────────────────────┼─────────────────────┘
+                                          ▼
+          ┌───────────────────────────────┼───────────────────────────────┐
+          ▼                               ▼                               ▼
+  journal d'événements            ledger d'effets                 vault (wiki Markdown)
+  source unique, chaîné           planifié avant l'appel,         journal du jour ─► rêve
+  par hachage                     jamais rejoué deux fois         à 3 h 30 ─► mémoire
+                                                                  ─► rappel au tour suivant
+```
+
+Le prompt part au modèle ; chaque appel d'outil passe par la politique d'approbation
+avant l'exécuteur ; tout ce qui s'est passé est un événement du journal, chaque effet une
+ligne du ledger, et ce qui mérite d'être retenu un candidat du journal du jour, jugé la
+nuit, rappelé au tour suivant.
 
 ## Comment c'est fait
 
@@ -300,8 +363,8 @@ La matrice des critères d'acceptation, [docs/ca-matrix.md](docs/ca-matrix.md), 
 automatiquement.
 
 Les suites qui parlent à de vrais services (`live-openrouter`, `live-telegram`,
-`ctx-recall`, `mem-longitudinal`, `ab-hermes`) sont ignorées par la CI et se lancent
-depuis le dépôt avec leurs variables d'environnement.
+`live-local`, `ctx-recall`, `mem-longitudinal`, `ab-hermes`) sont ignorées par la CI et se
+lancent depuis le dépôt avec leurs variables d'environnement.
 
 La chaîne d'outils est épinglée dans `rust-toolchain.toml` : le lint local rend
 exactement le même verdict que la CI.
@@ -316,14 +379,17 @@ cargo deny check
 
 ## Documentation
 
-- [docs/README.md](docs/README.md) : index, par besoin et par fichier.
+- [docs/README.md](docs/README.md) : index, par besoin, par commande et par fichier.
 - [docs/install-headless.md](docs/install-headless.md) : installation, configuration,
   référence des clés et des outils natifs.
 - [docs/context.md](docs/context.md) : compression du contexte, seuils, budgets, cache.
 - [docs/mcp.md](docs/mcp.md) : versions, transports, OAuth, registre paresseux.
-- [docs/workflows.md](docs/workflows.md) : schéma complet et cycle de vie d'un run.
-- [docs/telegram.md](docs/telegram.md) : commandes, gabarits, rendu.
+- [docs/workflows.md](docs/workflows.md) : schéma complet, cycle de vie d'un run, plan en
+  phases, livraison et gate de production.
+- [docs/telegram.md](docs/telegram.md) : commandes, gabarits, rendu, trace des outils.
 - [docs/runtime-events.md](docs/runtime-events.md) : flux runtime local, replay et démonstration Pathlayer.
+- [docs/comparaison.md](docs/comparaison.md) : Pénélope face à OpenClaw et Hermes,
+  instantané du 18 septembre 2026.
 - [docs/ca-matrix.md](docs/ca-matrix.md) : critères d'acceptation et tests qui les
   couvrent.
 - [docs/architecture.md](docs/architecture.md) : crates, couches, ports, frontière canal,

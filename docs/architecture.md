@@ -1,10 +1,10 @@
 # Architecture de Pénélope
 
-Ce que le code de `main` contient à la 1.0.3 : les 27 crates, qui dépend de qui, les ports
-de `penelope-app` et qui les implémente, la frontière entre le cœur et le canal, le journal
-source unique de la conversation, et les règles mécaniques qui tiennent le tout.
-Chaque chiffre se relit avec la commande donnée à côté ; ce qui n'est pas encore fait est
-dit dans la dernière section, jamais présenté comme livré.
+Ce que le code de `main` contient à la 1.0.22 (relevé du 30 septembre 2026) : les 27
+crates, qui dépend de qui, les ports de `penelope-app` et qui les implémente, la frontière
+entre le cœur et le canal, le journal source unique de la conversation, et les règles
+mécaniques qui tiennent le tout. Chaque chiffre se relit avec la commande donnée à côté ;
+ce qui n'est pas encore fait est dit dans la dernière section, jamais présenté comme livré.
 
 Les décisions qui fondent ce découpage sont [0013](decisions/0013-decoupage-du-daemon.md)
 (le daemon découpé en crates, la passerelle au-dessus) et
@@ -58,7 +58,9 @@ Deux lectures. Au-dessus de `app`, une crate ne connaît sa voisine que par un p
 ni la boucle ni l'orchestrateur. La passerelle Telegram est **au-dessus** du daemon : elle
 l'appelle, et le daemon ne la connaît que par ses ports (décision 0013). Les évaluations
 sont au-dessus de la passerelle : l'étape `telegram` d'un scénario joue ses commandes par
-la vraie passerelle, sur un transport simulé.
+la vraie passerelle, sur un transport simulé ; depuis la 1.0.16, elles dépendent aussi de
+l'orchestrateur, dont l'étape `drive` fait passer le pilote des workflows sur les runs
+d'un plan approuvé (`crates/penelope-evals/Cargo.toml`, #191).
 
 Pour relire le graphe :
 
@@ -71,43 +73,46 @@ cargo metadata --no-deps --format-version 1 \
 ## Les crates
 
 Lignes de `src/` (tests inline et fichiers `tests.rs` compris, `tests/` et `examples/`
-exclus), mesurées à la 1.0.3 :
+exclus), mesurées à la 1.0.22 :
 `find crates/<crate>/src -name '*.rs' | xargs cat | wc -l`.
 
 | Crate | Rôle | Dépendances internes directes | Lignes |
 |---|---|---|---|
-| `penelope-store` | SQLite en WAL, migrations versionnées, acteur écrivain unique | aucune | 2 784 |
-| `penelope-observe` | journaux JSON, caviardage, détection d'injection, métriques | aucune | 2 076 |
-| `penelope-platform` | la seule crate qui connaît l'OS : dossiers, processus, secrets, bac à sable, service | aucune | 6 445 |
-| `penelope-kernel` | journal d'événements, ledger d'effets, configuration, sessions, file des tours, budget | store | 11 328 |
-| `penelope-llm` | fournisseurs, catalogue, routage, coûts | kernel, observe, platform, store | 9 061 |
-| `penelope-hitl` | politiques, demandes d'approbation | kernel, observe, store | 3 568 |
-| `penelope-skills` | skills, rechargement à chaud | kernel, observe, platform, store | 1 390 |
-| `penelope-telegram` | client Bot API typé, rendu, gabarits, formulaires | kernel, observe, store | 6 171 |
-| `penelope-context` | moteur de contexte, compaction, pliage du journal, projecteur | kernel, llm, observe, store | 14 363 |
-| `penelope-mcp` | client MCP, transports, OAuth | kernel, llm, observe, platform, store | 6 904 |
-| `penelope-memory` | vault, index, rappel, consolidation | kernel, llm, observe, platform, store | 9 983 |
-| `penelope-tools` | définitions des outils natifs, détecteur de boucles, arguments | hitl, kernel, llm, mcp, memory, observe, platform, skills, store | 6 733 |
-| `penelope-workflow` | schéma, validation, runs et planifications | hitl, kernel, llm, observe, platform, store, tools | 6 515 |
-| `penelope-app` | `Services`, les ports, le bus des tours, les boucles supervisées, l'élicitation | les douze crates métier ci-dessus sauf telegram | 5 588 |
-| `penelope-agent` | la boucle d'agent et le pipeline d'outils | app, hitl, kernel, llm, observe, store, tools | 7 944 |
-| `penelope-mcp-host` | superviseur des serveurs MCP, OAuth des serveurs | app, kernel, llm, mcp, observe, platform, store | 5 025 |
-| `penelope-vault` | la mémoire en fichiers : pages, concepts, épisodes, notes, revue | app, context, hitl, kernel, llm, mcp, memory, observe, platform, store, tools | 6 245 |
-| `penelope-conversation` | conversation d'une session, compaction de fond, titres, alerte de budget | app, context, kernel, llm, observe, store, vault | 3 238 |
-| `penelope-dream` | consolidation nocturne, digest, accueil, ingestion | app, hitl, kernel, llm, memory, observe, platform, store, vault | 8 209 |
-| `penelope-executor` | outils natifs, `self_status`, documentation embarquée, vision, voix, magasin des jobs | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, tools, vault, workflow | 6 891 |
-| `penelope-ops` | doctor, mise à jour, sauvegarde, Hermes, Codex, purge, fork et retour arrière | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, vault | 12 575 |
-| `penelope-orchestrator` | moteur de workflows et ordonnanceur | agent, app, conversation, dream, executor, hitl, kernel, llm, mcp, observe, platform, store, tools, vault, workflow | 7 534 |
-| `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 799 |
-| `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 21 320 |
-| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, gateway-telegram, hitl, kernel, llm, mcp, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, tools, vault, workflow | 6 746 |
-| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition | agent, daemon, evals, gateway-telegram, kernel, observe, ops, platform, store, telegram, tools, workflow | 4 143 |
-| `penelope-archtest` | les règles d'architecture et le gel | aucune | 3 998 |
+| `penelope-store` | SQLite en WAL, migrations versionnées, acteur écrivain unique | aucune | 2 875 |
+| `penelope-observe` | journaux JSON, caviardage (`Redactor`), détection d'injection, métriques | aucune | 2 277 |
+| `penelope-platform` | la seule crate qui connaît l'OS : dossiers, processus, secrets, bac à sable, service, anti-veille, réduction d'image (`ImageShrinker`), découverte de la machine (`discover`) | aucune | 7 387 |
+| `penelope-kernel` | journal d'événements, ledger d'effets, configuration, sessions, file des tours, budget | store | 11 532 |
+| `penelope-llm` | fournisseurs, catalogue (les modèles locaux rangés à part), routage, coûts, appels d'outils rendus en texte (`sse::text_tool_call`) | kernel, observe, platform, store | 10 082 |
+| `penelope-hitl` | politiques, demandes d'approbation, échantillons du juge (`samples`) | kernel, observe, store | 3 986 |
+| `penelope-skills` | skills, rechargement à chaud | kernel, observe, platform, store | 1 428 |
+| `penelope-telegram` | client Bot API typé, rendu, gabarits, formulaires | kernel, observe, store | 6 304 |
+| `penelope-context` | moteur de contexte, compaction, pliage du journal, projecteur, différence du préfixe (`prompt.updated`) | kernel, llm, observe, store | 14 860 |
+| `penelope-mcp` | client MCP, transports, OAuth | kernel, llm, observe, platform, store | 6 950 |
+| `penelope-memory` | vault, index, rappel, consolidation, signaux d'usage, `owner_quote` | kernel, llm, observe, platform, store | 10 767 |
+| `penelope-tools` | définitions des outils natifs, détecteur de boucles, arguments | hitl, kernel, llm, mcp, memory, observe, platform, skills, store | 6 840 |
+| `penelope-workflow` | schéma, validation, runs et planifications, compilation d'un plan approuvé (`plan`), configuration et verdicts de livraison (`delivery`, `delivery/gate.rs`) | hitl, kernel, llm, observe, platform, store, tools | 9 641 |
+| `penelope-app` | `Services`, les ports, le bus des tours, les boucles supervisées, l'élicitation, la liste d'outils gelée (`frozen_tools`), l'inventaire et la carte de la machine (`machine`, `environment`), le juge (`judge`, `model_judge`) | les douze crates métier ci-dessus sauf telegram | 7 669 |
+| `penelope-agent` | la boucle d'agent et le pipeline d'outils | app, hitl, kernel, llm, observe, store, tools | 8 843 |
+| `penelope-mcp-host` | superviseur des serveurs MCP, OAuth des serveurs | app, kernel, llm, mcp, observe, platform, store | 5 071 |
+| `penelope-vault` | la mémoire en fichiers : pages, concepts, épisodes, notes, revue, signaux d'usage jugés au message suivant (`usage_feedback`) | app, context, hitl, kernel, llm, mcp, memory, observe, platform, store, tools | 6 520 |
+| `penelope-conversation` | conversation d'une session, préfixe retenu et sa différence (`prefix`), compaction de fond et résumé sur le préfixe (`compaction/on_prefix.rs`), titres, alerte de budget | app, context, kernel, llm, observe, store, vault | 4 030 |
+| `penelope-dream` | consolidation nocturne, cartes de contradiction et entrées contestées (`dream/clash.rs`), digest, accueil, ingestion | app, hitl, kernel, llm, memory, observe, platform, store, vault | 8 807 |
+| `penelope-executor` | outils natifs, `self_status`, documentation embarquée, vision, voix, magasin des jobs | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, tools, vault, workflow | 7 228 |
+| `penelope-ops` | doctor (dont `local.rs`, `judge.rs`, `machine.rs`), mise à jour, sauvegarde, Hermes, Codex, purge, fork et retour arrière, arrêts journalisés (`lifecycle`) | app, context, kernel, llm, mcp, memory, observe, platform, skills, store, vault | 13 440 |
+| `penelope-orchestrator` | moteur de workflows, ordonnanceur, veille et réveil (`scheduler/wake.rs`), livraison et gate de production (`workflow/delivery`) | agent, app, conversation, dream, executor, hitl, kernel, llm, mcp, observe, platform, store, tools, vault, workflow | 11 388 |
+| `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 730 |
+| `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant, trace des outils (`telegram/trace.rs`) | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 22 970 |
+| `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, gateway-telegram, hitl, kernel, llm, mcp, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, tools, vault, workflow | 7 184 |
+| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition, `dataset export` et `local install` sans daemon | agent, daemon, evals, gateway-telegram, hitl, kernel, observe, ops, platform, store, telegram, tools, workflow | 4 846 |
+| `penelope-archtest` | les règles d'architecture et le gel | aucune | 4 024 |
 
-201 576 lignes en tout (`find crates/*/src -name '*.rs' | xargs cat | wc -l`). Hors
-fichiers de tests, le plus gros fichier fait 939 lignes
-(`penelope-daemon/src/supervisor.rs`) ; aucun ne dépasse 1 000 lignes, et la liste de
-référence du gel est vide (voir plus bas) :
+`penelope-cli` dépend de `penelope-hitl` depuis la 1.0.13 (#233) : la lecture des
+échantillons du juge (`penelope dataset export`) vit à côté de leur écriture.
+
+221 679 lignes en tout (`find crates/*/src -name '*.rs' | xargs cat | wc -l`). Hors
+fichiers de tests, le plus gros fichier fait 956 lignes
+(`penelope-evals/src/scenario.rs`, puis `penelope-daemon/src/supervisor.rs`, 946) ; aucun
+ne dépasse 1 000 lignes, et la liste de référence du gel est vide (voir plus bas) :
 
 ```bash
 find crates/*/src -name '*.rs' ! -name 'tests.rs' ! -name '*_tests.rs' ! -path '*/tests/*' \
@@ -189,14 +194,16 @@ fichiers ne nomme `Daemon` (R6, T33) :
 
 Un port est un trait défini sous la crate qui le consomme, implémenté au-dessus. Presque
 tous vivent dans `penelope-app`, sous toutes les crates du cœur. La colonne « consommé
-par » liste les crates qui en tiennent un `dyn`, hors tests.
+par » liste les crates qui en tiennent un `dyn`, hors tests. Le dépôt compte 46 traits
+publics en tout (44 à la 1.0.3 ; `grep -rhoE '^\s*pub trait [A-Za-z_]+' crates/*/src | wc -l`),
+ports compris.
 
 ### Ports de `penelope-app`
 
 | Port | Module | Rôle | Implémenté par | Consommé par |
 |---|---|---|---|---|
 | `ProviderSource` | `ports` | le fournisseur d'un modèle, l'override actif | `Providers` (daemon, `runtime.rs`) | conversation, dream, executor, ops, orchestrator, vault |
-| `McpGateway` | `ports` | appeler un outil MCP, politique déclarée | `McpSupervisor` (mcp-host) | daemon, executor, orchestrator, evals |
+| `McpGateway` | `ports` | appeler un outil MCP, politique déclarée, outils promus (`promoted_tools`) | `McpSupervisor` (mcp-host) | daemon, executor, orchestrator, evals |
 | `McpAdmin` | `ports` | administrer les serveurs MCP (`mcp.*`) | `McpSupervisor` (mcp-host) | daemon, dream, mcp-host, ops, orchestrator, vault |
 | `Messenger` | `ports` | envoyer texte, fichier, carte, question au propriétaire | `TelegramGateway` (passerelle) | conversation, daemon, dream, executor, mcp-host, ops, orchestrator |
 | `Orchestrator` | `ports` | lancer un workflow, un sous-agent, une image ; planifier (`schedule_*`) | `WorkflowOrchestrator` (orchestrator) | daemon, executor, orchestrator |
@@ -205,7 +212,7 @@ par » liste les crates qui en tiennent un `dyn`, hors tests.
 | `SessionModels` | `engine` | épingler un alias sur une session, l'état de son modèle (`/model`) | `Core` (daemon, `engine/models.rs`) | passerelle, rpc |
 | `Transcriber` | `engine` | transcrire un vocal (rôle `stt`), décrire des images (`image_describe`) | `Core` (daemon, `engine/media.rs`) | passerelle, daemon |
 | `ChannelDelivery` | `bus` | livraison durable d'un tour, seuils de rafale, nom et destination d'une origine, alerte d'une planification, sonde du canal au réveil (`probe`) | `TelegramGateway` ; `DeliveryChannel`, `BurstChannel` (daemon, `runner.rs`) | app, conversation, daemon, orchestrator |
-| `TurnSink` | `outcome` | fragments d'un tour en cours | `BusSink` (app), `NullSink`, `RecordingSink` | agent, daemon |
+| `TurnSink` | `outcome` | fragments d'un tour en cours (dont `ToolCall` et `ToolResult`, que la trace Telegram rend) | `BusSink` (app), `NullSink`, `RecordingSink` | agent, daemon |
 | `OwnerChannel` | `elicitation` | montrer une élicitation MCP au propriétaire | `TelegramGateway` | app (`Broker`) |
 | `Cards` | `channel` | gabarits de cartes, catalogue, liens profonds, commandes du canal | `TelegramCards` (passerelle) | app (`Services.channel`) |
 | `Gateway` | `gateway` | démarrer un canal composé au-dessus du daemon | `TelegramGateway` | daemon |
@@ -224,18 +231,25 @@ Ce que `penelope-app` fournit en plus des traits :
   `Services.channel` (`Channel { cards, delivery }`) ;
 - `Slot<T>` : la case d'un branchement posé après le démarrage (la passerelle et le
   superviseur MCP arrivent après les boucles), lue au moment de s'en servir ;
-- `Handle` (arrêt, redémarrage, compteurs) et `Supervision` (ce qu'une boucle supervisée
-  reçoit : registre, `Handle`, horloge, journal) ;
-- `Bus` et `Origin` (`bus.rs`), les helpers sur `&Services` (`helpers.rs`) et les doubles
-  de test partagés (`testing.rs` : `RecordingMessenger`, `MockProviders`).
+- `Handle` (arrêt, redémarrage, compteurs ; `Handle::stop` journalise chaque arrêt
+  demandé, #225) et `Supervision` (ce qu'une boucle supervisée reçoit : registre,
+  `Handle`, horloge, journal) ;
+- `Bus` et `Origin` (`bus.rs`), les helpers sur `&Services` (`helpers.rs`, dont le garde
+  anti-veille `keep_awake`) et les doubles de test partagés (`testing.rs` :
+  `RecordingMessenger`, `MockProviders`) ;
+- `frozen_tools` (la liste d'outils d'une session, calculée à une frontière et resservie
+  telle quelle, #236), `machine` et `environment` (l'inventaire et la carte de la
+  machine, #156 et #260), `codex_scope` (ce que l'abonnement ChatGPT ne sert pas).
 
 ### Ports de la boucle, dans `penelope-agent`
 
 La boucle ne reçoit pas `Services` mais `AgentServices` (`ports.rs`) : les registres
 qu'elle touche, quatre ports que seul le daemon sait implémenter sur la base,
-`AttemptSink` et `Judge` (branché par le daemon, `agent.rs`). Le dernier appel d'une session, pour l'audit du cache, se lit dans le
-`BudgetLedger` du noyau (`previous_call`) ; les parties pures de l'audit (empreinte,
-fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
+`AttemptSink` et `Judge` (branché par le daemon, `agent.rs`), et depuis la 1.0.22 le
+fournisseur des modèles de repli (`FallbackProviders`, posé sur la requête par
+`AgentSpec::with_providers`, `engine.rs`). Le dernier appel d'une session, pour l'audit
+du cache, se lit dans le `BudgetLedger` du noyau (`previous_call`) ; les parties pures de
+l'audit (empreinte, fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
 
 | Port | Rôle | Implémenté par (daemon) | Double de test |
 |---|---|---|---|
@@ -243,6 +257,7 @@ fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
 | `SessionInfo` | nature d'une session | `SessionStore` (kernel) | le même, sur une base en mémoire |
 | `PromptSnapshots` | instantanés du préfixe, cause d'un raté de cache | `StoredSnapshots` (`prompt_snapshot.rs`) | `NoAudit` |
 | `JobRunner` | détacher un appel long en job | `DaemonJobs` (`agent.rs`) | `NoJobs` |
+| `FallbackProviders` | le fournisseur du modèle d'un repli : un repli `openrouter:` d'un modèle `local:` part chez OpenRouter, pas chez le serveur local (#259) | `Providers` (`runtime.rs`) | absent : sans lui, le repli garde le fournisseur du modèle principal |
 
 ### Autres ports
 
@@ -251,9 +266,9 @@ fournisseur collant, cause d'un raté) sont dans `penelope_llm::cache`.
 | `DigestSource` | `penelope-dream` | `DigestFeed` (orchestrator, `scheduler/digest.rs`) |
 | `Connector` | `penelope-mcp-host` | `ProcessConnector` |
 | `SwitchHost` | `penelope-ops` | `SystemHost` |
-| `Provider`, `TokenSource`, `QuotaSink` | `penelope-llm` | fournisseurs OpenRouter, compatibles OpenAI, Codex ; jetons et quota Codex (ops) |
+| `Provider`, `TokenSource`, `QuotaSink` | `penelope-llm` | fournisseurs OpenRouter, compatibles OpenAI (dont les serveurs locaux), Codex ; jetons et quota Codex (ops) |
 | `Transport` | `penelope-mcp` | stdio, HTTP |
-| `Directories`, `ProcessHost`, `SecretStore`, `Sandbox`, `ServiceManager`, `PowerManager` | `penelope-platform` | backends macOS et génériques |
+| `Directories`, `ProcessHost`, `SecretStore`, `Sandbox`, `ServiceManager`, `PowerManager`, `ImageShrinker` | `penelope-platform` | backends macOS et génériques (`ImageShrinker` : `sips` sous macOS, `Unsupported` ailleurs, #242) |
 | `BotTransport` | `penelope-telegram` | HTTP, simulé |
 | `Clock`, `UsageWatcher` | `penelope-kernel` | horloge système ou de test ; alerte de budget |
 
@@ -290,10 +305,12 @@ Le cœur ne nomme pas Telegram. La règle est mécanique (`penelope-archtest`,
 
 Ce qui traverse la frontière passe par cinq ports : `ChannelDelivery` (livraison d'un
 tour, carte de rafale et ses seuils, nom d'une conversation, destination d'une
-planification), `Messenger` (envois au propriétaire), `OwnerChannel` (élicitation MCP,
-dont la vérification du formulaire), `Cards` (gabarits, liens profonds, commandes) et
-`Gateway` (démarrage). Sans canal branché, les messages du cœur disent « canal » là où ils
-disaient « Telegram ».
+planification, sonde au réveil), `Messenger` (envois au propriétaire), `OwnerChannel`
+(élicitation MCP, dont la vérification du formulaire), `Cards` (gabarits, liens profonds,
+commandes) et `Gateway` (démarrage). Sans canal branché, les messages du cœur disent
+« canal » là où ils disaient « Telegram ». La trace des outils (1.0.14) ne traverse rien :
+la passerelle lit `ToolCall` et `ToolResult` sur le bus et les rend dans sa boucle
+`telegram.trace`.
 
 ## Le journal, source unique
 
@@ -303,7 +320,11 @@ d'audit, sous des événements `conv.*` (`penelope-context/src/journal/`) : `con
 la surface vue par le modèle, `conv.summary` (remplace une plage), `conv.rewind` (coupe),
 `conv.fork` (hérite du préfixe d'une autre session), `conv.import` (scelle l'historique
 d'avant la V1, migration `0021_history_seal`). Les tentatives échouées (`conv.attempt`)
-sont journalisées hors surface : elles ne repartent jamais dans un prompt.
+sont journalisées hors surface : elles ne repartent jamais dans un prompt. À côté, deux
+événements disent ce que le modèle sait au-delà du préfixe retenu (#236,
+`penelope-context/src/store/prompt.rs`) : `prompt.updated`, la différence du préfixe
+partie en fin de prompt avec son message, et `skill.loaded`, une skill chargée avec
+l'empreinte de son corps ; `session.project` porte le sujet de travail d'une session.
 
 - **Lecture.** Ce que le modèle reçoit est dérivé du journal par un pliage pur
   (`penelope_context::derive`, sans base ni horloge), repris sur les seuls événements
@@ -360,12 +381,12 @@ Les nombres de `crates/penelope-archtest/budget.toml` ne montent jamais :
 `scripts/check-budget.sh` refuse en CI toute remontée sans le trailer
 `Dérogation-budget: #N` (décision 0015).
 
-| Règle | Ce qu'elle tient | Valeur à la 1.0.3 |
+| Règle | Ce qu'elle tient | Valeur à la 1.0.22 |
 |---|---|---|
 | R1 | plafond d'un fichier source, tests inline compris | 1 000 lignes |
 | R2 | plafond d'un fichier de tests | 1 500 lignes |
 | R3 | liste de référence des fichiers au-dessus, qui ne peut que rétrécir | vide |
-| R4 | plafond de lignes de `penelope-daemon/src` | 14 800 (14 799 mesurées) |
+| R4 | plafond de lignes de `penelope-daemon/src` | 14 800 (14 730 mesurées) |
 | R5 | liste blanche des modules du daemon ; `impl Daemon` dans quatre fichiers | 20 modules ; `runtime`, `engine`, `runner`, `supervisor` |
 | R6 | occurrences du type `Daemon` par fichier du daemon | 23, toutes dans les 4 fichiers de `impl_daemon` |
 | R7 | `#[allow(clippy::too_many_lines)]` comptés, seuil du lint à 200 lignes | 0 |
@@ -377,7 +398,7 @@ Les nombres de `crates/penelope-archtest/budget.toml` ne montent jamais :
 Les valeurs se relisent dans `budget.toml` ; la mesure de R4 avec la commande de la
 section « Les crates ». R10 est vérifiée par `every_visible_surface_has_a_scenario`
 (`scenarios.rs`) : chaque commande Telegram, outil natif et méthode RPC est exercé par
-au moins un des 59 scénarios de `crates/penelope-evals/scenarios/`
+au moins un des 75 scénarios de `crates/penelope-evals/scenarios/`
 (`ls -d crates/penelope-evals/scenarios/*/ | wc -l`), ce qu'on lit dans leurs fichiers et
 non dans une déclaration. R11 est tenue par la suite `scenarios` de `penelope-evals`
 (scénarios de session rejouables sans clé).
@@ -386,18 +407,20 @@ R9 n'est pas dans `cargo test` : `scripts/coverage-check.sh` mesure
 (`cargo llvm-cov --workspace`, vingt minutes et plus) et compare chaque crate à son plafond
 et au relevé de `main` au point de fourche (`[coverage.main]`, trois crates dispensées avec
 leur raison dans `[coverage.exceptions]`). Il se lance à la main ; `--update` n'abaisse
-jamais qu'à la mesure.
+jamais qu'à la mesure. Depuis la 1.0.9 (#243), le cliquet de la CI refuse aussi un
+plafond de `[coverage.uncovered]` qui monte ou disparaît.
 
 ## Ce qui reste
 
-- **Découpage sous 800 lignes** (charte §3.4) : six fichiers de produit dépassent encore
-  800 lignes (commande de la section « Les crates ») : `penelope-daemon/src/supervisor.rs`
-  (939), `penelope-evals/src/scenario.rs` (904), `penelope-observe/src/redact.rs` (857),
-  `penelope-context/src/projector.rs` (846), `penelope-hitl/src/cmdline.rs` et
-  `penelope-memory/src/candidates.rs` (812). `supervisor.rs` est presque entièrement un
-  bloc `impl Daemon`, que R6 réserve à quatre fichiers ; le couper demande de convertir
+- **Découpage sous 800 lignes** (charte §3.4) : cinq fichiers de produit dépassent encore
+  800 lignes (commande de la section « Les crates ») : `penelope-evals/src/scenario.rs`
+  (956), `penelope-daemon/src/supervisor.rs` (946), `penelope-context/src/projector.rs`
+  (846), `penelope-memory/src/candidates.rs` (841) et `penelope-hitl/src/cmdline.rs`
+  (812) ; `penelope-observe/src/redact.rs`, qui en faisait partie à la 1.0.3, est repassé
+  sous la barre avec le type `Redactor` (1.0.18). `supervisor.rs` est presque entièrement
+  un bloc `impl Daemon`, que R6 réserve à quatre fichiers ; le couper demande de convertir
   des méthodes en fonctions sur `Core` ou sur un port, comme T33 l'a fait pour
-  `engine.rs` (533 lignes).
+  `engine.rs` (524 lignes).
 - **Mesure de R9** : le cliquet refuse en CI un plafond de `[coverage.uncovered]` qui
   monte (#243), mais la mesure elle-même (`scripts/coverage-check.sh`) n'y tourne pas :
   elle est manuelle.

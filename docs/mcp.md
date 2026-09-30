@@ -178,6 +178,14 @@ session expose ensuite les outils promus à sa propre frontière suivante, avec 
 `eager_schemas = true` force les schémas d'un petit serveur critique en tuile T1, sous un
 plafond global d'octets.
 
+Des applications exposent aussi un serveur MCP sans rien déclarer dans `mcp.d` : Safari 27
+(`safaridriver --mcp`), Xcode (`xcrun mcpbridge`). La carte de l'environnement (1.0.21,
+#260) les relève à chaque passe d'inventaire, à côté des serveurs déclarés ; une capacité
+trouvée et non branchée est **proposée une fois** au propriétaire (`machine.proposed`
+retient la date : un refus n'est pas redemandé toutes les heures), et rien n'est écrit
+dans `mcp.d` sans lui. Voir
+[La carte de l'environnement](install-headless.md#la-carte-de-lenvironnement).
+
 ## Risque et approbation
 
 Les annotations d'outil (`readOnlyHint`, `destructiveHint`, `openWorldHint`) sont des
@@ -334,6 +342,11 @@ Si l'espace de travail restreint les installations, un administrateur doit appro
 - Quantiles de latence et taux d'erreur par serveur, visibles dans `penelope doctor`.
 - Au démarrage, les processus orphelins d'une vie antérieure sont tués à partir des PID
   laissés dans `state/mcp-pids`.
+- Au réveil de la machine (1.0.3, #228), avant que les créneaux en retard ne partent, une
+  passe de santé relance les serveurs dégradés, en échec ou en attente de reprise, et
+  journalise le résultat avec la sonde du canal (`host.health`, champ `mcp_restarted` :
+  chaque serveur relancé avec son nouvel état ; voir
+  [runtime-events.md](runtime-events.md#contrat)).
 
 ### Diagnostiquer un serveur qui ne démarre pas
 

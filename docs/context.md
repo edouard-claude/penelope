@@ -13,7 +13,8 @@ n'existe plus ou un défaut qui a changé fait échouer le test.
  [résumé de la conversation antérieure, s'il y en a un]                   message système
  [messages non résumés, chacun avec le contexte volatil de son tour]      historique
  [T4 heure, rappel mémoire, intentions, notes de travail]                 fin de prompt
- + définitions d'outils (noyau et méta-outils)
+ + définitions d'outils : liste gelée à la frontière (noyau, méta-outils,
+   outils découverts par la session, outils MCP promus)
 ```
 
 Le préfixe ne change pas en cours de conversation (décision
@@ -181,8 +182,12 @@ dernière requête de la conversation telle qu'envoyée (même modèle, même pr
 mêmes outils, même historique) et ajoute la consigne de résumé en dernier message ; son
 `system_hash` et son `tools_hash` sont ceux de la conversation. `auto`, le défaut, ne le
 fait que si c'est moins cher que le résumeur selon les prix du catalogue (préfixe au prix
-du cache, même sortie estimée des deux côtés) ; sans préfixe chaud, sur un dépassement
-prouvé ou après un échec, le résumeur classique prend la main.
+du cache, même sortie estimée des deux côtés). Le résumeur classique prend la main sans
+préfixe chaud ni liste gelée, quand le dernier appel a servi un modèle de l'abonnement
+ChatGPT (il ne sert que les tours du propriétaire, #142), sur un dépassement prouvé, quand
+la projection ne tient pas dans la fenêtre, au-delà du premier lot d'une compaction, ou
+après un échec (sortie invalide, appel d'outil) ; le bilan de la compaction le dit
+(`penelope-conversation/src/compaction/on_prefix.rs`).
 
 ## Relire ce que le modèle a lu
 

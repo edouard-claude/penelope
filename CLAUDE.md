@@ -43,6 +43,13 @@ cargo test --workspace
 outil ou une commande Telegram a changé ; `UPDATE_CA_MATRIX=1` si un test `ca_*` est
 ajouté.
 
+Les suites réseau ne tournent pas en CI et se lancent à la main, avec leurs variables :
+`OPENROUTER_API_KEY=… cargo test -p penelope-evals --test mem_longitudinal -- --ignored --nocapture`
+(la mémoire sur dix jours simulés, trois passes conseillées), et
+`PENELOPE_LIVE_LOCAL_MODEL=local:<modèle> penelope eval live-local` contre un
+`mlx_lm.server` lancé (`crates/penelope-evals/tests/live_local.rs` en donne la commande) ;
+`live_openrouter`, `ctx_recall`, `live_telegram` et `ab_hermes` sont dans le même dossier.
+
 Le code macOS (`crates/penelope-platform/src/backend/macos.rs`) n'est pas compilé sous
 Linux : `cargo check -p penelope-platform --target aarch64-apple-darwin` le relit.
 
@@ -74,7 +81,7 @@ détaillée, avec `design/v1/gel-et-outillage.md` §3).
   `impl Daemon` réservé à quatre fichiers : prendre `&Services` ou un trait, pas le daemon.
 - R7 : `clippy::too_many_lines` à 200 lignes ; les `#[allow(clippy::too_many_lines)]`
   existants sont comptés (`[lints]`) : découper la fonction, jamais ajouter un allow.
-- R8 : les tests `ca_*` de `[ca].required` sont figés (77 à la 1.0.3) : les déplacer est
+- R8 : les tests `ca_*` de `[ca].required` sont figés (77) : les déplacer est
   permis, les renommer ou les supprimer est interdit.
 - Frontière canal/cœur (#214) : le canal vit dans `penelope-telegram` et
   `penelope-gateway-telegram` ; les crates agnostiques (`CHANNEL_AGNOSTIC_CRATES`) ne

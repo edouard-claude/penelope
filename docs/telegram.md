@@ -275,7 +275,7 @@ Workflows (4)
 | `/intentions`, `/policies` | ❌ annuler une intention, 🗑 retirer une règle (confirmé) ; une règle inutile (famille issue d'une commande composée, lecture déjà libre, jamais utilisée depuis une semaine) porte ⚠️ et la raison |
 | `/status`, `/doctor` | résumé lisible, boutons vers l'écran de chaque alerte (MCP, dépenses, modèles) |
 | `/config`, `/logs` | générations et sous-systèmes ; journal filtré par composant, « Plus » |
-| `/restart`, `/close`, `/rewind` | confirmation |
+| `/restart`, `/close`, `/rewind` | confirmation ; un redémarrage confirmé laisse au journal une ligne `arrêt demandé` (`par: telegram`, `motif: /restart, confirmé`) et le démarrage suivant cite cet `arret_precedent` (1.0.1) |
 | `/purge` | confirmation ; efface le contenu de la session (messages, résumés, artefacts, arguments et résultats d'outils, messages envoyés), la chaîne d'audit garde ses lignes sans leur contenu |
 | `/fork` | ↪️ revenir à l'original |
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
@@ -399,7 +399,12 @@ ou d'un run est atteint, le message donne la clé exacte à relever (`budget.ses
 
 Vocaux, photos (albums compris) et documents (PDF, `.docx`, HTML, Markdown, texte) sont reçus : un vocal
 est transcrit, une photo montrée au modèle s'il lit les images, un document versé dans
-les sources du vault.
+les sources du vault. D'une photo, la passerelle télécharge la plus grande taille que
+Telegram propose sous 10 Mo (`largest_photo_within`) et ne refuse que si aucune ne tient ;
+le tour la réduit ensuite à la limite du fournisseur qui la lira (`media.image_reduced`),
+et si le fournisseur la refuse quand même, elle est retirée de la copie envoyée, la
+réponse finit par « Image non lue : refusée par le fournisseur (motif) », et la session
+n'en souffre plus (voir [Photos et documents](install-headless.md#photos-et-documents)).
 
 Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
 l'autorisation en attente et ne part jamais vers le modèle.
@@ -412,7 +417,14 @@ approuve la révision montrée et lance **un** run qui l'exécute en phases (voi
 traité. Le bouton d'une autre révision est refusé comme clic périmé, même si son numéro
 de version est repris par un plan suivant. Après la spécification, les tests et le code,
 une carte d'OK attend dans le sujet avec la sortie de la phase : « Continuer », « Laisse
-filer » (plus de carte d'OK jusqu'au prochain point dur) ou « Arrêter ».
+filer » (plus de carte d'OK jusqu'au prochain point dur) ou « Arrêter ». Un plan qui écrit
+du code est ensuite livré en dev (PR, CI, E2E) : chaque étape qui échoue pose une carte
+« livraison bloquée » avec « Réessayer » et « Arrêter », et ce qui manque (forgeur,
+branche, jeton) est demandé clé par clé sur la carte. Après l'E2E, le bilan vérifié arrive
+avec « Proposer la PR prod », « Re-vérifier » et « Refuser » : rien ne part vers la
+production sans ce clic, et un bilan périmé refait PR, CI et E2E avant de reposer une
+carte neuve (voir [Gate de production](workflows.md#gate-de-production)). `/stop` dans la
+conversation met en pause les runs des plans qu'elle a lancés.
 `workflow_start` ne lance plus directement depuis Telegram.
 Les approbations d'outils d'un run gardent aussi cette destination : la carte, le clic
 Autoriser ou Refuser, « Déjà tranché », la seconde confirmation destructive et la réponse
@@ -489,6 +501,23 @@ démarre, et s'arrête avec lui. L'action suit ce qui se passe : « envoie un fi
 `image_generate`, « écrit… » sinon. Ces appels sont jetables, hors de la file d'envoi
 durable, et leur échec ne touche jamais le tour. En conversation privée, le brouillon
 porte en plus une ligne d'état sur l'outil en cours (« ⚙️ shell_exec · cargo test »).
+
+**Trace des outils** (1.0.14, #222). Une bulle par tour, posée au premier appel d'outil
+et modifiée en place, reste dans la conversation quand le tour est fini :
+`💻 shell_exec · echo test (×4) ✅`. Une icône par famille d'outil, l'argument principal
+(commande, chemin, adresse, requête ; jamais un texte libre), `tool_call` déballé, un
+outil MCP en `serveur · outil`. Les appels consécutifs identiques se groupent (`×N`) ;
+`✅` quand tout a réussi, `❌ 2/4` pour un lot mixte, `🚫` pour un appel refusé avant
+exécution, `⏹` pour un appel sans résultat à la fin du tour. `telegram.tool_trace` choisit
+`off`, `compact` (défaut : l'argument en privé, les familles seules en groupe) ou `full`
+(un extrait du résultat en plus, en privé) ; relu à chaque tour. Au plus une modification
+en vol, toutes les 1,5 s en privé et 3 s en groupe ; au-delà de 3 800 caractères, « … et N
+appel(s) de plus » puis l'appel courant. La bulle part avant la réponse par construction
+(la réponse n'est enfilée qu'après l'acquittement de la boucle de trace), et une
+modification ratée (`429`, `not modified`) ne retarde jamais la réponse. Une session en
+arrière-plan n'a pas de bulle ; une bulle ouverte au moment d'un redémarrage est close au
+démarrage suivant (« ⏹ interrompu par un redémarrage »). Arguments et extraits sont
+caviardés (`crates/penelope-gateway-telegram/src/telegram/trace.rs`).
 
 ## Limites et reprise
 
