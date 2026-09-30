@@ -29,8 +29,15 @@ pub enum Severity {
 
 struct Rule {
     id: &'static str,
-    re: Regex,
+    matcher: Matcher,
     severity: Severity,
+}
+
+enum Matcher {
+    Regex(Regex),
+    /// Parcours caractère par caractère, pour un motif qui dépend de ses voisins ; rend la
+    /// position du premier caractère fautif.
+    Scan(fn(&str) -> Option<(usize, usize)>),
 }
 
 fn rules() -> &'static Vec<Rule> {
@@ -80,37 +87,117 @@ fn rules() -> &'static Vec<Rule> {
                 Severity::High,
             ),
             (
-                "hidden_unicode",
-                r"[\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2064}\u{feff}\u{e0000}-\u{e007f}]",
-                Severity::Medium,
-            ),
-            (
                 "fake_system_block",
                 r"(?i)(<\s*/?\s*(system|assistant)\s*>|\[\s*system\s*\]|^\s*system\s*:)",
                 Severity::Medium,
             ),
         ];
-        defs.iter()
+        let mut rules: Vec<Rule> = defs
+            .iter()
             .filter_map(|(id, re, sev)| {
                 Regex::new(re).ok().map(|re| Rule {
                     id,
-                    re,
+                    matcher: Matcher::Regex(re),
                     severity: *sev,
                 })
             })
-            .collect()
+            .collect();
+        // Un joigneur ou un sélecteur de variante n'est caché que hors d'une séquence emoji
+        // (#271) : la règle lit ses voisins, ce qu'une expression ne fait pas.
+        rules.push(Rule {
+            id: "hidden_unicode",
+            matcher: Matcher::Scan(hidden_unicode),
+            severity: Severity::Medium,
+        });
+        rules
     })
+}
+
+/// Règle `hidden_unicode` : premier caractère invisible qui porte du sens caché. Le
+/// joigneur U+200D et les sélecteurs de variante U+FE00..U+FE0F ne comptent pas quand ils
+/// forment une séquence emoji (#271) : le glyphe composé les rend visibles.
+fn hidden_unicode(s: &str) -> Option<(usize, usize)> {
+    let mut it = s.char_indices().peekable();
+    let mut prev: Option<char> = None;
+    // Dernier caractère qui n'est pas un sélecteur : dans 👁️‍🗨️ le joigneur suit un FE0F.
+    let mut last_base: Option<char> = None;
+    while let Some((pos, c)) = it.next() {
+        let hidden = match c {
+            '\u{200d}' => {
+                let next = it.peek().map(|&(_, n)| n);
+                !(last_base.is_some_and(is_pictograph) && next.is_some_and(is_pictograph))
+            }
+            '\u{fe00}'..='\u{fe0f}' => {
+                !(matches!(c, '\u{fe0e}' | '\u{fe0f}')
+                    && prev.is_some_and(admits_emoji_presentation))
+            }
+            _ => is_invisible_control(c),
+        };
+        if hidden {
+            return Some((pos, pos + c.len_utf8()));
+        }
+        if !matches!(c, '\u{fe00}'..='\u{fe0f}') {
+            last_base = Some(c);
+        }
+        prev = Some(c);
+    }
+    None
+}
+
+/// Invisibles qui portent du sens caché quel que soit le contexte : espaces de largeur
+/// nulle et gluons, marques et contrôles bidi (dont les isolats), BOM, balises de tag (le
+/// vecteur des injections « ASCII smuggling », signalé même dans un drapeau subdivisionnel).
+fn is_invisible_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200b}' | '\u{200c}' | '\u{200e}' | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+            | '\u{e0000}'..='\u{e007f}'
+    )
+}
+
+/// Caractères de base d'une séquence emoji (propriété `Emoji` d'emoji-data.txt), arrondis
+/// au bloc : il s'agit de distinguer un pictogramme d'une lettre, et un joigneur entre deux
+/// symboles ne cache rien. Le plan supplémentaire couvre aussi les indicateurs régionaux
+/// (drapeaux) et les modificateurs de ton de peau U+1F3FB..U+1F3FF.
+fn is_pictograph(c: char) -> bool {
+    matches!(
+        c,
+        '\u{a9}' | '\u{ae}' | '\u{203c}' | '\u{2049}' | '\u{2122}' | '\u{2139}'
+            | '\u{2194}'..='\u{21aa}' // flèches ↔ ↩
+            | '\u{231a}'..='\u{23ff}' // techniques ⌚ ⏩ ⏰
+            | '\u{24c2}'
+            | '\u{25aa}'..='\u{25fe}' // formes géométriques ▪ ▶ ◽
+            | '\u{2600}'..='\u{27bf}' // symboles divers et casseau ☀ ♀ ⚡ ❤ ✈
+            | '\u{2934}' | '\u{2935}'
+            | '\u{2b05}'..='\u{2b55}' // ⬅ ⬛ ⭐ ⭕
+            | '\u{3030}' | '\u{303d}' | '\u{3297}' | '\u{3299}'
+            | '\u{1f000}'..='\u{1faff}' // pictogrammes du plan supplémentaire
+    )
+}
+
+/// Ce qui peut précéder un sélecteur de présentation : un pictogramme, ou la base d'une
+/// touche (#️⃣, 1️⃣).
+fn admits_emoji_presentation(c: char) -> bool {
+    is_pictograph(c) || matches!(c, '#' | '*' | '0'..='9')
 }
 
 /// Analyse un contenu observé. Renvoie tous les signalements (bornés à 10).
 pub fn scan(content: &str) -> Vec<InjectionFinding> {
     let mut out = Vec::new();
     for rule in rules() {
-        if let Some(m) = rule.re.find(content) {
+        let hit = match &rule.matcher {
+            Matcher::Regex(re) => re.find(content).map(|m| (m.start(), m.end())),
+            Matcher::Scan(f) => f(content),
+        };
+        if let Some((start, end)) = hit {
             out.push(InjectionFinding {
                 rule: rule.id.to_string(),
                 severity: rule.severity,
-                excerpt: excerpt(content, m.start(), m.end()),
+                excerpt: excerpt(content, start, end),
             });
             if out.len() >= 10 {
                 break;
@@ -213,6 +300,84 @@ mod tests {
     fn detects_hidden_unicode() {
         let s = format!("texte normal{}suite", '\u{200b}');
         assert!(is_suspicious(&s));
+    }
+
+    /// Issue #271 : une séquence emoji valide (joigneur U+200D entre deux pictogrammes,
+    /// sélecteur de présentation U+FE0F derrière un caractère qui l'admet) ne cache rien.
+    #[test]
+    fn emoji_sequences_are_not_hidden_unicode() {
+        // L'extrait de l'issue : 🏃‍♀️ est U+1F3C3 U+200D U+2640 U+FE0F.
+        let issue = "1:25+04:00\",\"chat\":\"\u{1f3c3}\u{200d}\u{2640}\u{fe0f} SPORT & GOOD VIBES \
+                     \u{1f3c4}\",\"chat_jid\":\"120";
+        let w = wrap_untrusted("mcp whatsapp", issue);
+        assert!(!w.contains("ALERTE"), "{w}");
+        for s in [
+            issue,
+            "\u{1f1eb}\u{1f1f7} \u{1f1e9}\u{1f1ea}", // drapeaux 🇫🇷 🇩🇪
+            "\u{1f44d}\u{1f3fd}",                    // 👍🏽, ton de peau
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", // 👨‍👩‍👧‍👦
+            // 👩🏾‍❤️‍💋‍👨🏻 : tons de peau, FE0F et trois joigneurs
+            "\u{1f469}\u{1f3fe}\u{200d}\u{2764}\u{fe0f}\u{200d}\u{1f48b}\u{200d}\u{1f468}\u{1f3fb}",
+            "\u{1f441}\u{fe0f}\u{200d}\u{1f5e8}\u{fe0f}", // 👁️‍🗨️ : le joigneur suit un FE0F
+            "\u{26a1}\u{fe0f} \u{2764}\u{fe0f}",          // ⚡️ ❤️
+            "\u{a9}\u{fe0f} \u{2197}\u{fe0f} \u{3299}\u{fe0f}", // ©️ ↗️ ㊙️
+            "#\u{fe0f}\u{20e3} 1\u{fe0f}\u{20e3}",        // #️⃣ 1️⃣, touches
+            "\u{263a}\u{fe0e}",                           // ☺︎, présentation texte
+        ] {
+            let f = scan(s);
+            assert!(
+                !f.iter().any(|x| x.rule == "hidden_unicode"),
+                "faux positif sur {s:?} → {f:?}"
+            );
+        }
+    }
+
+    /// Ce qui portait du sens caché reste détecté (#271) : balises de tag, contrôles bidi,
+    /// espaces de largeur nulle, joigneur hors séquence emoji, sélecteur hors séquence.
+    #[test]
+    fn hidden_unicode_still_catches_invisible_payloads() {
+        for (s, what) in [
+            (
+                "Bonjour\u{e0069}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}",
+                "injection par balises de tag",
+            ),
+            // 🏴󠁧󠁢󠁥󠁮󠁧󠁿 : les tags restent signalés même dans un drapeau subdivisionnel,
+            // c'est le vecteur principal des injections invisibles.
+            (
+                "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}",
+                "balises de tag d'un drapeau",
+            ),
+            ("texte normal\u{200b}suite", "espace de largeur nulle"),
+            ("mot\u{200d}de\u{200d}passe", "joigneur caché dans un mot"),
+            ("\u{200d}en tête", "joigneur isolé au début"),
+            ("en queue\u{200d}", "joigneur isolé à la fin"),
+            (
+                "\u{1f600}\u{200d}a",
+                "joigneur entre un emoji et une lettre",
+            ),
+            (
+                "a\u{200d}\u{1f600}",
+                "joigneur entre une lettre et un emoji",
+            ),
+            ("\u{1f600}\u{200d}\u{200d}\u{1f600}", "joigneur doublé"),
+            ("\u{202e}txt.exe", "contrôle bidi RLO"),
+            ("\u{2067}isolat\u{2069}", "isolats bidi"),
+            ("a\u{2060}b", "gluon de mot"),
+            ("\u{feff}BOM", "BOM"),
+            ("a\u{fe0f}", "FE0F derrière une lettre"),
+            ("a\u{fe0e}", "sélecteur texte derrière une lettre"),
+            (
+                "\u{1f600}\u{fe0f}\u{fe0f}",
+                "second sélecteur derrière un emoji",
+            ),
+            ("\u{1f600}\u{fe00}", "sélecteur FE00 derrière un emoji"),
+        ] {
+            let f = scan(s);
+            assert!(
+                f.iter().any(|x| x.rule == "hidden_unicode"),
+                "non détecté ({what}) : {s:?}"
+            );
+        }
     }
 
     #[test]
