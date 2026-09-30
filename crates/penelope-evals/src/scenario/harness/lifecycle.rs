@@ -225,6 +225,25 @@ impl Harness<'_> {
             )));
         }
         let mock = MockProvider::new();
+        // Quand le faux serveur HTTP a une route `/audio/speech` et que
+        // `providers.local.base_url` le vise, la synthèse vocale y part pour de vrai : le
+        // corps envoyé se relit dans le monde (`http_request`, #278). Le reste du
+        // fournisseur reste scripté ; sans cette route, la synthèse reste simulée (la sonde
+        // `voice` de `doctor` n'ajoute rien au monde).
+        let speech_route = self
+            .spec
+            .http
+            .iter()
+            .any(|r| r.path.ends_with("/audio/speech"));
+        if let Some(server) = self.http.as_ref().filter(|_| speech_route) {
+            let base = services.config.config().providers.local.base_url.clone();
+            if base.starts_with(server.base()) {
+                let compat =
+                    penelope_llm::OpenAiCompatProvider::new(base, "", penelope_llm::Catalog::new())
+                        .map_err(|e| anyhow::anyhow!("fournisseur local du scénario : {e}"))?;
+                mock.set_speech_upstream(Some(Arc::new(compat)));
+            }
+        }
         let (script, roles, seen) = (self.script.clone(), self.roles.clone(), self.seen.clone());
         let errors = self.script_errors.clone();
         mock.set_responder(Some(Arc::new(move |req: &ChatRequest| {
@@ -620,8 +639,12 @@ impl Provider for Recorder {
         input: &str,
         voice: &str,
         format: &str,
+        language: Option<&str>,
+        instruct: Option<&str>,
     ) -> penelope_llm::types::Result<Vec<u8>> {
-        self.inner(model)?.speak(model, input, voice, format).await
+        self.inner(model)?
+            .speak(model, input, voice, format, language, instruct)
+            .await
     }
 }
 

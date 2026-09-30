@@ -80,7 +80,8 @@ pub struct Spec {
     pub messenger: bool,
     /// Routes du faux serveur HTTP local (`127.0.0.1`, port tiré au sort) : `{{http}}`
     /// est sa base dans la configuration, les paramètres RPC et les corps servis ; les
-    /// requêtes reçues sont relevées (`http_request`).
+    /// requêtes reçues sont relevées (`http_request`). Quand `providers.local.base_url`
+    /// le vise, la synthèse vocale y part pour de vrai (`/audio/speech`, #278).
     #[serde(default)]
     pub http: Vec<http::Route>,
     /// Valeurs semées dans `kv` avant la première étape : un état que le daemon dresse

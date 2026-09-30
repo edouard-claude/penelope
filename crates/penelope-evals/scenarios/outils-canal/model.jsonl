@@ -2,3 +2,7 @@
 {"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "send_file", "arguments": {"path": "devis/acme.md", "caption": "Devis ACME"}}]}}
 {"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "send_voice", "arguments": {"text": "Le devis ACME est parti : quatre mille six cents euros."}}]}}
 {"text": "Le devis est parti, avec un résumé vocal."}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "send_voice", "arguments": {"text": "Le devis ACME est parti."}}]}}
+{"text": "La synthèse est indisponible : le résumé est parti en texte."}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "send_voice", "arguments": {"text": "Le devis ACME est parti."}}]}}
+{"text": "Toujours indisponible : le résumé est parti en texte, en français."}

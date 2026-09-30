@@ -148,9 +148,8 @@ async fn local_whisper_transcription_uses_the_openai_multipart_form() {
     );
 }
 
-/// Issue #41 : la synthèse locale envoie modèle, texte, voix et format, et rend l'audio.
-#[tokio::test]
-async fn local_speech_posts_json_and_returns_audio_bytes() {
+/// Réponse d'un faux serveur de synthèse : un début de WAV.
+fn wav_response() -> String {
     let wav = b"RIFF\x24\x00\x00\x00WAVEfmt ";
     let mut resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -158,7 +157,14 @@ async fn local_speech_posts_json_and_returns_audio_bytes() {
     )
     .into_bytes();
     resp.extend_from_slice(wav);
-    let (url, seen) = capturing_server(String::from_utf8_lossy(&resp).to_string()).await;
+    String::from_utf8_lossy(&resp).to_string()
+}
+
+/// Issue #41 : la synthèse locale envoie modèle, texte, voix et format, et rend l'audio.
+/// Sans langue ni consigne, le corps est celui d'avant #278 : Voxtral le reçoit inchangé.
+#[tokio::test]
+async fn local_speech_posts_json_and_returns_audio_bytes() {
+    let (url, seen) = capturing_server(wav_response()).await;
     let p = OpenAiCompatProvider::new(url, "", Catalog::new()).unwrap();
     let audio = p
         .speak(
@@ -166,6 +172,8 @@ async fn local_speech_posts_json_and_returns_audio_bytes() {
             "Bonjour Edouard.",
             "fr_female",
             "wav",
+            None,
+            Some("  "),
         )
         .await
         .unwrap();
@@ -178,8 +186,47 @@ async fn local_speech_posts_json_and_returns_audio_bytes() {
         "{raw}"
     );
     assert!(raw.contains("\"response_format\":\"wav\""), "{raw}");
-    let empty = p.speak("m", "  ", "fr_female", "wav").await.unwrap_err();
+    assert!(
+        !raw.contains("lang_code") && !raw.contains("instruct"),
+        "rien de plus sans langue ni consigne : {raw}"
+    );
+    let empty = p
+        .speak("m", "  ", "fr_female", "wav", None, None)
+        .await
+        .unwrap_err();
     assert_eq!(empty.kind, LlmErrorKind::BadRequest);
+}
+
+/// #278 : la langue part en `lang_code` et la consigne de style en `instruct` quand elles
+/// sont renseignées. Sans `lang_code`, Qwen3-TTS lisait « trois nouvelles à retenir » en
+/// « Trois Nouvelles Aretni and Cafe Allemand ».
+#[tokio::test]
+async fn local_speech_carries_the_language_and_the_style_when_set() {
+    let (url, seen) = capturing_server(wav_response()).await;
+    let p = OpenAiCompatProvider::new(url, "", Catalog::new()).unwrap();
+    p.speak(
+        "openai_compat:mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+        "Trois nouvelles à retenir.",
+        "ryan",
+        "wav",
+        Some("french"),
+        Some("ton chaleureux d'animateur de podcast matinal"),
+    )
+    .await
+    .unwrap();
+    let raw = String::from_utf8_lossy(&seen.await.unwrap()).to_string();
+    let body: Value = serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap_or("{}")).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+            "input": "Trois nouvelles à retenir.",
+            "voice": "ryan",
+            "response_format": "wav",
+            "lang_code": "french",
+            "instruct": "ton chaleureux d'animateur de podcast matinal",
+        })
+    );
 }
 
 #[tokio::test]

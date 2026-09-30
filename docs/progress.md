@@ -12,6 +12,42 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.30
+
+**Voix : la langue et une consigne de style partent à la synthèse (#278).** Le
+propriétaire veut Qwen3-TTS en local (`mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`,
+voix `ryan`) à la place de Voxtral, jugé peu naturel, pour un podcast matinal en français.
+Mesuré le 30/09 sur l'instance : sans `lang_code`, la voix dérive en anglais au milieu de
+la phrase (« trois nouvelles à retenir » retranscrit « Trois Nouvelles Aretni and Cafe
+Allemand ») ; avec `"lang_code": "french"`, la phrase est retranscrite à l'identique.
+
+- Cause : le corps envoyé à `/audio/speech` ne portait que `model`, `input`, `voice` et
+  `response_format` ; le serveur mettait `lang_code = "a"` par défaut, que Qwen3-TTS ne
+  lit pas comme « auto ».
+- Correctif : deux clés, `voice.tts_language` (envoyée en `lang_code`) et
+  `voice.tts_instruct` (en `instruct`, style ou émotion), vides par défaut et transmises
+  seulement quand elles sont renseignées (`speech_body`) : le corps de Voxtral ne change
+  pas. `Provider::speak` les reçoit ; le fournisseur simulé peut déléguer la synthèse à
+  un vrai `OpenAiCompatProvider` devant le faux serveur HTTP des scénarios.
+- `doctor` (`voice`) : quand le serveur audio liste ses modèles (`GET /models`) sans celui
+  de l'alias `tts`, le contrôle le dit avec la commande de téléchargement (`hf download`),
+  le service tournant hors ligne (`HF_HUB_OFFLINE=1`) ; une liste vide ou un serveur
+  injoignable laissent la synthèse d'essai parler. La ligne du contrôle nomme la langue.
+- Tests : `local_speech_carries_the_language_and_the_style_when_set` (corps complet),
+  `local_speech_posts_json_and_returns_audio_bytes` (rien de plus sans langue ni consigne,
+  une consigne blanche comprise), `a_tts_model_the_audio_server_does_not_serve_is_named_with_its_download` ;
+  scénario `outils-canal` complété : le résumé part au faux serveur qui relève le corps,
+  d'abord celui de Voxtral, puis avec `lang_code` et `instruct` après deux `config.set`
+  à chaud ; le serveur refuse (modèle absent du cache, hors ligne) et la réponse part en
+  texte avec la raison.
+- Ce qui continue de marcher : l'alias `tts`, `voice.tts_voice`, `voice.max_chars`,
+  `voice.reply_in_kind`, le refus avant synthèse d'un texte trop long, le repli en texte,
+  Voxtral par défaut.
+- Doc : « Messages vocaux » d'install-headless.md (Qwen3-TTS, langue, voix qui tiennent le
+  français, style, téléchargement préalable), référence des clés régénérée.
+
+Closes #278.
+
 ### 1.0.26
 
 **Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit

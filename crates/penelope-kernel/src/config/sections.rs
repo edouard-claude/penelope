@@ -662,6 +662,14 @@ impl Default for Skills {
 pub struct Voice {
     /// Voix préréglée du modèle de synthèse (rôle `tts`).
     pub tts_voice: String,
+    /// Langue du texte lu, envoyée en `lang_code` à `/audio/speech` (#278) : `french` pour
+    /// Qwen3-TTS, qui dérive en anglais au milieu d'une phrase sans elle. Vide : rien n'est
+    /// envoyé, le serveur garde son défaut (Voxtral n'en a pas besoin).
+    pub tts_language: String,
+    /// Consigne de style ou d'émotion, envoyée en `instruct` (#278) : « ton chaleureux
+    /// d'animateur de podcast matinal » pour les modèles Qwen3-TTS CustomVoice et
+    /// VoiceDesign. Vide : rien n'est envoyé.
+    pub tts_instruct: String,
     /// Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal.
     pub max_chars: usize,
     /// Répondre en vocal quand le propriétaire vient d'envoyer un vocal.
@@ -672,6 +680,8 @@ impl Default for Voice {
     fn default() -> Self {
         Voice {
             tts_voice: "fr_female".into(),
+            tts_language: String::new(),
+            tts_instruct: String::new(),
             max_chars: 1_500,
             reply_in_kind: false,
         }

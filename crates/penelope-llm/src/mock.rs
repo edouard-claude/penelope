@@ -57,6 +57,10 @@ pub struct MockProvider {
     /// Synthèse vocale : `Some(erreur)` fait échouer `speak` ; textes reçus.
     speech_error: Arc<Mutex<Option<String>>>,
     pub spoken: Arc<Mutex<Vec<(String, String)>>>,
+    /// Fournisseur auquel la synthèse est déléguée quand il est posé : un vrai
+    /// `OpenAiCompatProvider` devant le faux serveur HTTP des scénarios, pour relire le
+    /// corps envoyé à `/audio/speech` (#278).
+    speech_upstream: Arc<Mutex<Option<Arc<dyn Provider>>>>,
     /// Nom rendu par `name()` : les chemins qui dépendent du fournisseur (repli côté
     /// serveur d'OpenRouter, issue #50) se testent avec `named("openrouter")`.
     name: Arc<std::sync::OnceLock<String>>,
@@ -118,6 +122,7 @@ impl MockProvider {
             embedder: Arc::new(Mutex::new(None)),
             speech_error: Arc::new(Mutex::new(None)),
             spoken: Arc::new(Mutex::new(Vec::new())),
+            speech_upstream: Arc::new(Mutex::new(None)),
             name: Arc::new(std::sync::OnceLock::new()),
             latency: Arc::new(Mutex::new(std::time::Duration::ZERO)),
             responder: Arc::new(Mutex::new(None)),
@@ -133,6 +138,15 @@ impl MockProvider {
     /// Fait échouer la synthèse vocale (`Some(raison)`), ou la rétablit (`None`).
     pub fn set_speech_error(&self, error: Option<&str>) -> &Self {
         *self.speech_error.lock().unwrap_or_else(|p| p.into_inner()) = error.map(String::from);
+        self
+    }
+
+    /// Délègue la synthèse vocale à ce fournisseur (`None` : le silence simulé), #278.
+    pub fn set_speech_upstream(&self, upstream: Option<Arc<dyn Provider>>) -> &Self {
+        *self
+            .speech_upstream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = upstream;
         self
     }
 
@@ -339,10 +353,12 @@ impl Provider for MockProvider {
 
     async fn speak(
         &self,
-        _model: &str,
+        model: &str,
         input: &str,
         voice: &str,
-        _format: &str,
+        format: &str,
+        language: Option<&str>,
+        instruct: Option<&str>,
     ) -> Result<Vec<u8>> {
         if let Some(e) = self
             .speech_error
@@ -351,6 +367,16 @@ impl Provider for MockProvider {
             .clone()
         {
             return Err(LlmError::new(LlmErrorKind::Other, e));
+        }
+        let upstream = self
+            .speech_upstream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(p) = upstream {
+            return p
+                .speak(model, input, voice, format, language, instruct)
+                .await;
         }
         self.spoken
             .lock()

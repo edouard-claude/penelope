@@ -4,14 +4,33 @@ simulé qui enregistre ce qu'il reçoit : un message d'avancement (`send_message
 devis en pièce jointe avec sa légende (`send_file`). Le vocal (`send_voice`) est refusé
 avant la synthèse, le texte dépassant `voice.max_chars` : l'erreur demande un résumé.
 Le monde montre les envois (lignes `sent`) dans l'ordre, avec la session qui les a
-faits, et aucun vocal. Un vocal qui part demande `ffmpeg` sur la machine : le rejeu
-dépendrait de la plateforme, il n'est pas joué ici."""
+faits, et aucun vocal.
+
+Puis la synthèse (#278) : le résumé court part à `/audio/speech` du faux serveur, qui
+tient lieu de mlx-audio et relève le corps (`http_request`). Sans langue ni consigne, le
+corps est celui de Voxtral (modèle, texte, voix, format) ; `voice.tts_language` et
+`voice.tts_instruct` posés à chaud (`config.set`), le corps porte `lang_code` et
+`instruct`. Le serveur refuse les deux fois, comme un service hors ligne
+(`HF_HUB_OFFLINE=1`) dont le cache n'a pas le modèle : la réponse part en texte avec la
+raison. Un vocal qui part demanderait `ffmpeg` sur la machine : le rejeu dépendrait de
+la plateforme, il n'est pas joué ici."""
 pin_model = "main"
 messenger = true
 
 [config]
 "tools.approval_mode" = "auto"
 "voice.max_chars" = 40
+"providers.local.base_url" = "{{http}}/v1"
+"models.aliases.tts" = "openai_compat:mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+"voice.tts_voice" = "ryan"
+
+# Le serveur audio relève chaque synthèse puis la refuse : le modèle n'est pas dans son
+# cache et, hors ligne, il ne le téléchargera pas.
+[[http]]
+path = "/v1/audio/speech"
+method = "POST"
+status = 503
+body = """{"error": {"message": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit absent du cache Hugging Face (HF_HUB_OFFLINE=1)"}}"""
 
 [[files]]
 path = "devis/acme.md"
@@ -24,3 +43,21 @@ content = """# Devis ACME
 [[steps]]
 kind = "message"
 text = "envoie-moi le devis ACME, préviens-moi quand c'est parti et fais-moi un résumé en vocal"
+
+[[steps]]
+kind = "message"
+text = "en deux mots alors, en vocal"
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "voice.tts_language", value = "french" }
+
+[[steps]]
+kind = "rpc"
+method = "config.set"
+params = { path = "voice.tts_instruct", value = "ton chaleureux d'animateur de podcast matinal" }
+
+[[steps]]
+kind = "message"
+text = "redis-le en vocal, en français"

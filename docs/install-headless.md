@@ -579,6 +579,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
+| `voice.tts_language` | `""` | Langue du texte lu, envoyée en `lang_code` à `/audio/speech` (#278) : `french` pour Qwen3-TTS, qui dérive en anglais au milieu d'une phrase sans elle. Vide : rien n'est envoyé, le serveur garde son défaut (Voxtral n'en a pas besoin). |
+| `voice.tts_instruct` | `""` | Consigne de style ou d'émotion, envoyée en `instruct` (#278) : « ton chaleureux d'animateur de podcast matinal » pour les modèles Qwen3-TTS CustomVoice et VoiceDesign. Vide : rien n'est envoyé. |
 | `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
 | `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
 
@@ -1407,8 +1409,34 @@ environ une seconde de calcul par seconde d'audio à chaud sur un M1 Pro. Régla
 penelope model set tts openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit
 ```
 
-`penelope doctor` vérifie `ffmpeg` et lit une phrase d'essai ; `self_status` (inventaire
-`install`) dit si la réponse vocale est disponible et avec quelle voix.
+**Une voix plus naturelle : Qwen3-TTS** (#278). Le même serveur mlx-audio (0.5.4 suffit)
+sert `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` (2,4 Go ; ≈ 10 s d'audio en
+6 à 18 s sur un M1 Pro). Deux réglages de plus l'accompagnent, envoyés dans le corps de
+`/audio/speech` seulement quand ils sont renseignés (le corps de Voxtral ne change pas) :
+`voice.tts_language` (`lang_code`) et `voice.tts_instruct` (`instruct`, style ou
+émotion, pour les modèles CustomVoice et VoiceDesign). Sans langue, Qwen3-TTS dérive en
+anglais au milieu d'une phrase (« trois nouvelles à retenir » devenait « Trois Nouvelles
+Aretni and Cafe Allemand ») : `french` est indispensable. Voix du CustomVoice : `serena`,
+`vivian`, `uncle_fu`, `ryan`, `aiden`, `ono_anna`, `sohee`, `eric`, `dylan` ; `ryan` et
+`vivian` tiennent le français d'un bout à l'autre, `aiden` et `serena` dérivent. Le
+service audio tourne hors ligne (`HF_HUB_OFFLINE=1`) : télécharger le modèle **avant** de
+le demander, puis relancer le serveur.
+
+```bash
+~/mlx/bin/hf download mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit
+```
+
+```bash
+penelope model set tts openai_compat:mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit
+penelope config set voice.tts_voice ryan
+penelope config set voice.tts_language french
+penelope config set voice.tts_instruct "ton chaleureux d'animateur de podcast matinal"
+```
+
+`penelope doctor` vérifie `ffmpeg`, que le modèle de l'alias `tts` est bien servi par le
+serveur audio (`GET /v1/models` ; sinon, la commande de téléchargement), puis lit une
+phrase d'essai ; `self_status` (inventaire `install`) dit si la réponse vocale est
+disponible et avec quelle voix.
 
 ### Ce que Pénélope sait d'elle-même
 

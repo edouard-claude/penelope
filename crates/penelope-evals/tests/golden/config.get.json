@@ -285,6 +285,8 @@
       },
       "voice": {
         "tts_voice": "string",
+        "tts_language": "string",
+        "tts_instruct": "string",
         "max_chars": "integer",
         "reply_in_kind": "bool"
       },

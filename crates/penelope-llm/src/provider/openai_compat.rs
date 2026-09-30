@@ -190,12 +190,20 @@ impl Provider for OpenAiCompatProvider {
         transcribe_multipart(request, model, audio, filename, language).await
     }
 
-    async fn speak(&self, model: &str, input: &str, voice: &str, format: &str) -> Result<Vec<u8>> {
+    async fn speak(
+        &self,
+        model: &str,
+        input: &str,
+        voice: &str,
+        format: &str,
+        language: Option<&str>,
+        instruct: Option<&str>,
+    ) -> Result<Vec<u8>> {
         let mut request = self.http.post(format!("{}/audio/speech", self.base_url));
         if !self.api_key.is_empty() {
             request = request.bearer_auth(&self.api_key);
         }
-        speak_openai(request, model, input, voice, format).await
+        speak_openai(request, model, input, voice, format, language, instruct).await
     }
 
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {

@@ -56,9 +56,19 @@ pub trait Provider: Send + Sync {
     }
 
     /// Synthèse vocale (rôle `tts`, issue #41) : `POST /audio/speech`, renvoie les octets
-    /// audio au format demandé (`wav`).
-    async fn speak(&self, model: &str, input: &str, voice: &str, format: &str) -> Result<Vec<u8>> {
-        let _ = (model, input, voice, format);
+    /// audio au format demandé (`wav`). `language` (`lang_code`) et `instruct` (consigne de
+    /// style) ne partent que renseignés : Qwen3-TTS dérive en anglais sans langue, Voxtral
+    /// n'en a pas besoin (#278).
+    async fn speak(
+        &self,
+        model: &str,
+        input: &str,
+        voice: &str,
+        format: &str,
+        language: Option<&str>,
+        instruct: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        let _ = (model, input, voice, format, language, instruct);
         Err(LlmError::new(
             LlmErrorKind::BadRequest,
             format!(
@@ -72,6 +82,32 @@ pub trait Provider: Send + Sync {
 /// Texte au plus par appel de synthèse vocale.
 pub const SPEECH_MAX_CHARS: usize = 4_000;
 
+/// Corps d'une synthèse `/audio/speech` : modèle, texte, voix, format, et seulement quand
+/// ils sont renseignés `lang_code` et `instruct` (#278). Un serveur ignore les champs
+/// qu'un modèle n'utilise pas ; un champ vide, lui, remplacerait son défaut.
+pub fn speech_body(
+    model: &str,
+    input: &str,
+    voice: &str,
+    format: &str,
+    language: Option<&str>,
+    instruct: Option<&str>,
+) -> Value {
+    let mut body = json!({
+        "model": strip_provider(model),
+        "input": input,
+        "voice": voice,
+        "response_format": format,
+    });
+    if let Some(l) = language.map(str::trim).filter(|l| !l.is_empty()) {
+        body["lang_code"] = json!(l);
+    }
+    if let Some(i) = instruct.map(str::trim).filter(|i| !i.is_empty()) {
+        body["instruct"] = json!(i);
+    }
+    body
+}
+
 /// Synthèse sur un endpoint `/audio/speech` OpenAI-compatible (mlx-audio, Kokoro-FastAPI…).
 async fn speak_openai(
     request: reqwest::RequestBuilder,
@@ -79,6 +115,8 @@ async fn speak_openai(
     input: &str,
     voice: &str,
     format: &str,
+    language: Option<&str>,
+    instruct: Option<&str>,
 ) -> Result<Vec<u8>> {
     if input.trim().is_empty() {
         return Err(LlmError::new(LlmErrorKind::BadRequest, "texte vide"));
@@ -90,12 +128,9 @@ async fn speak_openai(
         ));
     }
     let resp = request
-        .json(&json!({
-            "model": strip_provider(model),
-            "input": input,
-            "voice": voice,
-            "response_format": format,
-        }))
+        .json(&speech_body(
+            model, input, voice, format, language, instruct,
+        ))
         .send()
         .await
         .map_err(map_reqwest_error)?;

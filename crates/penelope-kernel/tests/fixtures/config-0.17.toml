@@ -308,6 +308,8 @@ archive_base_url = "https://codeload.github.com"
 
 [voice]
 tts_voice = "fr_female"
+tts_language = ""
+tts_instruct = ""
 max_chars = 1500
 reply_in_kind = false
 

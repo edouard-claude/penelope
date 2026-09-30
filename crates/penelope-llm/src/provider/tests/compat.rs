@@ -479,7 +479,10 @@ async fn a_provider_without_audio_or_vectors_says_so() {
         "{}",
         e.message
     );
-    let e = p.speak("m", "bonjour", "v", "wav").await.unwrap_err();
+    let e = p
+        .speak("m", "bonjour", "v", "wav", None, None)
+        .await
+        .unwrap_err();
     assert!(
         e.message.contains("ne sait pas synthétiser"),
         "{}",
@@ -493,7 +496,10 @@ async fn a_provider_without_audio_or_vectors_says_so() {
 async fn speech_refuses_what_is_not_audio() {
     let p = OpenAiCompatProvider::new("http://127.0.0.1:9/v1", "", Catalog::new()).unwrap();
     let long = "a".repeat(SPEECH_MAX_CHARS + 1);
-    let e = p.speak("m", &long, "v", "wav").await.unwrap_err();
+    let e = p
+        .speak("m", &long, "v", "wav", None, None)
+        .await
+        .unwrap_err();
     assert_eq!(e.kind, LlmErrorKind::BadRequest);
     assert!(e.message.contains("trop long"), "{}", e.message);
 
@@ -503,11 +509,19 @@ async fn speech_refuses_what_is_not_audio() {
     for (resp, what) in [(json_ok, "json"), (refused, "422")] {
         let (url, _) = routed_server(vec![("/audio/speech", resp)]).await;
         let p = OpenAiCompatProvider::new(url, "k", Catalog::new()).unwrap();
-        assert!(p.speak("m", "bonjour", "v", "wav").await.is_err(), "{what}");
+        assert!(
+            p.speak("m", "bonjour", "v", "wav", None, None)
+                .await
+                .is_err(),
+            "{what}"
+        );
     }
     let (url, _) = routed_server(vec![("/audio/speech", empty)]).await;
     let p = OpenAiCompatProvider::new(url, "k", Catalog::new()).unwrap();
-    let e = p.speak("m", "bonjour", "v", "wav").await.unwrap_err();
+    let e = p
+        .speak("m", "bonjour", "v", "wav", None, None)
+        .await
+        .unwrap_err();
     assert_eq!(e.message, "synthèse vide");
 }
 

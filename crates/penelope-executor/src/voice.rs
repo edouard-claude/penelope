@@ -244,16 +244,85 @@ pub async fn synthesize(
     }
     let model = penelope_app::codex_scope::background(s, &model, "synthèse vocale").await;
     let provider = providers.provider_for(&model).await?;
+    // Langue et consigne de style (#278) : ne partent que renseignées, le corps reste
+    // celui de Voxtral sinon.
+    fn set(v: &str) -> Option<&str> {
+        Some(v.trim()).filter(|v| !v.is_empty())
+    }
+    let (language, instruct) = (set(&cfg.voice.tts_language), set(&cfg.voice.tts_instruct));
     let mut parts = Vec::new();
     for chunk in chunks(text, CHUNK_CHARS) {
-        let bytes =
-            tokio::time::timeout(SPEAK_TIMEOUT, provider.speak(&model, &chunk, voice, "wav"))
-                .await
-                .map_err(|_| "synthèse trop longue (plus de 3 min)".to_string())?
-                .map_err(|e| format!("{} ({model})", e.message))?;
+        let bytes = tokio::time::timeout(
+            SPEAK_TIMEOUT,
+            provider.speak(&model, &chunk, voice, "wav", language, instruct),
+        )
+        .await
+        .map_err(|_| "synthèse trop longue (plus de 3 min)".to_string())?
+        .map_err(|e| format!("{} ({model})", e.message))?;
         parts.push(Wav::parse(&bytes)?);
     }
     Wav::concat(parts)
+}
+
+/// Délai de la sonde `GET /models` du serveur audio.
+const MODELS_PROBE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Le modèle de l'alias `tts` parmi ceux que le serveur local dit servir (`GET /models`,
+/// #278). `None` : rien à dire, parce que le modèle n'est pas local, qu'un fournisseur est
+/// imposé (tests), que le serveur est injoignable ou ne liste rien (la synthèse d'essai le
+/// dira), ou que le modèle est bien servi.
+async fn unserved_model_check(
+    s: &Services,
+    providers: &dyn ProviderSource,
+    cfg: &penelope_kernel::config::Config,
+    model: &str,
+) -> Option<penelope_kernel::api::DoctorCheck> {
+    if providers.provider_override_active().is_some()
+        || penelope_llm::catalog::provider_of(model) == "openrouter"
+    {
+        return None;
+    }
+    let bare = penelope_llm::catalog::strip_provider(model);
+    let (_, endpoint) = cfg.providers.local_endpoint(bare)?;
+    let key = s
+        .platform
+        .secrets
+        .expand(&endpoint.api_key)
+        .unwrap_or_default();
+    let probe = penelope_llm::OpenAiCompatProvider::new(
+        endpoint.base_url.trim_end_matches('/'),
+        key,
+        penelope_llm::Catalog::new(),
+    )
+    .ok()?;
+    let served = probe.served_models(MODELS_PROBE).await.ok()?;
+    missing_model_check(bare, &served)
+}
+
+/// Le contrôle en échec quand le serveur audio liste ses modèles sans `model` : il tourne
+/// hors ligne (`HF_HUB_OFFLINE=1`) et ne le téléchargera pas au premier appel. Une liste
+/// vide ne dit rien (whisper-server ne liste pas).
+pub fn missing_model_check(
+    model: &str,
+    served: &[penelope_llm::provider::ServedModel],
+) -> Option<penelope_kernel::api::DoctorCheck> {
+    if served.is_empty() || served.iter().any(|m| m.id == model) {
+        return None;
+    }
+    let list: Vec<&str> = served.iter().map(|m| m.id.as_str()).take(8).collect();
+    Some(penelope_kernel::api::DoctorCheck::fail(
+        "voice",
+        "Réponses vocales",
+        format!(
+            "`{model}` n'est pas servi par le serveur audio (servis : {}) : il tourne hors \
+             ligne (`HF_HUB_OFFLINE=1`) et ne le téléchargera pas",
+            list.join(", ")
+        ),
+        Some(format!(
+            "hf download {model}, puis relancer mlx_audio.server (docs/install-headless.md, \
+             « Messages vocaux »)"
+        )),
+    ))
 }
 
 /// Lit `text` en vocal dans la conversation `session_id`. Rend la durée et le fichier.
@@ -347,6 +416,11 @@ pub async fn doctor_check(
             Some("brew install ffmpeg".into()),
         );
     }
+    // Un modèle absent du cache du serveur audio (#278) : dit avant la synthèse d'essai,
+    // qui n'en rendrait qu'une erreur de chargement.
+    if let Some(check) = unserved_model_check(s, providers, &cfg, &model).await {
+        return check;
+    }
     let probe = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         synthesize(s, providers, "Bonjour.", &cfg.voice.tts_voice),
@@ -357,8 +431,12 @@ pub async fn doctor_check(
             ID,
             LABEL,
             format!(
-                "`{model}`, voix `{}` : {:.1} s de synthèse d'essai",
+                "`{model}`, voix `{}`{} : {:.1} s de synthèse d'essai",
                 cfg.voice.tts_voice,
+                match cfg.voice.tts_language.trim() {
+                    "" => String::new(),
+                    lang => format!(", langue `{lang}`"),
+                },
                 wav.seconds()
             ),
         ),
@@ -477,6 +555,44 @@ mod tests {
         let back = Wav::parse(&two.to_bytes()).unwrap();
         assert_eq!(back, two);
         assert!(Wav::parse(b"OggS").is_err());
+    }
+
+    /// #278 : le serveur audio, hors ligne, ne téléchargera pas un modèle absent de son
+    /// cache ; `doctor` le dit avec la commande. Une liste vide ou qui porte le modèle ne
+    /// dit rien.
+    #[test]
+    fn a_tts_model_the_audio_server_does_not_serve_is_named_with_its_download() {
+        use penelope_llm::provider::ServedModel;
+        let served = |ids: &[&str]| -> Vec<ServedModel> {
+            ids.iter()
+                .map(|id| ServedModel {
+                    id: id.to_string(),
+                    window: None,
+                })
+                .collect()
+        };
+        let qwen = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit";
+        let voxtral = "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit";
+        assert!(missing_model_check(qwen, &served(&[])).is_none());
+        assert!(missing_model_check(qwen, &served(&[voxtral, qwen])).is_none());
+        let check = missing_model_check(qwen, &served(&[voxtral, "whisper-default"])).unwrap();
+        assert!(!check.ok);
+        assert_eq!(check.id, "voice");
+        assert!(
+            check.detail.contains(qwen) && check.detail.contains(voxtral),
+            "{}",
+            check.detail
+        );
+        assert!(check.detail.contains("HF_HUB_OFFLINE"), "{}", check.detail);
+        assert!(
+            check
+                .fix
+                .as_deref()
+                .unwrap_or_default()
+                .contains(&format!("hf download {qwen}")),
+            "{:?}",
+            check.fix
+        );
     }
 
     #[test]
