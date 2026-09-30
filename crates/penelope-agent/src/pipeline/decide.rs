@@ -7,7 +7,10 @@
 
 use super::*;
 
-/// Identifiant d'un appel d'outil, tel que le modèle (ou le programme parent) l'a émis.
+/// Identité d'un appel d'outil pour la carte d'approbation, le ledger d'effets et le jeu
+/// de décisions : l'identifiant émis par le modèle (ou le programme parent), sauf s'il a
+/// déjà servi dans la session ; il est alors ancré au message qui le porte (#266). Le
+/// transcript, lui, garde toujours l'identifiant émis.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CallId(pub String);
 
@@ -211,7 +214,7 @@ impl CallGuard for PriorDecision {
             .agent
             .services
             .approvals
-            .find_for_call(&cx.spec.session_id, &d.call.id)
+            .find_for_call(&cx.spec.session_id, &d.context.call_id.0)
             .await?;
         let Some(a) = prior else {
             return Ok(None);

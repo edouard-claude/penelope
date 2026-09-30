@@ -3,7 +3,7 @@
 use crate::steering::Steer;
 use penelope_kernel::canonical::sha256_hex;
 use penelope_kernel::journal::{Provenance, TileMap};
-use penelope_llm::types::ChatMessage;
+use penelope_llm::types::{ChatMessage, Role};
 use std::sync::Mutex;
 
 /// Le transcript sur lequel travaille un tour.
@@ -35,6 +35,11 @@ pub trait Conversation: Send + Sync {
     }
     /// Queue du transcript, sans prompt système : sert à retrouver les appels en attente.
     async fn tail(&self) -> anyhow::Result<Vec<ChatMessage>>;
+    /// Ancre du message assistant qui porte les appels en attente : unique dans la
+    /// session, persistée, la même d'une reprise à l'autre. La boucle y accroche
+    /// l'identité d'un appel dont l'identifiant a déjà servi dans la session (#266).
+    /// `None` : aucun appel en attente.
+    async fn pending_anchor(&self) -> anyhow::Result<Option<String>>;
     /// Compacte tout de suite après un dépassement de fenêtre prouvé par le provider.
     /// Vrai si des messages ont été résumés : la requête peut être reconstruite.
     async fn compact_for_overflow(&self) -> anyhow::Result<bool> {
@@ -101,9 +106,23 @@ impl Conversation for MemoryConversation {
         Ok(self.messages())
     }
 
+    /// Le transcript ne fait que croître : la place du message y est stable.
+    async fn pending_anchor(&self) -> anyhow::Result<Option<String>> {
+        let messages = self.messages();
+        Ok(messages
+            .iter()
+            .rposition(carries_tool_calls)
+            .map(|i| i.to_string()))
+    }
+
     fn prompt_prefix(&self) -> Option<PromptPrefix> {
         Some(PromptPrefix::plain(&self.system))
     }
+}
+
+/// Le message qui peut porter des appels en attente : un message assistant à appels.
+pub fn carries_tool_calls(m: &ChatMessage) -> bool {
+    m.role == Role::Assistant && !m.tool_calls.is_empty()
 }
 
 /// Le préfixe tel qu'il part au modèle, et sa découpe quand la conversation la connaît.

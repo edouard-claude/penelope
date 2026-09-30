@@ -93,6 +93,76 @@ async fn an_approved_call_runs_on_resume_without_asking_again() {
     assert_eq!(msgs[3].text(), "compilé");
 }
 
+/// #266 : l'approbation d'un appel ne couvre pas un appel **ultérieur** qui porte le même
+/// identifiant. Avec un fournisseur qui numérote ses appels de façon constante (`call_0`),
+/// tout appel suivant le premier approuvé partait sinon sans carte.
+#[tokio::test]
+async fn an_approval_does_not_cover_a_later_call_with_the_same_id() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let conv = MemoryConversation::new("Tu es Pénélope.", "compile");
+    let e = exec(false);
+    let loop_ = AgentLoop::new(s.clone(), p.clone());
+
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "call_0",
+            "shell_exec",
+            json!({"command":"cargo build"}),
+        )],
+    ));
+    let id = match loop_
+        .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+        .await
+        .unwrap()
+    {
+        TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+        other => panic!("{other:?}"),
+    };
+    loop_
+        .decide_approval(&id, &Decision::approve_once("telegram"))
+        .await
+        .unwrap();
+    p.reply("compilé");
+    let out = loop_
+        .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+        .await
+        .unwrap();
+    assert!(matches!(out, TurnOutcome::Answered { .. }), "{out:?}");
+    assert_eq!(e.calls.load(Ordering::SeqCst), 1);
+
+    // Un autre appel, une autre commande, le même identifiant : une carte, pas un passe.
+    conv.record(&ChatMessage::user("nettoie"), false)
+        .await
+        .unwrap();
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "call_0",
+            "shell_exec",
+            json!({"command":"rm -rf target"}),
+        )],
+    ));
+    let out = loop_
+        .run_conversation(&spec(&sid), &conv, &e, &NullSink)
+        .await
+        .unwrap();
+    assert!(
+        matches!(out, TurnOutcome::AwaitingApproval { .. }),
+        "{out:?}"
+    );
+    assert_eq!(e.calls.load(Ordering::SeqCst), 1, "rien ne part sans carte");
+    let pending = s.approvals.pending(10).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].payload["call_id"], "call_0@5");
+    assert_eq!(
+        conv.messages()[5].tool_calls[0].id,
+        "call_0",
+        "le transcript garde l'identifiant émis"
+    );
+}
+
 /// #83 : une demande sans arguments (budget…) n'ouvre jamais de règle sur un outil,
 /// quel que soit le bouton (régression de #67).
 #[tokio::test]

@@ -1,0 +1,4 @@
+{"tool_calls": {"text": "", "calls": [{"id": "call_0", "name": "time_now", "arguments": {}}]}}
+{"text": "Il est minuit."}
+{"tool_calls": {"text": "", "calls": [{"id": "call_0", "name": "time_now", "arguments": {}}]}}
+{"text": "Il est minuit dix."}

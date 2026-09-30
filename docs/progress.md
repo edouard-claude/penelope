@@ -12,6 +12,45 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.24
+
+**Idempotence : un appel rendu en texte par un modèle local recevait toujours `call_0`, et
+le second appel identique d'une session était rejoué sans s'exécuter (#266).** Reproduit
+par trois tests rouges avant le correctif : le corps capturé de Llama 3.2 relu deux fois
+donnait deux fois `call_0` ; deux `fs_read` identiques d'une session sous le même
+identifiant laissaient le compteur d'exécutions à 1 ; et un `shell_exec` approuvé une fois
+couvrait tout `shell_exec` ultérieur du même identifiant, qui partait sans carte (la
+décision antérieure est retrouvée par `(session, call_id)`).
+
+- Cause : la relecture d'un appel rendu en texte (#259) posait l'identifiant constant
+  `call_0`, et un appel natif sans `id` recevait `call_<indice>` ; or `step_id` entre dans
+  la clé d'idempotence du ledger et dans la recherche d'une décision déjà prise. C'est le
+  défaut que la décision 0009 avait écarté en retirant l'émulation d'outils.
+- Source : l'identifiant d'un appel que le serveur ne nomme pas est dérivé de
+  l'identifiant de la réponse et de l'indice de l'appel (`call_<id de réponse>_<indice>`),
+  jamais d'une constante ni de l'horloge ; l'appel est ensuite persisté au transcript,
+  une reprise le relit tel quel. Un appel nommé par le serveur (Qwen3) garde son
+  identifiant.
+- Garde-fou dans la boucle, quel que soit le fournisseur : un appel en attente dont
+  l'identifiant a déjà servi plus tôt dans la queue de la session prend, pour la carte
+  d'approbation, le ledger et le jeu de décisions, une identité ancrée au message qui le
+  porte (`<id>@<seq>` ; l'indice du message pour un transcript en mémoire), la même d'une
+  reprise à l'autre. Le transcript garde l'identifiant émis. L'écart est journalisé
+  (`tool.call_id_reused`, `docs/runtime-events.md`).
+- Ce qui continue de marcher : le rejeu d'un effet **terminé** du même appel (ca_17_2,
+  et `completed_effects_are_replayed_not_reexecuted` réécrit sur ce cas : effet complet
+  dans une vie antérieure, résultat pas encore au transcript) ; l'effet incertain qui
+  attend une décision (ca_17_3) ; la reprise après approbation, qui retrouve l'appel par
+  son identifiant.
+- Scénario `rpc-inference-locale` : `main` repointé vers Llama 3.2, deux `time_now`
+  identiques sous `call_0` à dix minutes d'écart ; le second rend l'heure avancée, le
+  ledger porte deux effets.
+- Limite connue : la queue relue fait 64 entrées ; un fournisseur qui réutiliserait un
+  identifiant à plus de 64 entrées d'écart, avec les mêmes arguments, retomberait sur le
+  rejeu. Aucun fournisseur du dépôt ne le fait après ce lot.
+
+Closes #266.
+
 ### 1.0.23
 
 Documentation seulement, remise à l'état de `main` à la 1.0.22. La 1.0.7 avait rattrapé la

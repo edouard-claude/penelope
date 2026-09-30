@@ -57,11 +57,12 @@ pub(crate) enum Step {
     /// Résultat connu sans exécuter : refus, avertissement du harnais.
     Record(ToolCall, String),
     /// À exécuter ; `parallel` : lecture autorisée d'office, qui peut partir avec ses
-    /// voisines.
+    /// voisines ; `id` : l'identité de l'appel pour le ledger et le jeu de décisions.
     Execute {
         call: ToolCall,
         info: CallInfo,
         parallel: bool,
+        id: CallId,
     },
 }
 
@@ -129,7 +130,8 @@ impl AgentLoop {
                 call.arguments = args;
             }
             let info = execute.describe_call(&call.name, &call.arguments).await;
-            let context = CallContext::root(&call.id);
+            let identity = self.call_identity(spec, conv, &tail, &call).await?;
+            let context = CallContext::root(&identity);
             let described = DescribedCall {
                 call,
                 info,
@@ -186,14 +188,15 @@ impl AgentLoop {
                     call,
                     info,
                     parallel: true,
+                    id,
                 } => {
-                    let mut batch = vec![(call, info)];
+                    let mut batch = vec![(call, info, id)];
                     while let Some(Step::Execute { parallel: true, .. }) = steps.peek() {
-                        if let Some(Step::Execute { call, info, .. }) = steps.next() {
-                            batch.push((call, info));
+                        if let Some(Step::Execute { call, info, id, .. }) = steps.next() {
+                            batch.push((call, info, id));
                         }
                     }
-                    for (call, _) in &batch {
+                    for (call, _, _) in &batch {
                         sink.emit(TurnEvent::ToolCall {
                             name: call.name.clone(),
                             args: penelope_observe::redact_json(&call.arguments),
@@ -202,24 +205,24 @@ impl AgentLoop {
                     let mut outcomes: Vec<anyhow::Result<ToolOutcome>> = Vec::new();
                     for chunk in batch.chunks(PARALLEL_READS) {
                         let mut running = Vec::with_capacity(chunk.len());
-                        for (call, info) in chunk {
-                            running.push(self.run_effect(spec, execute, call, info));
+                        for (call, info, id) in chunk {
+                            running.push(self.run_effect(spec, execute, call, info, id));
                         }
                         outcomes.extend(futures::future::join_all(running).await);
                     }
-                    for ((call, info), outcome) in batch.iter().zip(outcomes) {
-                        self.finish_call(spec, conv, sink, call, info, outcome?, &mut nudge)
+                    for ((call, info, id), outcome) in batch.iter().zip(outcomes) {
+                        self.finish_call(spec, conv, sink, call, info, id, outcome?, &mut nudge)
                             .await?;
                         recorded += 1;
                     }
                 }
-                Step::Execute { call, info, .. } => {
+                Step::Execute { call, info, id, .. } => {
                     sink.emit(TurnEvent::ToolCall {
                         name: call.name.clone(),
                         args: penelope_observe::redact_json(&call.arguments),
                     });
-                    let outcome = self.run_effect(spec, execute, &call, &info).await?;
-                    self.finish_call(spec, conv, sink, &call, &info, outcome, &mut nudge)
+                    let outcome = self.run_effect(spec, execute, &call, &info, &id).await?;
+                    self.finish_call(spec, conv, sink, &call, &info, &id, outcome, &mut nudge)
                         .await?;
                     recorded += 1;
                 }
@@ -315,6 +318,7 @@ impl AgentLoop {
                     call: described.call,
                     info: described.info,
                     parallel: false,
+                    id: described.context.call_id,
                 }));
             }
         }
@@ -349,7 +353,7 @@ impl AgentLoop {
             .await?;
         // Ce que le jeu de décisions garde de l'appel (#233), quelle que soit l'issue.
         let seen = Seen {
-            call_id: &call.id,
+            call_id: &context.call_id.0,
             workspace: policy_workspace.as_deref(),
             info: &info,
             args: &effective_args,
@@ -364,6 +368,7 @@ impl AgentLoop {
                     call,
                     info,
                     parallel: false,
+                    id: context.call_id,
                 }));
             }
             JudgeStep::Card(judged) => judged,
@@ -402,7 +407,7 @@ impl AgentLoop {
                             "why": why.as_ref().map(|(w, _)| w),
                             "why_from": why.as_ref().map(|(_, f)| f),
                             "double": double,
-                            "call_id": call.id,
+                            "call_id": context.call_id.0,
                             "turn_id": spec.turn_id,
                             "judged": judged,
                         }),
@@ -443,7 +448,50 @@ impl AgentLoop {
             call,
             info,
             parallel,
+            id: context.call_id,
         }))
+    }
+
+    /// Identité d'un appel pour la carte d'approbation, le ledger d'effets et le jeu de
+    /// décisions : l'identifiant émis par le modèle, sauf s'il a déjà servi dans la queue
+    /// de la session (#266). Il est alors ancré au message qui le porte, persistant et le
+    /// même d'une reprise à l'autre, et l'écart est journalisé. Sans cela, un fournisseur
+    /// qui numérote ses appels de façon constante faisait rejouer le second appel
+    /// identique depuis le premier résultat, et couvrir un appel par l'approbation d'un
+    /// autre. Le transcript garde l'identifiant émis : le résultat répond à l'appel tel
+    /// que le fournisseur l'a nommé.
+    async fn call_identity(
+        &self,
+        spec: &TurnSpec,
+        conv: &dyn Conversation,
+        tail: &[ChatMessage],
+        call: &ToolCall,
+    ) -> anyhow::Result<String> {
+        if !crate::pending::seen_before(tail, &call.id) {
+            return Ok(call.id.clone());
+        }
+        let anchor = conv
+            .pending_anchor()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("appel en attente sans message qui le porte"))?;
+        let identity = format!("{}@{anchor}", call.id);
+        tracing::warn!(
+            session = %spec.session_id, call_id = %call.id, %identity, tool = %call.name,
+            "identifiant d'appel déjà vu dans la session : renuméroté"
+        );
+        self.services
+            .events
+            .append(
+                TurnEventKind::CallIdReused
+                    .draft(json!({
+                        "call_id": call.id,
+                        "identity": identity,
+                        "tool": call.name,
+                    }))
+                    .session(&spec.session_id),
+            )
+            .await?;
+        Ok(identity)
     }
 
     /// Clôt les appels qui ne partiront pas : un résultat pour chacun, pour que le
@@ -491,6 +539,7 @@ impl AgentLoop {
         execute: &(dyn ToolExecutor + Send + Sync),
         call: &ToolCall,
         info: &CallInfo,
+        id: &CallId,
     ) -> anyhow::Result<ToolOutcome> {
         let s = &self.services;
         let spec_effect = EffectSpec::new(
@@ -499,7 +548,7 @@ impl AgentLoop {
             call.arguments.clone(),
         )
         .session(&spec.session_id)
-        .step(&call.id)
+        .step(&id.0)
         .idempotent(info.idempotent);
         let spec_effect = match &spec.run_id {
             Some(r) => spec_effect.run(r),
@@ -571,10 +620,11 @@ impl AgentLoop {
         sink: &dyn TurnSink,
         call: &ToolCall,
         info: &CallInfo,
+        id: &CallId,
         outcome: ToolOutcome,
         nudge: &mut Option<String>,
     ) -> anyhow::Result<()> {
-        self.sample_execution(spec, call, info, &outcome).await;
+        self.sample_execution(spec, &id.0, info, &outcome).await;
         penelope_observe::metrics::counter_inc(
             "penelope_tool_calls_total",
             &[

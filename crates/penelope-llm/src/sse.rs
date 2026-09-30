@@ -212,12 +212,27 @@ impl StreamAccumulator {
         }
         // Un appel natif a déjà été lu : le texte qui l'accompagne reste du texte.
         let native = !self.partial_calls.is_empty() || self.finish == Some(FinishReason::ToolCalls);
-        if !native && let Some(call) = text_tool_call(&held, &self.text_tools) {
+        if !native && let Some(call) = text_tool_call(&held, &self.text_tools, self.synthetic_id(0))
+        {
             self.finish = Some(FinishReason::ToolCalls);
             return vec![StreamChunk::ToolCall(call)];
         }
         self.text.push_str(&held);
         vec![StreamChunk::Delta { text: held }]
+    }
+
+    /// Identifiant d'un appel que le serveur n'a pas nommé : relu depuis le texte (#259),
+    /// ou natif sans `id`. Dérivé de l'identifiant de la réponse et de l'indice de l'appel,
+    /// jamais une constante : `call_0` pour chacun donnait à deux appels identiques d'une
+    /// session la même clé d'idempotence, et le second était rejoué depuis le premier
+    /// résultat au lieu de s'exécuter (#266). Sans identifiant de réponse, seul l'indice
+    /// reste ; la boucle renumérote alors un identifiant que la session a déjà vu.
+    fn synthetic_id(&self, index: usize) -> String {
+        if self.id.is_empty() {
+            format!("call_{index}")
+        } else {
+            format!("call_{}_{index}", self.id)
+        }
     }
 
     /// Traite une charge utile `data:`. Renvoie les fragments à publier.
@@ -403,7 +418,7 @@ impl StreamAccumulator {
             }
             out.push(StreamChunk::ToolCall(ToolCall {
                 id: if c.id.is_empty() {
-                    format!("call_{i}")
+                    self.synthetic_id(i)
                 } else {
                     c.id
                 },
@@ -472,8 +487,9 @@ pub fn merge_reasoning_details(parts: &[Value]) -> Option<Value> {
 /// Appel d'outil rendu en texte (#259) : le message entier est un objet `{"name": …,
 /// "parameters"|"arguments": …}`, précédé ou non de `<|python_tag|>`, et nomme un outil
 /// déclaré. Toute autre forme reste du texte : une réponse qui cite du JSON n'est pas un
-/// appel.
-pub fn text_tool_call(text: &str, tools: &[String]) -> Option<ToolCall> {
+/// appel. L'appel n'a pas d'identifiant du serveur : il reçoit `id`, que l'appelant
+/// dérive de la réponse (#266).
+pub fn text_tool_call(text: &str, tools: &[String], id: String) -> Option<ToolCall> {
     let body = text.trim();
     let body = body.strip_prefix(PYTHON_TAG).unwrap_or(body).trim();
     let v: Value = serde_json::from_str(body).ok()?;
@@ -492,7 +508,7 @@ pub fn text_tool_call(text: &str, tools: &[String]) -> Option<ToolCall> {
         return None;
     }
     Some(ToolCall {
-        id: "call_0".into(),
+        id,
         name: name.to_string(),
         arguments: args,
     })

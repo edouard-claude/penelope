@@ -397,7 +397,7 @@ fn debug_and_usage_frames_with_empty_choices_are_harmless() {
 #[test]
 fn only_an_exact_text_call_to_a_declared_tool_is_read() {
     let tools = vec!["addition".to_string()];
-    let call = |t: &str| text_tool_call(t, &tools);
+    let call = |t: &str| text_tool_call(t, &tools, "call_x".into());
     let c = call(r#" <|python_tag|> {"name": "addition", "arguments": "{\"a\": 1}"} "#).unwrap();
     assert_eq!(
         (c.name.as_str(), c.arguments.clone()),
