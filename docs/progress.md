@@ -35,7 +35,10 @@ l'inverse de leur création voyaient leurs effets relevés dans l'ordre des iden
   `settle()` et `play` du harnais ne concluent plus tant qu'un clic court, avec un plafond
   de cinq secondes et une erreur qui le dit. Les effets sont triés par création de leur
   session (`sessions.created_at, rowid`), puis par appel comme avant.
-- Attendus régénérés : seuls des numéros `{{effect:N}}` bougent, vérifié ligne à ligne.
+- Attendus régénérés (`UPDATE_SCENARIOS=1`) : aucun fichier ne change. Sur l'horloge de
+  test figée, `created_at` est le même pour toutes les sessions d'un rejeu et `rowid` suit
+  leur création, qui est aussi l'ordre des ULID hors collision : le tri ne bouge que le cas
+  qui faisait diverger deux rejeux.
 - Tests : le clic lent et l'ordre des effets dans `penelope-evals` ; le compteur d'un clic
   réel et la garde sous panique dans la passerelle ;
   `two_replays_of_every_scenario_are_identical` cinq fois de suite avec la suite complète
