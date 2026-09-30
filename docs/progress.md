@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.28
+### 1.0.26
 
 **Détecteur d'injection : `hidden_unicode` prenait l'emoji 🏃‍♀️ pour des caractères cachés
 (#271).** Chaque message WhatsApp lu par MCP dont le nom de conversation contient un emoji
