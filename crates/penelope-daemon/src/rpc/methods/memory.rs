@@ -90,6 +90,14 @@ impl Rpc {
             method::MEM_RETRY_REJECTED => Ok(json!({
                 "retried": s.candidates.retry_origin_rejections().await?,
             })),
+            method::MEM_RECLAIM => {
+                let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+                let source = p.get("source").and_then(|v| v.as_str());
+                let report = penelope_vault::reclaim::run(s, dry_run, source).await?;
+                let mut v = serde_json::to_value(&report)?;
+                v["text"] = json!(report.render());
+                Ok(v)
+            }
             method::MEM_AUDIT => {
                 let audit = penelope_vault::mem_audit::run(
                     &self.daemon.services,

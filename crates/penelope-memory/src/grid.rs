@@ -28,6 +28,8 @@ pub const JOURNAL_DAYS: i64 = 14;
 pub const JOURNAL_MAX_DAYS: i64 = 90;
 /// Une entrée durable jamais rappelée pendant ce délai est proposée au retrait.
 pub const UNUSED_DAYS: i64 = 60;
+/// Motif du rejet d'un candidat non endossé : `penelope mem reclaim` relit ces rejets.
+pub const NOT_ENDORSED: &str = "ni dit ni confirmé par le propriétaire, ni constaté par un outil";
 
 /// Verdict du modèle sur un candidat, critère par critère.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,9 +89,7 @@ impl Verdict {
             return Placement::Ignored("imprécis : sujet ou phrase incomplets".into());
         }
         if !self.endosse {
-            return Placement::Ignored(
-                "ni dit ni confirmé par le propriétaire, ni constaté par un outil".into(),
-            );
+            return Placement::Ignored(NOT_ENDORSED.into());
         }
         if !self.utile {
             return Placement::Ignored("ne change rien à ce que Pénélope fera".into());

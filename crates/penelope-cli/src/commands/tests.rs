@@ -112,6 +112,16 @@ fn commands_route_to_rpc_methods() {
         (vec!["mem", "search", "x"], m::MEM_SEARCH),
         (vec!["mem", "audit"], m::MEM_AUDIT),
         (vec!["mem", "retry-rejected"], m::MEM_RETRY_REJECTED),
+        (
+            vec![
+                "mem",
+                "reclaim",
+                "--source",
+                "sources/export.md",
+                "--dry-run",
+            ],
+            m::MEM_RECLAIM,
+        ),
         (vec!["mem", "diff", "--since", "dream"], m::MEM_DIFF),
         (vec!["mem", "dream", "--dry-run"], m::MEM_DREAM),
         (vec!["mem", "restore", "12"], m::MEM_RESTORE),

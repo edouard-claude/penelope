@@ -283,6 +283,10 @@ fn mem_route(cmd: &MemCmd) -> (&'static str, Value) {
         MemCmd::Split { uid } => (m::MEM_SPLIT, json!({"uid": uid})),
         MemCmd::Audit => (m::MEM_AUDIT, json!({})),
         MemCmd::RetryRejected => (m::MEM_RETRY_REJECTED, json!({})),
+        MemCmd::Reclaim { source, dry_run } => (
+            m::MEM_RECLAIM,
+            json!({"source": source, "dry_run": dry_run}),
+        ),
         MemCmd::Diff { since } => (m::MEM_DIFF, json!({"since": since})),
         MemCmd::Dream { dry_run } => (m::MEM_DREAM, json!({"dry_run": dry_run})),
         MemCmd::Learned { days } => (m::MEM_LEARNED, json!({"days": days})),

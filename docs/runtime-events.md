@@ -131,6 +131,7 @@ sont pas attachés à une session) et la livraison d'un plan (attachés à la se
 | `memory.contested` | la consolidation soumet au propriétaire une entrée assez jugée dont la confiance est passée sous `contested_confidence` | `uid`, `approval` (la carte), `successes`, `contradictions` |
 | `memory.contested_kept` | la carte a répondu « Rien » : l'entrée reste et ses signaux repartent de zéro | `uid`, `approval` |
 | `memory.contested_retired` | la carte a répondu « Tout » : l'entrée est retirée | `approval`, `uid`, `retired` |
+| `memory.reclaimed` | `penelope mem reclaim` a fini un passage réel (#285) ; jamais en `--dry-run`, ni quand chaque passage demandé avait déjà été fait | `dry_run`, `rejected` (`examined`, `requeued`, `kept`, `unreadable`, `already`), `source` (`file`, `facts`, `recorded`, `skipped`, `already` ; `null` sans `--source`) |
 | `workflow.delivery` | une étape `delivery` d'un plan livré s'est terminée (PR, CI, E2E, bilan ou PR prod) | `run`, `stage`, `result`, `content` |
 | `trace.narrated` | le modèle du rôle `trace` a été appelé pour la phrase de la bulle de trace des outils (`telegram.tool_trace = "narre"`, #273), réussi ou replié ; écrit par la passerelle, attaché à la session | `turn_id`, `alias`, `model`, `budget_ms` (500), `duration_ms`, `fallback` ; réussi : `prompt_tokens`, `completion_tokens`, `cost_usd` (0 en local), `kept` (la phrase précédente rendue à l'identique) ; replié : `reason` (`indisponible`, `erreur`, `delai`, `phrase_invalide`) et `detail` caviardé |
 

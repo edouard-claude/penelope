@@ -12,6 +12,57 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.32
+
+**Mémoire : `penelope mem reclaim` rattrape les rejets « ni dit ni confirmé » que le
+propriétaire avait dits, et propose au tri les faits d'une fiche qui est sa parole (#285).**
+Constat de l'audit en lecture seule d'une instance, le 30/09 : 118 candidats rejetés « ni
+dit ni confirmé par le propriétaire, ni constaté par un outil », dont des faits dictés à
+l'oral puis reformulés par la relecture (le cas corrigé pour l'avenir par #245, mais un
+rejet est définitif, et `retry-rejected` ne vise que les motifs hérités de #24) ; et
+l'export de la mémoire d'un autre assistant, ingéré en fiche `sources/`, dont le rêve du
+22/09 a jugé les faits « retrouvable ailleurs » : rien n'est passé au profil.
+
+- Cause : la relecture d'un épisode ne porte pas la phrase du propriétaire, celle d'un tour
+  ne la portait pas avant #245 ; le verdict `endosse ✗` s'écrit en base et n'est jamais
+  relu. Les faits de l'export ont été soumis comme candidats de l'agent, la fiche elle-même
+  les rendant « retrouvables ailleurs » ; personne n'a dit au tri que cette fiche est la
+  parole du propriétaire.
+- Correctif (`penelope_vault::reclaim`, RPC `mem.reclaim`) : sans `--source`, chaque
+  candidat rejeté à ce motif sans `owner_quote` est relu avec les messages du propriétaire
+  de son tour (`messages.source_turn_id`, sinon le dernier message avant `observed_at` et la
+  fenêtre de son tour) ou de son épisode, déclencheurs, relances et contenus transférés
+  exclus ; si `owner_quote::owner_statement` retrouve la phrase, il repasse en `new`,
+  origine `owner`, phrase posée, `deferrals` à zéro (`CandidateStore::rejected_for`,
+  `requeue_as_owner`). Avec `--source <fiche>` (chemin relatif au vault, sans `..`), la
+  fiche est découpée de façon déterministe (puces, lignes numérotées, préfixe daté retiré ;
+  sans puce, paragraphes scindés en phrases au-delà de 300 caractères), chaque fait passant
+  le rangement des secrets et le filtre d'écriture avant de devenir un candidat `fait`,
+  `owner`, phrase = le fait, `source_ref = source:<fiche>`. Une clé `kv` par passage
+  (`mem.reclaim.rejected`, `mem.reclaim.source:<fiche>`) : relancée, la commande dit ce qui
+  a déjà été fait et n'écrit rien ; `--dry-run` liste sans rien écrire (les secrets montrés
+  avec la référence qu'ils auraient, `secret_shelf::masked`). Événement `memory.reclaimed`
+  sur un passage réel. Rien n'entre dans le profil : le tri nocturne garde ses portes.
+- Au passage : `owner_quote::sentences` retire la mention que la passerelle met en tête
+  d'un vocal transcrit (« (message vocal transcrit ; réponds en vocal…) ») ; ses mots
+  diluaient la première phrase dictée sous le seuil des 75 %, en direct comme au rattrapage.
+- Tests : `rejected_owner_words_are_requeued_once_and_only_with_their_sentence` (tour par
+  l'heure, tour par identifiant, épisode ; déduction, autre épisode, contenu transféré,
+  purgé et autre motif inchangés ; à blanc rien n'est écrit ; relancée rien ne double, un
+  seul événement), `a_source_that_is_the_owners_word_is_proposed_to_the_sort_once` (chemins
+  refusés, secret rangé au réel et masqué à blanc, consigne injectée refusée, profil
+  intact), `facts_are_cut_from_bullets_or_paragraphs`, `a_turn_window_stops_at_final_answers`,
+  `a_requeued_rejection_becomes_the_owners_word`, `texts_from_a_source_are_listed_whatever_their_state`,
+  `a_transcribed_voice_message_starts_after_its_preamble` (rouge avant) ; routage CLI ;
+  golden `mem.reclaim.json` ; étape `mem.reclaim` du scénario `rpc-memoire`.
+- Ce qui tenait tient : `retry-rejected` (#24), la phrase au tour (#245), la grille, la
+  purge (`owner_quote` effacé), `mem candidates`, la relecture d'un tour et d'un épisode.
+- Doc : `install-headless.md` (Rattrapage), `README.md`, `runtime-events.md`. L'instance
+  réelle n'est pas touchée par ce lot : `--dry-run` d'abord, puis le passage avec l'accord
+  du propriétaire.
+
+Closes #285.
+
 ### 1.0.31
 
 **Relecture : les plus importants survivent à la coupe, et le modèle connaît la limite

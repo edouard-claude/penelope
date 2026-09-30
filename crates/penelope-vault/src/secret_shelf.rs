@@ -81,10 +81,8 @@ pub fn shelve(s: &Services, text: &str) -> Result<(String, Vec<String>), String>
     if spans.is_empty() {
         return Ok((text.to_string(), Vec::new()));
     }
-    let mut out = String::with_capacity(text.len());
     let mut names = Vec::new();
-    let mut last = 0;
-    for span in spans {
+    for span in &spans {
         let name = secret_name(span.kind, text, span.start, span.end);
         penelope_platform::validate_secret_name(&name).map_err(|e| e.to_string())?;
         let value = &text[span.start..span.end];
@@ -93,13 +91,37 @@ pub fn shelve(s: &Services, text: &str) -> Result<(String, Vec<String>), String>
             .set(&name, value)
             .map_err(|e| format!("secret `{name}` non rangé : {e}"))?;
         penelope_observe::register_secret(value);
+        names.push(name);
+    }
+    Ok((with_references(text, &spans, &names), names))
+}
+
+/// Le texte tel que [`shelve`] le rendrait, sans rien ranger : ce qu'une passe à blanc
+/// montre (`penelope mem reclaim --dry-run`, #285). Les noms sont les mêmes, stables.
+pub fn masked(text: &str) -> String {
+    let spans = penelope_observe::redact::secret_spans(text);
+    let names: Vec<String> = spans
+        .iter()
+        .map(|span| secret_name(span.kind, text, span.start, span.end))
+        .collect();
+    with_references(text, &spans, &names)
+}
+
+/// Le texte avec chaque secret remplacé par la référence à son nom.
+fn with_references(
+    text: &str,
+    spans: &[penelope_observe::redact::SecretSpan],
+    names: &[String],
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (span, name) in spans.iter().zip(names) {
         out.push_str(&text[last..span.start]);
         out.push_str(&format!("${{SECRET:{name}}}"));
-        names.push(name);
         last = span.end;
     }
     out.push_str(&text[last..]);
-    Ok((out, names))
+    out
 }
 
 /// Noms des secrets référencés dans un texte.

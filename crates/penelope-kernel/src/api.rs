@@ -219,6 +219,10 @@ pub mod method {
     pub const MEM_AUDIT: &str = "mem.audit";
     /// Règles rejetées pour leur seule origine, remises à consolider (issue #24).
     pub const MEM_RETRY_REJECTED: &str = "mem.retry_rejected";
+    /// Rattrapage (issue #285) : rejets « ni dit ni confirmé » dont la phrase du
+    /// propriétaire se retrouve, et faits d'une fiche source qui est sa parole, repassés
+    /// au tri.
+    pub const MEM_RECLAIM: &str = "mem.reclaim";
     pub const MEM_DIFF: &str = "mem.diff";
     pub const INTENT_LIST: &str = "intent.list";
     pub const INTENT_CANCEL: &str = "intent.cancel";
@@ -341,6 +345,7 @@ pub mod method {
         MEM_SIGNALS,
         MEM_AUDIT,
         MEM_RETRY_REJECTED,
+        MEM_RECLAIM,
         MEM_DIFF,
         INTENT_LIST,
         INTENT_CANCEL,

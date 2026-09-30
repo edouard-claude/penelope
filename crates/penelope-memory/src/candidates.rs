@@ -362,15 +362,12 @@ impl CandidateStore {
         let since = since.map(String::from);
         self.store
             .read(move |c| {
-                let mut st = c.prepare(
-                    "SELECT id, ctype, text, quand, importance, origin, session_id, session_kind,
-                            observed_at, day, subject_key, target_slug, state, reject_reason,
-                            source_ref, from_memory, owner_quote
-                     FROM mem_candidates
+                let mut st = c.prepare(&format!(
+                    "SELECT {COLUMNS} FROM mem_candidates
                      WHERE state IN ('new','grouped','deferred')
                        AND (?1 IS NULL OR observed_at >= ?1)
-                     ORDER BY observed_at",
-                )?;
+                     ORDER BY observed_at"
+                ))?;
                 let rows = st.query_map([since], row_to_candidate)?;
                 let mut v = Vec::new();
                 for r in rows {
@@ -387,14 +384,11 @@ impl CandidateStore {
     pub async fn in_question(&self) -> penelope_store::Result<Vec<Candidate>> {
         self.store
             .read(move |c| {
-                let mut st = c.prepare(
-                    "SELECT id, ctype, text, quand, importance, origin, session_id, session_kind,
-                            observed_at, day, subject_key, target_slug, state, reject_reason,
-                            source_ref, from_memory, owner_quote
-                     FROM mem_candidates
+                let mut st = c.prepare(&format!(
+                    "SELECT {COLUMNS} FROM mem_candidates
                      WHERE state = 'question'
-                     ORDER BY observed_at",
-                )?;
+                     ORDER BY observed_at"
+                ))?;
                 let rows = st.query_map([], row_to_candidate)?;
                 let mut v = Vec::new();
                 for r in rows {
@@ -419,6 +413,68 @@ impl CandidateStore {
                     )?;
                 }
                 Ok(n)
+            })
+            .await
+    }
+
+    /// Candidats rejetés pour `reason` sans phrase du propriétaire : ceux que le
+    /// rattrapage relit (issue #285), du plus ancien au plus récent.
+    pub async fn rejected_for(&self, reason: &str) -> penelope_store::Result<Vec<Candidate>> {
+        let reason = reason.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "SELECT {COLUMNS} FROM mem_candidates
+                     WHERE state = 'rejected' AND reject_reason = ?1 AND owner_quote IS NULL
+                     ORDER BY observed_at, id"
+                ))?;
+                let rows = st.query_map([reason], row_to_candidate)?;
+                let mut v = Vec::new();
+                for r in rows {
+                    v.push(r?);
+                }
+                Ok(v)
+            })
+            .await
+    }
+
+    /// Repasse au tri des candidats comme dits par le propriétaire, sa phrase à l'appui
+    /// (issue #285) : origine `owner`, `new`, sans raison de rejet ni report compté.
+    pub async fn requeue_as_owner(
+        &self,
+        quoted: &[(String, String)],
+    ) -> penelope_store::Result<usize> {
+        let quoted = quoted.to_vec();
+        self.store
+            .write(move |tx| {
+                let mut n = 0;
+                for (id, quote) in &quoted {
+                    n += tx.execute(
+                        "UPDATE mem_candidates
+                         SET origin = 'owner', state = 'new', reject_reason = NULL,
+                             owner_quote = ?2, deferrals = 0
+                         WHERE id = ?1",
+                        params![id, quote],
+                    )?;
+                }
+                Ok(n)
+            })
+            .await
+    }
+
+    /// Textes déjà notés depuis une référence de source, quel que soit leur état : ce
+    /// qu'un second passage de rattrapage ne redouble pas (issue #285).
+    pub async fn texts_from(&self, source_ref: &str) -> penelope_store::Result<BTreeSet<String>> {
+        let source_ref = source_ref.to_string();
+        self.store
+            .read(move |c| {
+                let mut st = c.prepare("SELECT text FROM mem_candidates WHERE source_ref = ?1")?;
+                let rows = st.query_map([source_ref], |r| r.get::<_, String>(0))?;
+                let mut v = BTreeSet::new();
+                for r in rows {
+                    v.insert(r?);
+                }
+                Ok(v)
             })
             .await
     }
@@ -525,6 +581,11 @@ impl CandidateStore {
     }
 }
 
+/// Colonnes lues par [`row_to_candidate`], dans son ordre.
+const COLUMNS: &str = "id, ctype, text, quand, importance, origin, session_id, session_kind, \
+                       observed_at, day, subject_key, target_slug, state, reject_reason, \
+                       source_ref, from_memory, owner_quote";
+
 fn row_to_candidate(
     r: &penelope_store::rusqlite::Row<'_>,
 ) -> penelope_store::rusqlite::Result<Candidate> {
@@ -589,253 +650,4 @@ pub fn stated_as_a_rule(text: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-
-    /// #59 : un candidat reporté trois nuits de suite est rejeté avec sa raison, sinon la
-    /// file ne décroît jamais.
-    #[tokio::test]
-    async fn three_deferrals_reject_the_candidate() {
-        let cs = cs();
-        let c = Candidate::new(
-            CandidateType::Fait,
-            "Le bureau ferme à 18 h",
-            Origin::Owner,
-            "interactive",
-            "2026-09-17T10:00:00Z",
-        );
-        cs.record(vec![c], 5).await.unwrap();
-        let id = cs.pending(None).await.unwrap()[0].id.clone();
-
-        for _ in 0..2 {
-            cs.set_state(
-                std::slice::from_ref(&id),
-                "deferred",
-                Some("sans verdict de la grille"),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                cs.pending(None).await.unwrap().len(),
-                1,
-                "encore en attente"
-            );
-        }
-        cs.set_state(
-            std::slice::from_ref(&id),
-            "deferred",
-            Some("sans verdict de la grille"),
-        )
-        .await
-        .unwrap();
-        assert!(
-            cs.pending(None).await.unwrap().is_empty(),
-            "le troisième report le rejette"
-        );
-    }
-    use super::*;
-    use penelope_kernel::clock::TestClock;
-    use std::sync::Arc;
-
-    fn cs() -> CandidateStore {
-        CandidateStore::new(
-            Store::open_memory().unwrap(),
-            Arc::new(TestClock::default()),
-        )
-    }
-
-    fn cand(text: &str, day: &str, session: &str) -> Candidate {
-        let mut c = Candidate::new(
-            CandidateType::Ecart,
-            text,
-            Origin::Owner,
-            "interactive",
-            &format!("{day}T10:00:00Z"),
-        )
-        .in_session(session)
-        .with_subject("langage-backend");
-        c.quand = When::parse("client=client-x").ok();
-        c
-    }
-
-    #[test]
-    fn jaccard_similarity() {
-        assert!(
-            jaccard(
-                "le déploiement passe par caprover",
-                "le déploiement passe par caprover"
-            ) > 0.99
-        );
-        assert!(
-            jaccard(
-                "le déploiement passe par CapRover",
-                "Le déploiement passe par caprover !"
-            ) > 0.99
-        );
-        assert!(jaccard("le déploiement", "la revue de code") < 0.3);
-    }
-
-    #[test]
-    fn subject_keys_ignore_stop_words() {
-        let a = subject_from_text("Toujours utiliser Go pour le backend");
-        let b = subject_from_text("utiliser Go pour le backend, toujours");
-        assert_eq!(a, b, "l'ordre et les mots vides ne comptent pas");
-        assert!(a.contains("backend"));
-    }
-
-    #[test]
-    fn grouping_counts_sessions_and_days() {
-        let candidates = vec![
-            cand("langage imposé par l'existant", "2026-09-10", "s1"),
-            cand("langage imposé par l'existant", "2026-09-11", "s2"),
-            cand("langage imposé par l'existant", "2026-09-12", "s3"),
-        ];
-        let groups = group(candidates, 0.9);
-        assert_eq!(groups.len(), 1);
-        let g = &groups[0];
-        assert_eq!(g.occurrences, 3);
-        assert_eq!(g.distinct_sessions, 3);
-        assert_eq!(g.distinct_days, 3);
-        assert!(g.has_owner_origin());
-        assert_eq!(g.common_when().unwrap().render(), "client=client-x");
-    }
-
-    #[test]
-    fn duplicates_in_the_same_session_and_day_collapse() {
-        let candidates = vec![
-            cand("langage imposé par l'existant", "2026-09-10", "s1"),
-            cand("langage imposé par l'existant !", "2026-09-10", "s1"),
-        ];
-        let groups = group(candidates, 0.9);
-        assert_eq!(
-            groups[0].occurrences, 1,
-            "même session, même jour : une occurrence"
-        );
-    }
-
-    #[test]
-    fn different_context_signatures_are_different_groups() {
-        let mut a = cand("langage imposé", "2026-09-10", "s1");
-        a.quand = When::parse("client=client-x").ok();
-        let mut b = cand("langage imposé", "2026-09-10", "s2");
-        b.quand = When::parse("client=client-y").ok();
-        assert_eq!(group(vec![a, b], 0.9).len(), 2);
-    }
-
-    #[tokio::test]
-    async fn at_most_five_candidates_per_turn() {
-        let s = cs();
-        let candidates: Vec<Candidate> = (0..12)
-            .map(|i| {
-                Candidate::new(
-                    CandidateType::Fait,
-                    &format!("fait numéro {i}"),
-                    Origin::Owner,
-                    "interactive",
-                    "2026-09-16T10:00:00Z",
-                )
-                .with_importance(i as u8)
-            })
-            .collect();
-        let n = s.record(candidates, 5).await.unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(s.count_by_state("new").await.unwrap(), 5);
-        // Les plus importants sont gardés.
-        let pending = s.pending(None).await.unwrap();
-        assert!(pending.iter().all(|c| c.importance >= 7));
-    }
-
-    #[tokio::test]
-    async fn memory_echoes_are_never_recorded() {
-        let s = cs();
-        let mut c = Candidate::new(
-            CandidateType::Fait,
-            "un fait rappelé depuis la mémoire",
-            Origin::Owner,
-            "interactive",
-            "2026-09-16T10:00:00Z",
-        );
-        c.from_memory = true;
-        assert_eq!(s.record(vec![c], 5).await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn background_sessions_record_nothing() {
-        let s = cs();
-        let c = Candidate::new(
-            CandidateType::Fait,
-            "un fait vu par un cron",
-            Origin::Agent,
-            "scheduled",
-            "2026-09-16T10:00:00Z",
-        );
-        assert_eq!(s.record(vec![c], 5).await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn state_transitions_and_expiry() {
-        let clock = TestClock::default();
-        let s = CandidateStore::new(Store::open_memory().unwrap(), Arc::new(clock.clone()));
-        let c = cand("un écart", "2026-01-01", "s1");
-        let id = c.id.clone();
-        s.record(vec![c], 5).await.unwrap();
-
-        s.set_state(std::slice::from_ref(&id), "grouped", None)
-            .await
-            .unwrap();
-        assert_eq!(s.count_by_state("grouped").await.unwrap(), 1);
-
-        // 100 jours plus tard, un écart non promu expire.
-        clock.advance_days(100);
-        assert_eq!(s.expire_stale(90).await.unwrap(), 1);
-        assert_eq!(s.count_by_state("expired").await.unwrap(), 1);
-    }
-
-    #[test]
-    fn correction_detection() {
-        assert!(looks_like_correction("non, ici on fait autrement"));
-        assert!(looks_like_correction("Plutôt en Rust pour ce projet"));
-        assert!(!looks_like_correction("ajoute un test d'intégration"));
-    }
-
-    #[test]
-    fn rule_phrasing_detection() {
-        assert!(stated_as_a_rule("Toujours répondre en français"));
-        assert!(stated_as_a_rule("désormais on passe par CapRover"));
-        assert!(!stated_as_a_rule("cette fois-ci on fait autrement"));
-    }
-
-    /// Un candidat d'origine externe rejeté, puis confirmé par le propriétaire, repart
-    /// en consolidation sous l'origine `owner`, sans sa raison de rejet.
-    #[tokio::test]
-    async fn an_owner_confirmation_requeues_the_candidate_as_owned() {
-        let cs = cs();
-        let c = Candidate::new(
-            CandidateType::Fait,
-            "Le fournisseur livre le mardi",
-            Origin::Untrusted,
-            "interactive",
-            "2026-09-17T10:00:00Z",
-        );
-        cs.record(vec![c], 5).await.unwrap();
-        let id = cs.pending(None).await.unwrap()[0].id.clone();
-        cs.set_state(
-            std::slice::from_ref(&id),
-            "rejected",
-            Some("origine externe"),
-        )
-        .await
-        .unwrap();
-        assert!(cs.pending(None).await.unwrap().is_empty());
-
-        let n = cs
-            .confirm_by_owner(&[id.clone(), "absent".into()])
-            .await
-            .unwrap();
-        assert_eq!(n, 1, "seul le candidat existant est confirmé");
-        let back = cs.pending(None).await.unwrap();
-        assert_eq!(back.len(), 1);
-        assert_eq!(back[0].id, id);
-        assert_eq!(back[0].origin, Origin::Owner);
-        assert_eq!(back[0].state, "new");
-    }
-}
+mod tests;

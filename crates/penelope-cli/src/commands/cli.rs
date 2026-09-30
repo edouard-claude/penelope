@@ -628,6 +628,16 @@ pub enum MemCmd {
     /// demandées au propriétaire.
     #[command(name = "retry-rejected")]
     RetryRejected,
+    /// Rattrapage : repasse au tri les candidats rejetés « ni dit ni confirmé » dont ta
+    /// phrase se retrouve dans les messages de leur tour ou de leur épisode ; avec
+    /// `--source`, propose au tri les faits d'une fiche qui est ta parole (chemin relatif
+    /// au vault). Une fois par passage ; `--dry-run` liste sans rien écrire.
+    Reclaim {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Changements du vault non commités, ou depuis le dernier rêve (`--since dream`).
     Diff {
         #[arg(long, value_parser = ["dream"])]
