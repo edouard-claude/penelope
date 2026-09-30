@@ -1,0 +1,21 @@
+{
+  "method": "mem.reclaim",
+  "params": {
+    "dry_run": true
+  },
+  "response": {
+    "result": {
+      "dry_run": "bool",
+      "rejected": {
+        "examined": "integer",
+        "requeued": "integer",
+        "kept": "integer",
+        "unreadable": "integer",
+        "already": "null",
+        "items": []
+      },
+      "source": "null",
+      "text": "string"
+    }
+  }
+}

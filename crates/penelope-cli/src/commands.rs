@@ -136,6 +136,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Session(SessionCmd::Compact { .. })
         | Command::Mem(MemCmd::Dream { .. })
         | Command::Mem(MemCmd::Diff { .. })
+        | Command::Mem(MemCmd::Reclaim { .. })
         | Command::Vault(VaultCmd::Lint)
         | Command::Import(_)
             if !cli.json =>

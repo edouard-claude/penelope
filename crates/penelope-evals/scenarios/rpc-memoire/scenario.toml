@@ -92,6 +92,13 @@ method = "mem.candidates"
 kind = "rpc"
 method = "mem.retry_rejected"
 
+# Le rattrapage à blanc (#285) : aucun rejet à relire, pas de fiche désignée.
+[[steps]]
+kind = "rpc"
+method = "mem.reclaim"
+params = { dry_run = true }
+pick = ["/dry_run", "/rejected/examined", "/rejected/requeued", "/source"]
+
 [[steps]]
 kind = "rpc"
 method = "mem.learned"

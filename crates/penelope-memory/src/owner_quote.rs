@@ -180,11 +180,18 @@ fn content(text: &str) -> (BTreeSet<String>, bool) {
 }
 
 /// Phrases d'un message : fins de phrase, points-virgules, deux-points et retours à la
-/// ligne. Le préambule `<contexte>` du tour n'en est pas une.
+/// ligne. Le préambule `<contexte>` du tour n'en est pas une, ni la mention que la
+/// passerelle met en tête d'un vocal transcrit (« (message vocal transcrit ; réponds en
+/// vocal…) », issue #285) : ses mots diluaient la première phrase dictée.
 fn sentences(message: &str) -> impl Iterator<Item = &str> {
     let body = match message.find("</contexte>") {
         Some(i) => &message[i + "</contexte>".len()..],
         None => message,
+    };
+    let body = body.trim_start();
+    let body = match body.strip_prefix("(message vocal transcrit") {
+        Some(rest) => rest.find(')').map_or(rest, |i| &rest[i + 1..]),
+        None => body,
     };
     body.split(['.', '!', '?', ';', ':', '\n'])
         .map(str::trim)
@@ -247,6 +254,24 @@ mod tests {
             owner_statement("Le propriétaire veut ses devis en PDF, jamais en Word.", m).as_deref(),
             Some("retiens que je veux mes devis en PDF, jamais en Word")
         );
+    }
+
+    /// Un vocal transcrit (issue #285) : la mention de la passerelle n'est pas une phrase
+    /// du propriétaire, avec ou sans la consigne de répondre en vocal.
+    #[test]
+    fn a_transcribed_voice_message_starts_after_its_preamble() {
+        let said = "La fille a piano le samedi de 8h à 9h.";
+        for m in [
+            "(message vocal transcrit ; réponds en vocal avec `send_voice` si la réponse s'y \
+             prête) Retiens que ma fille a piano le samedi de 8h à 9h.",
+            "(message vocal transcrit) Retiens que ma fille a piano le samedi de 8h à 9h.",
+        ] {
+            assert_eq!(
+                owner_statement(said, m).as_deref(),
+                Some("Retiens que ma fille a piano le samedi de 8h à 9h"),
+                "{m}"
+            );
+        }
     }
 
     /// Ce qui doit rester à l'agent : une déduction, une phrase niée ou retournée, un

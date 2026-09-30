@@ -439,6 +439,7 @@ fn params_of(m: &str) -> Value {
         method::MEM_SPLIT => json!({"uid": "u_split"}),
         method::MEM_RESTORE => json!({"id": 1}),
         method::MEM_DREAM => json!({"dry_run": true}),
+        method::MEM_RECLAIM => json!({"dry_run": true}),
         method::MEM_LEARNED => json!({"days": 7}),
         method::MEM_REINDEX => json!({}),
         method::MEM_DIFF => json!({}),

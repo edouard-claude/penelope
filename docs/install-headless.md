@@ -2291,6 +2291,31 @@ seule origine se remettent en file :
 penelope mem retry-rejected
 ```
 
+**Rattrapage.** Un rejet est définitif : le tri ne revoit jamais un candidat écarté. Deux
+pertes relevées sur une instance le 30/09/2026 (#285) demandaient un passage unique : des
+faits dictés à l'oral puis reformulés par la relecture, rejetés « ni dit ni confirmé par le
+propriétaire » avant la 1.0.11 ; et une fiche `sources/` qui est ta parole (l'export de ta
+mémoire d'un autre assistant) dont les faits n'avaient jamais été proposés au tri comme
+venant de toi.
+
+```bash
+penelope mem reclaim --dry-run
+penelope mem reclaim
+penelope mem reclaim --source sources/export-memoire-claude.md --dry-run
+```
+
+Sans `--source`, chaque candidat rejeté à ce motif est relu : les messages que tu as écrits
+dans son tour (ou dans son épisode) sont repris, et si l'un d'eux porte sa phrase (le même
+recouvrement que ci-dessus), il repasse en file d'origine `owner` avec cette phrase ; les
+autres restent rejetés. Avec `--source`, la fiche désignée (chemin relatif au vault) est
+découpée en faits, une puce ou une ligne numérotée par fait (le préfixe daté d'un export,
+`[2024-03-01] - `, est retiré ; sans puce, un paragraphe par fait), chacun proposé au tri
+comme un candidat `fait` venant de toi, phrase à l'appui, avec la provenance
+`source:<fiche>`. Rien n'est écrit dans le profil : le tri de la nuit suivante décide, avec
+ses portes (grille, contradictions, cartes). `--dry-run` liste ce qui serait fait sans rien
+écrire. Chaque passage se fait une fois (une clé par passage) : relancée, la commande le dit
+et ne double rien ; un passage réel écrit l'événement `memory.reclaimed` avec ses comptes.
+
 **Qualité de ce qui est retenu.** Une entrée est un fait complet : un texte tronqué
 (« … »), une phrase incomplète ou un pronom sans sujet est rejeté ; au-delà de 300
 caractères, l'entrée est scindée en phrases, et une phrase inexploitable est écartée. Un

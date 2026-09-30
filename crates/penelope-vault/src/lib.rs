@@ -14,6 +14,7 @@ pub mod embeddings;
 pub mod episodes;
 pub mod mem_audit;
 pub mod mem_split;
+pub mod reclaim;
 pub mod review;
 pub mod secret_shelf;
 pub mod session_notes;
