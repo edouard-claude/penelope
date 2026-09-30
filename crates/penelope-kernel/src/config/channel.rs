@@ -83,7 +83,7 @@ pub struct Telegram {
     /// `compact` (l'outil et son argument principal, sans argument dans un groupe),
     /// `full` (plus un extrait du résultat, en privé seulement), `resume` (une ligne par
     /// familles et verbes, « 📄 6 lectures, 7 recherches · 💻 `cargo test` en cours »,
-    /// sans modèle), `narre` (une phrase de 5 à 10 mots et un emoji, écrite par le modèle
+    /// sans modèle), `narre` (une phrase de 4 à 8 mots et un emoji, écrite par le modèle
     /// du rôle `trace`, par défaut un alias `local:` ; sans modèle joignable, `resume`)
     /// (#273). Arguments et extraits sont caviardés.
     pub tool_trace: ToolTrace,

@@ -13,8 +13,10 @@
 //!   démarrage suivant, elle est close (« interrompu par un redémarrage »).
 //! - **Narration** (`narre`, #273) : la bulle est créée avec la ligne `resume` ; c'est
 //!   dans la tâche de chaque modification, et à la clôture une fois la réponse partie, que
-//!   le modèle du rôle `trace` est appelé, borné, avec la phrase précédente. La boucle et
-//!   la réponse ne l'attendent jamais.
+//!   le modèle du rôle `trace` est appelé, borné. La boucle et la réponse ne l'attendent
+//!   jamais. Il n'est rappelé que si la trace a changé (la ligne `resume` est la clé de
+//!   l'état), et une phrase identique à celle posée ne retouche pas la bulle : c'est
+//!   l'anti-clignotement, sans phrase précédente dans le prompt (#280).
 
 use super::super::*;
 use super::Trace;
@@ -86,7 +88,7 @@ struct Live {
     shown: String,
     /// Le modèle du rôle `trace` (`narre` seulement, résolu au début du tour).
     narrator: Option<Narrator>,
-    /// La dernière phrase rendue, passée au modèle pour qu'il la garde si rien n'a changé.
+    /// La dernière phrase rendue : le journal dit si la suivante la garde (`kept`).
     phrase: Option<String>,
     last: Instant,
     checked: Instant,

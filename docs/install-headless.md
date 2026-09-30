@@ -311,7 +311,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |
 | `telegram.home.chat` | `0` | Identifiant du chat (un groupe : `-100…`). 0 : le chat privé du propriétaire. |
 | `telegram.home.topic` | `0` | Sujet du groupe (`message_thread_id`). 0 : le sujet « Général ». |
-| `telegram.tool_trace` | `"compact"` | Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle), `compact` (l'outil et son argument principal, sans argument dans un groupe), `full` (plus un extrait du résultat, en privé seulement), `resume` (une ligne par familles et verbes, « 📄 6 lectures, 7 recherches · 💻 `cargo test` en cours », sans modèle), `narre` (une phrase de 5 à 10 mots et un emoji, écrite par le modèle du rôle `trace`, par défaut un alias `local:` ; sans modèle joignable, `resume`) (#273). Arguments et extraits sont caviardés. |
+| `telegram.tool_trace` | `"compact"` | Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle), `compact` (l'outil et son argument principal, sans argument dans un groupe), `full` (plus un extrait du résultat, en privé seulement), `resume` (une ligne par familles et verbes, « 📄 6 lectures, 7 recherches · 💻 `cargo test` en cours », sans modèle), `narre` (une phrase de 4 à 8 mots et un emoji, écrite par le modèle du rôle `trace`, par défaut un alias `local:` ; sans modèle joignable, `resume`) (#273). Arguments et extraits sont caviardés. |
 
 **[providers]**
 
@@ -642,8 +642,10 @@ penelope config set models.roles.image_locate pointage
 ```
 
 Le rôle `trace` (1.0.26, #273) écrit la phrase de la trace des outils sur Telegram quand
-`telegram.tool_trace = "narre"` : quelques centaines de jetons par appel, borné à 500 ms,
-donc un tout petit modèle. Il n'a pas d'entrée par défaut dans `models.roles` : sans
+`telegram.tool_trace = "narre"` : quelques centaines de jetons par appel, borné à 1 200 ms
+(#280), donc un tout petit modèle, sans réflexion : `mlx-community/Qwen3-1.7B-4bit` servi
+par `penelope local install … --no-think` (voir [Inférence locale sur
+Mac](#inférence-locale-sur-mac)). Il n'a pas d'entrée par défaut dans `models.roles` : sans
 `models.roles.trace`, l'alias `local`, puis le premier alias `local:` de texte, est pris ;
 sans alias local, la trace reste en `resume` et `penelope doctor` (`telegram.trace`) le dit.
 Un alias distant y est possible, à ses frais, et facturé comme tout appel du rôle. Voir
@@ -887,16 +889,27 @@ support tool calling » dans son journal) et les laisse en texte, `<|python_tag|
 entier est un tel appel vers un outil proposé, mais les arguments arrivent souvent en
 chaînes (`"17"`) et le modèle doit se corriger. Qwen3 réfléchit avant de répondre ;
 `mlx_lm.server` ignore le réglage de raisonnement de Pénélope, il s'éteint au serveur :
-`--chat-template-args '{"enable_thinking":false}'`.
+`--chat-template-args '{"enable_thinking":false}'`, que `penelope local install --no-think`
+pose pour vous (#280).
 
 **Le démarrer et le faire relancer.** `penelope local install` écrit un LaunchAgent
 (`com.penelope.inference.local`, `KeepAlive`) qui lance le serveur sur l'adresse de
 `providers.local.base_url`, à l'ouverture de session, et le relance s'il tombe. Il ajoute
 `--max-tokens 16384` : sans lui, le serveur coupe chaque réponse à 512 jetons, et
-Pénélope n'envoie pas de plafond au tour.
+Pénélope n'envoie pas de plafond au tour. `--no-think` ajoute `--chat-template-args
+'{"enable_thinking": false}'` : la réflexion de Qwen3 s'éteint au serveur, pour tous les
+appels qu'il sert.
 
 ```bash
 penelope local install mlx-community/Qwen3-8B-4bit --server ~/mlx/bin/mlx_lm.server
+```
+
+Pour le rôle `trace` (la phrase de la trace des outils, `telegram.tool_trace = "narre"`),
+le modèle conseillé est `mlx-community/Qwen3-1.7B-4bit` **sans réflexion** : avec elle, le
+modèle écrit d'abord `<think>` et la phrase est rejetée ; l'appel est borné à 1 200 ms.
+
+```bash
+penelope local install mlx-community/Qwen3-1.7B-4bit --no-think --server ~/mlx/bin/mlx_lm.server
 ```
 
 La commande dit ce qui manque encore (endpoint à activer, alias à poser). Ensuite :
@@ -981,8 +994,22 @@ Le serveur garde le préfixe entre les requêtes (cache de prompt de `mlx_lm.ser
 par défaut) : c'est lui qui fait passer le premier jeton de plus de 8 s à moins d'une
 seconde, et qui rend payant le préfixe stable de Pénélope. Le prompt système et les
 outils étant les mêmes d'une session à l'autre, une nouvelle session trouve déjà ses
-4 400 premiers jetons en cache. Un redémarrage du serveur vide ce cache. La suite `live-local` refait ces
-mesures sur la machine qui la lance :
+4 400 premiers jetons en cache. Un redémarrage du serveur vide ce cache.
+
+**Le rôle `trace`, mesuré** le 30/09/2026 sur un MacBook Pro M1 Pro, `mlx_lm.server`, dix
+tours réels de l'historique rejoués (#280) :
+
+| Prompt, modèle | Médiane | Phrases |
+|---|---|---|
+| 1.0.27 (un exemple dans la consigne, sans liste d'emojis, phrase précédente), `Qwen3-1.7B-4bit` | 0,70 s (max 1,11 s) | l'exemple recopié neuf fois sur dix |
+| Idem, `Qwen2.5-1.5B-Instruct-4bit` | 0,49 s (max 0,75 s) | l'exemple, ou le nom de l'outil |
+| Idem, `gemma-3-1b-it-4bit` | 0,82 s (max 1,04 s) | la consigne recopiée |
+| 1.0.29 (liste des emojis, quatre exemples en few-shot, la liste seule, `max_tokens` 30), `Qwen3-1.7B-4bit` sans réflexion | 0,54 s | justes (« 💻 Historique des logs et correction des fichiers ») |
+
+Avec la réflexion allumée, Qwen3 écrit `<think>` avant la phrase et elle est rejetée. D'où
+`--no-think`, le budget porté de 500 à 1 200 ms et le modèle conseillé ci-dessus.
+
+La suite `live-local` refait les mesures d'un tour sur la machine qui la lance :
 
 ```bash
 PENELOPE_LIVE_LOCAL_MODEL=local:mlx-community/Qwen3-1.7B-4bit penelope eval live-local
