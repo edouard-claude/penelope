@@ -505,7 +505,7 @@ pub(super) fn append_dreams(
     report: &DreamReport,
 ) -> anyhow::Result<()> {
     let day = today(s);
-    crate::vault_ops::update_note(vault, "DREAMS.md", None, &day, |raw| {
+    crate::vault_ops::update_note(vault, DREAMS_FILE, None, &day, |raw| {
         let mut body = if raw.trim().is_empty() {
             "# Revue\n".to_string()
         } else {

@@ -22,6 +22,9 @@ use std::sync::OnceLock;
 pub const ATTACHMENTS_DIR: &str = "attachments";
 /// Journal des opérations, en ajout seul.
 pub const LOG_FILE: &str = "log.md";
+/// Compte rendu des rêves (tri, motifs d'écart, questions sans réponse), en ajout seul.
+/// Un journal technique comme `log.md`, pas une connaissance : hors index (issue #282).
+pub const DREAMS_FILE: &str = "DREAMS.md";
 
 /// Dossiers qui n'ont de sens que dans le vault (issue #256).
 pub const VAULT_ONLY_DIRS: [&str; 4] = ["sources", ATTACHMENTS_DIR, "concepts", "entites"];
@@ -53,7 +56,7 @@ pub fn note_type(rel: &str) -> Option<&'static str> {
         (_, "memoire.md") => "memoire",
         (_, "projets.md") => "projets",
         (_, "notes.md") => "notes",
-        (_, "DREAMS.md") => "revue",
+        (_, DREAMS_FILE) => "revue",
         (_, "index.md") => "index",
         (_, LOG_FILE) => "log",
         (_, "concepts/_a-definir.md") => "index",

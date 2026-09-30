@@ -20,6 +20,7 @@ use penelope_memory::consolidation::{
 };
 use penelope_memory::edit;
 use penelope_memory::vault::{Annotations, Practice, VaultEntry, When};
+use penelope_memory::wiki::DREAMS_FILE;
 use penelope_memory::{IndexedEntry, Level, Origin, Provenance};
 use penelope_store::rusqlite::params;
 use serde_json::{Value, json};

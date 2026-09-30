@@ -534,7 +534,7 @@ impl Level {
             Level::Coeur
         } else if p == "AGENTS.md" || p == "SOUL.md" {
             Level::Instruction
-        } else if p == "DREAMS.md" || p.starts_with(".dreams/") {
+        } else if p == crate::wiki::DREAMS_FILE || p.starts_with(".dreams/") {
             Level::Revue
         } else {
             Level::Cure

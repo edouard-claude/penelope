@@ -17,7 +17,7 @@ pub fn file_for(level: Level, day: &str) -> String {
         Level::Projet => "projets.md".into(),
         Level::Episodic => format!("journal/{day}.md"),
         Level::Instruction => "AGENTS.md".into(),
-        Level::Revue => "DREAMS.md".into(),
+        Level::Revue => penelope_memory::wiki::DREAMS_FILE.into(),
         Level::Cure => "notes.md".into(),
     }
 }
@@ -195,8 +195,20 @@ pub async fn forget(s: &Services, vault: &Path, uid: &str) -> Result<bool, Strin
 }
 
 /// Reconstruit l'index depuis le vault. Les uid manquants sont ajoutés aux fichiers ;
-/// la provenance existante est conservée par uid.
+/// la provenance existante est conservée par uid. Un fichier devenu exclu perd ses
+/// entrées : sans cela, `DREAMS.md` indexé par une version antérieure restait dans le
+/// rappel (issue #282).
 pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
+    for rel in s.memory.files().await.map_err(|e| e.to_string())? {
+        if let Some(why) = crate::vault_inventory::excluded(&rel) {
+            let retired = s
+                .memory
+                .retire_file(&rel)
+                .await
+                .map_err(|e| e.to_string())?;
+            tracing::info!(fichier = %rel, motif = why, retirees = retired, "fichier exclu sorti de l'index");
+        }
+    }
     let mut files = Vec::new();
     collect_markdown(vault, vault, &mut files);
     files.sort();

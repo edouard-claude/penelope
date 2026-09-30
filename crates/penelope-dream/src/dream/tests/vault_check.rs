@@ -128,6 +128,7 @@ async fn no_reindex_advice_on_an_excluded_file() {
         "notes/s1.md",
         "attachments/original.md",
         "log.md",
+        "DREAMS.md",
         "memoire.md",
     ] {
         std::fs::write(vault.join(rel), "# Page\n- une ligne sans uid\n").unwrap();

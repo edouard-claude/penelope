@@ -138,7 +138,7 @@ pub async fn failure_reported(
         .await;
     let vault = crate::helpers::vault_dir(s);
     let day = today(s);
-    let written = crate::vault_ops::update_note(&vault, "DREAMS.md", None, &day, |raw| {
+    let written = crate::vault_ops::update_note(&vault, DREAMS_FILE, None, &day, |raw| {
         let mut body = if raw.trim().is_empty() {
             "# Revue\n".to_string()
         } else {
