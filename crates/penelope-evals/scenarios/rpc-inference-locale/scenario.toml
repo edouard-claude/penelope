@@ -12,6 +12,10 @@ relecture donnait à chacun (#266). Le second est un autre appel : il s'exécute
 l'heure avancée, le ledger porte deux effets, le second sous une identité ancrée au message
 qui le porte, et l'écart est journalisé (`tool.call_id_reused`)."""
 pin_model = "main"
+# Le `doctor` du premier pas rafraîchit l'inventaire de la machine, donc la ligne
+# « Machine : » entre dans le prompt système avec l'OS et le profil de bac à sable
+# réels (macOS ici, Linux en CI) : masqués, le reste de la ligne est déterministe.
+masks = ["Machine : [^,]+, bac à sable `[a-z-]+`"]
 
 [config]
 "providers.local.enabled" = true

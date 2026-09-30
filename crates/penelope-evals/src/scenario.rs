@@ -844,9 +844,10 @@ mod tests {
             err.contains("Machine : A") && err.contains("Machine : B"),
             "{err}"
         );
+        let framed = err.split("premier écart en").nth(1).expect("premier écart");
         assert!(
-            !err.contains(&"x".repeat(100)),
-            "le début commun ne doit pas être recopié : {err}"
+            !framed.contains(&"x".repeat(100)),
+            "le début commun ne doit pas être recopié dans l'écart : {framed}"
         );
     }
     use super::*;
