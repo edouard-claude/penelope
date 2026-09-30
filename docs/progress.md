@@ -14,6 +14,49 @@ La charte et les spécifications sont dans `design/v1/`.
 
 ### 1.0.26
 
+**Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit
+modèle local (#273).** Constat du 30/09 : pendant un tour un peu long, la bulle `compact`
+(1.0.14, #222) alignait quinze lignes `📄 fs_read ✅` qui ne disaient pas ce que Pénélope
+faisait. Le propriétaire veut une phrase courte, écrite sur la machine, à partir de la liste
+des outils appelés.
+
+- `telegram.tool_trace = "resume"` : une seule ligne, déterministe, par famille et par
+  verbe dans l'ordre d'apparition (`📄 6 lectures, 7 recherches · 💻 cargo test en
+  cours`, puis `… · ✅`, `❌ 2 échecs`, `🚫 1 refusé`, `⏹ 1 sans réponse`) ; la commande
+  shell citée en privé, comptée en groupe ; aucun appel, aucune latence. C'est aussi le
+  repli de `narre`.
+- `telegram.tool_trace = "narre"` : à chaque modification de la bulle, le modèle du
+  nouveau rôle `trace` (`models.roles.trace`, sinon l'alias `local` puis le premier alias
+  `local:` de texte) reçoit la liste des appels dans l'ordre, arguments déjà caviardés,
+  état et phrase précédente, et rend une phrase de 5 à 10 mots derrière un emoji d'une
+  liste fermée ; hors liste, l'emoji de l'activité ; une phrase identique ne modifie pas la
+  bulle. Appel par le port de modèles (`ProviderSource`), comme le titre ; borné à 500 ms,
+  une tentative ; jamais sur le chemin de la réponse : la bulle est créée avec la ligne
+  `resume`, le modèle parle dans la tâche de chaque modification et à la clôture, une fois
+  la réponse partie ; dépassement ou serveur absent ⇒ `resume` pour cette modification,
+  sans erreur dans la bulle. Événement `trace.narrated` (jetons, durée, repli et raison),
+  usage compté au rôle `trace`, 0 $ en local, mesuré sinon.
+- Frontière canal/cœur (#214) : le rendu reste dans la passerelle ; `doctor` reçoit le
+  contrôle `telegram.trace` par un nouveau défaut du port `ChannelDelivery`
+  (`doctor_checks`), sans qu'une crate agnostique nomme le canal. Sans modèle ou serveur
+  arrêté, le contrôle échoue en nommant le repli.
+- Harnais des scénarios : une ligne de `model.jsonl` peut porter `"role": "trace"` ; elle
+  sert les appels du modèle de ce rôle, dans sa propre file, sans voler une ligne au tour.
+- Tests : rendu `resume` (comptes, commande en cours, échecs, refus, redémarrage), prompt
+  du rôle sans jeton ni `${SECRET:…}` ni résultat, nettoyage de la phrase, résolution du
+  rôle ; dans la passerelle, `resume` sans appel de modèle, `narre` avec phrase rendue,
+  phrase précédente passée et gardée (une seule modification), repli sur erreur du modèle,
+  serveur local arrêté replié sous le budget par le vrai fournisseur, `doctor` ; scénarios
+  `trace-des-outils-resume` et `trace-des-outils-narre` (phrase puis repli au tour suivant,
+  liste masquée dans la surface).
+- Ce qui continue de marcher : `off`, `compact` et `full` sont inchangés (mêmes rendus,
+  mêmes attendus de `trace-des-outils`) ; la bulle précède toujours la réponse ; une bulle
+  ouverte d'avant cette version se relit (`phrase` absente admise).
+- Limite : la phrase ne coiffe pas la liste en `full` ; le mode est exclusif. Un modèle
+  distant sur le rôle `trace` est facturé à chaque modification, `doctor` le dit.
+
+Closes #273.
+
 **Détecteur d'injection : `hidden_unicode` prenait l'emoji 🏃‍♀️ pour des caractères cachés
 (#271).** Chaque message WhatsApp lu par MCP dont le nom de conversation contient un emoji
 composé déclenchait l'alerte du détecteur local, ce qui la rend bruyante et finira par la

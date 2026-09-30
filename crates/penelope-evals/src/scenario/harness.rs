@@ -20,7 +20,7 @@ mod visible;
 use self::lifecycle::shut_down;
 pub use self::visible::Visible;
 use super::normalise::Normaliser;
-use super::{McpTool, Mode, Scenario, ScriptLine, Spec, Step, world};
+use super::{McpTool, Mode, Scenario, ScriptEntry, ScriptLine, Spec, Step, world};
 use anyhow::Context as _;
 use penelope_agent::TurnOutcome;
 use penelope_app::elicitation::Destination;
@@ -57,7 +57,7 @@ pub struct Run {
     /// Les requêtes vues par le modèle, rédigées et normalisées (`surface.jsonl`).
     pub surface: Vec<Value>,
     /// Le script capté sur le vrai fournisseur (mode enregistreur seulement).
-    pub recorded: Option<Vec<ScriptLine>>,
+    pub recorded: Option<Vec<ScriptEntry>>,
     /// Ce que les contrôles du journal ont vu (épopée #208, T22).
     pub audit: Audit,
 }
@@ -91,8 +91,10 @@ struct Harness<'a> {
     root: tempfile::TempDir,
     clock: Arc<TestClock>,
     script: Shared<VecDeque<ScriptLine>>,
+    /// Les files des rôles (`"role": "trace"`, #273), servies aux appels de leur modèle.
+    roles: Shared<BTreeMap<String, VecDeque<ScriptLine>>>,
     seen: Shared<Vec<ChatRequest>>,
-    recorded: Shared<Vec<ScriptLine>>,
+    recorded: Shared<Vec<ScriptEntry>>,
     /// Envois du canal simulé, toutes vies confondues (`messenger = true`).
     sent: Shared<Vec<Value>>,
     /// Jetons `{{id:…}}` du script restés sans identifiant : le rejeu échoue.
@@ -200,7 +202,23 @@ impl<'a> Harness<'a> {
             mode,
             root: tempfile::tempdir().context("répertoire temporaire")?,
             clock,
-            script: Arc::new(Mutex::new(scenario.script.iter().cloned().collect())),
+            script: Arc::new(Mutex::new(
+                scenario
+                    .script
+                    .iter()
+                    .filter(|e| e.role.is_none())
+                    .map(|e| e.line.clone())
+                    .collect(),
+            )),
+            roles: Arc::new(Mutex::new(scenario.script.iter().fold(
+                BTreeMap::new(),
+                |mut m: BTreeMap<String, VecDeque<ScriptLine>>, e| {
+                    if let Some(r) = &e.role {
+                        m.entry(r.clone()).or_default().push_back(e.line.clone());
+                    }
+                    m
+                },
+            ))),
             seen: Arc::new(Mutex::new(Vec::new())),
             recorded: Arc::new(Mutex::new(Vec::new())),
             sent: Arc::new(Mutex::new(Vec::new())),

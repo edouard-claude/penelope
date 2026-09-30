@@ -15,7 +15,7 @@ pub mod telegram;
 mod ticket_to_deploy_e2e;
 
 pub use telegram::channel::cards;
-pub use telegram::{TelegramGateway, parse_params};
+pub use telegram::{TelegramGateway, parse_params, trace_role_model};
 
 use penelope_app::gateway::Gateway;
 use penelope_daemon::runtime::Daemon;

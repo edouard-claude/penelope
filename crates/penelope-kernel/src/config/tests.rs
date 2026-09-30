@@ -12,15 +12,18 @@ fn default_config_is_valid() {
     cfg().validate().unwrap();
 }
 
-/// #222 : la trace des outils se règle en trois valeurs, `compact` par défaut ; une
-/// valeur inconnue est refusée au chargement avec les trois valeurs admises.
+/// #222 : la trace des outils se règle en cinq valeurs (`resume` et `narre` depuis
+/// #273), `compact` par défaut ; une valeur inconnue est refusée au chargement avec les
+/// valeurs admises.
 #[test]
-fn the_tool_trace_reads_three_values_and_refuses_the_rest() {
+fn the_tool_trace_reads_five_values_and_refuses_the_rest() {
     assert_eq!(cfg().telegram.tool_trace, ToolTrace::Compact);
     for (raw, mode) in [
         ("off", ToolTrace::Off),
         ("compact", ToolTrace::Compact),
         ("full", ToolTrace::Full),
+        ("resume", ToolTrace::Resume),
+        ("narre", ToolTrace::Narre),
     ] {
         let c = Config::from_toml(&format!("[telegram]\ntool_trace = \"{raw}\"\n")).unwrap();
         assert_eq!(c.telegram.tool_trace, mode, "{raw}");
@@ -28,9 +31,12 @@ fn the_tool_trace_reads_three_values_and_refuses_the_rest() {
     let e = Config::from_toml("[telegram]\ntool_trace = \"bavard\"\n")
         .unwrap_err()
         .to_string();
-    for v in ["off", "compact", "full"] {
+    for v in ToolTrace::ALL {
         assert!(e.contains(v), "{e}");
     }
+    assert!(ToolTrace::Narre.narrates() && !ToolTrace::Resume.narrates());
+    assert!(ToolTrace::Resume.summarises() && ToolTrace::Narre.summarises());
+    assert!(!ToolTrace::Compact.summarises() && !ToolTrace::Full.summarises());
 }
 
 /// #204 : un job d'outil a un seuil de proposition et deux plafonds. Un plafond nul

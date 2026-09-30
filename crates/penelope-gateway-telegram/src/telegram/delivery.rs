@@ -17,6 +17,14 @@ impl ChannelDelivery for TelegramGateway {
         channel::place_name(&self.daemon.services, origin).await
     }
 
+    /// `telegram.trace` (#273) : en mode `narre`, le rôle `trace` a un modèle joignable.
+    async fn doctor_checks(&self) -> Vec<penelope_kernel::api::DoctorCheck> {
+        trace::narrate::doctor_check(&self.daemon.services)
+            .await
+            .into_iter()
+            .collect()
+    }
+
     async fn destination_for(&self, origin: &Origin) -> Result<Origin, String> {
         channel::destination_for(&self.daemon.services, origin)
     }

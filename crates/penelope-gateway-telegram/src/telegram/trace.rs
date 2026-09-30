@@ -1,6 +1,7 @@
 //! Trace des outils d'un tour (issue #222) : famille, argument principal, regroupement des
 //! appels consécutifs et rendu HTML de la bulle. Aucun I/O : la boucle qui envoie et
-//! modifie la bulle est dans [`live`].
+//! modifie la bulle est dans [`live`] ; la ligne résumée du mode `resume` dans
+//! [`resume`], la phrase du mode `narre` dans [`narrate`] (#273).
 //!
 //! ```text
 //! 💻 shell_exec · echo test (×4) ✅
@@ -13,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub(super) mod live;
+pub(crate) mod narrate;
+mod resume;
 
 /// Longueur d'un argument affiché, sur une ligne.
 const ARG_CHARS: usize = 80;
@@ -366,15 +369,13 @@ impl Trace {
         self.finish();
     }
 
-    /// La bulle, en HTML. Au-delà du budget, les premiers groupes, une ligne qui dit
-    /// combien d'appels manquent, puis le groupe **courant** : l'appel en cours reste
-    /// visible. Aucune ligne ne commence par ❌ (`shorten_failure` couperait la bulle).
-    pub(crate) fn render(&self, mode: Mode, group_chat: bool) -> String {
-        let lines: Vec<(usize, String)> = self
-            .groups
-            .iter()
-            .map(|g| g.render(mode, group_chat, self.incomplete))
-            .collect();
+    /// Un appel attend encore son résultat.
+    pub(crate) fn is_running(&self) -> bool {
+        self.groups.iter().any(|g| g.open > 0)
+    }
+
+    /// Les lignes de fin : des événements perdus, un redémarrage en plein tour.
+    fn tail(&self) -> Vec<String> {
         let mut tail: Vec<String> = Vec::new();
         if self.incomplete && !self.interrupted {
             tail.push("❔ trace incomplète".into());
@@ -382,6 +383,32 @@ impl Trace {
         if self.interrupted {
             tail.push("⏹ interrompu par un redémarrage".into());
         }
+        tail
+    }
+
+    /// La bulle du mode `narre` : la phrase du modèle, échappée, puis les lignes de fin.
+    pub(crate) fn narrated(&self, phrase: &str) -> String {
+        let mut out = vec![escape_html(phrase)];
+        out.extend(self.tail());
+        out.join("\n")
+    }
+
+    /// La bulle, en HTML. En `resume` et `narre` (sans phrase), la ligne résumée. Sinon la
+    /// liste : au-delà du budget, les premiers groupes, une ligne qui dit combien d'appels
+    /// manquent, puis le groupe **courant** : l'appel en cours reste visible. Aucune ligne
+    /// ne commence par ❌ (`shorten_failure` couperait la bulle).
+    pub(crate) fn render(&self, mode: Mode, group_chat: bool) -> String {
+        if mode.summarises() {
+            let mut out = vec![self.resume(group_chat)];
+            out.extend(self.tail());
+            return out.join("\n");
+        }
+        let lines: Vec<(usize, String)> = self
+            .groups
+            .iter()
+            .map(|g| g.render(mode, group_chat, self.incomplete))
+            .collect();
+        let tail = self.tail();
         let total: usize = lines.iter().map(|(n, _)| n + 1).sum();
         let mut out: Vec<String> = if total <= VISIBLE_BUDGET || lines.len() < 2 {
             lines.into_iter().map(|(_, h)| h).collect()

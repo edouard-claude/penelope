@@ -519,6 +519,40 @@ arrière-plan n'a pas de bulle ; une bulle ouverte au moment d'un redémarrage e
 démarrage suivant (« ⏹ interrompu par un redémarrage »). Arguments et extraits sont
 caviardés (`crates/penelope-gateway-telegram/src/telegram/trace.rs`).
 
+Deux modes de plus, du moins cher au plus riche (1.0.26, #273), quand quinze lignes
+`📄 fs_read ✅` ne disent pas ce que Pénélope fait :
+
+- `resume` : une seule ligne, déterministe, par famille et par verbe, dans l'ordre
+  d'apparition : `📄 6 lectures, 7 recherches · 💻 cargo test en cours`, puis
+  `… · ✅`, ou `❌ 2 échecs`, `🚫 1 refusé`, `⏹ 1 sans réponse`. Les lectures groupent
+  `fs_read`, `fs_list` et `artifact_read`, les recherches `fs_search`, la mémoire dit
+  « rappels » et « notes », un outil MCP « appels `<serveur>` » ; la commande shell est
+  citée en privé, comptée en groupe. Aucun appel de modèle, aucune latence.
+- `narre` : à chaque modification de la bulle, le modèle du rôle `trace` reçoit la liste
+  des appels dans l'ordre, avec leurs arguments **déjà caviardés**, leur état (en cours,
+  fini, échoué, refusé) et la phrase précédente, et rend une phrase de 5 à 10 mots derrière
+  un emoji d'une liste fermée (📄 lecture, ✍️ écriture, 🔎 recherche, 💻 commande, 🌐
+  réseau, 🧠 mémoire, 🌿 git, 🔌 MCP, ⏸️ attente d'approbation, ✅ fini, 🚫 refusé) :
+  « 📄 Relecture des notes de septembre ». La phrase remplace la liste ; un emoji hors
+  liste est remplacé par celui de l'activité, un pictogramme de plus est retiré, une réponse
+  vide, trop longue ou porteuse d'un secret est ignorée. La consigne « garde la phrase
+  précédente si l'activité n'a pas changé » évite le clignotement : une phrase identique ne
+  modifie pas la bulle. Le modèle ne voit jamais un résultat d'outil ni un contenu de
+  fichier ; une référence `${SECRET:…}` dans une commande devient `[secret]`.
+
+Le rôle `trace` se règle par `models.roles.trace` ; sans lui, l'alias `local` puis le
+premier alias `local:` de texte (ni voix, ni image, ni embeddings) est pris : un modèle de
+1,7 milliard de paramètres en 4 bits suffit, et rien ne sort de la machine. Sans alias
+local, le tour passe en `resume` et `penelope doctor` le dit (contrôle `telegram.trace`,
+qui sonde aussi le serveur du rôle). L'appel est **borné à 500 ms, une seule tentative**,
+et n'est jamais sur le chemin de la réponse : la bulle est créée avec la ligne `resume`,
+le modèle parle dans la tâche de chaque modification (au plus une toutes les 1,5 s) et à
+la clôture, une fois la réponse partie ; un dépassement, un serveur arrêté ou une réponse
+inutilisable laissent la ligne `resume` pour cette modification, sans un mot d'erreur dans
+la bulle. Chaque narration est journalisée (`trace.narrated` : jetons, durée, repli et sa
+raison) et comptée au rôle `trace` dans l'usage, à 0 $ pour un modèle local et au coût
+mesuré pour un modèle distant, qu'un propriétaire peut choisir en le sachant.
+
 ## Limites et reprise
 
 Le client respecte les limites de débit de Telegram sans perdre de message : un `429`

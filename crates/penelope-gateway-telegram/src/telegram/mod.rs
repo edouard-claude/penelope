@@ -71,6 +71,11 @@ use keys::{
     short_model, substitute, topic_name_of,
 };
 pub use keys::{parse_params, record_seen_chat};
+/// Le modèle du rôle `trace` (#273), pour le harnais de scénarios : les lignes de
+/// `model.jsonl` marquées `"role": "trace"` servent ses appels.
+pub fn trace_role_model(cfg: &penelope_kernel::config::Config) -> Option<String> {
+    trace::narrate::role_model(cfg).map(|n| n.model)
+}
 use media::Album;
 #[cfg(test)]
 use media::{ALBUM_WINDOW, audio_filename};

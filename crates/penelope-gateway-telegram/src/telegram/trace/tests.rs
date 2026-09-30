@@ -293,3 +293,216 @@ fn a_long_trace_fits_and_keeps_the_current_call() {
     let shown = out.lines().filter(|l| l.starts_with("📄")).count() as u32;
     assert_eq!(shown + skipped, 200);
 }
+
+// --- Modes `resume` et `narre` (#273) --------------------------------------------------
+
+use super::narrate::{self, Narrator};
+use penelope_kernel::config::Config;
+
+/// Quinze appels de fichiers puis une commande : la ligne du mode `resume` compte par
+/// famille et par verbe, dit la commande en cours, puis l'état final.
+#[test]
+fn resume_counts_by_family_and_verb_and_names_the_running_command() {
+    let mut t = Trace::default();
+    for i in 0..6 {
+        t.call("fs_read", &json!({"path": format!("notes/{i}.md")}));
+        t.result("fs_read", true, "");
+    }
+    for i in 0..7 {
+        t.call(
+            "fs_search",
+            &json!({"pattern": format!("TODO{i}"), "path": "."}),
+        );
+        t.result("fs_search", true, "");
+    }
+    t.call("shell_exec", &json!({"command": "cargo test"}));
+    assert_eq!(
+        t.render(Mode::Resume, false),
+        "📄 6 lectures, 7 recherches · 💻 <code>cargo test</code> en cours"
+    );
+    // En groupe : la commande reste tue, comme l'argument en `compact`.
+    assert_eq!(
+        t.render(Mode::Resume, true),
+        "📄 6 lectures, 7 recherches · 💻 1 commande en cours"
+    );
+    t.result("shell_exec", true, "ok");
+    assert_eq!(
+        t.render(Mode::Resume, false),
+        "📄 6 lectures, 7 recherches · 💻 <code>cargo test</code> · ✅"
+    );
+    // `narre` sans phrase rend la même ligne : c'est son repli.
+    assert_eq!(t.render(Mode::Narre, false), t.render(Mode::Resume, false));
+}
+
+/// Échecs, refus, appels sans réponse et redémarrage : la ligne les compte, les lignes de
+/// fin restent celles des autres modes.
+#[test]
+fn resume_counts_failures_refusals_and_lost_calls() {
+    let mut t = Trace::default();
+    t.call("fs_read", &json!({"path": "a"}));
+    t.result("fs_read", false, "absent");
+    t.result("fs_write", false, "refusé");
+    t.call("mem_search", &json!({"query": "q"}));
+    t.call("mem_note", &json!({"slug": "s"}));
+    t.result("mem_search", true, "");
+    t.result("mem_note", true, "");
+    t.call("http_fetch", &json!({"url": "https://x.org"}));
+    t.finish();
+    assert_eq!(
+        t.render(Mode::Resume, false),
+        "📄 1 lecture · 🧠 1 rappel, 1 note · 🌐 1 requête · ❌ 1 échec · 🚫 1 refusé · ⏹ 1 sans réponse"
+    );
+    let mut t = Trace::default();
+    t.call("shell_exec", &json!({"command": "make"}));
+    t.call("shell_exec", &json!({"command": "make"}));
+    t.result("shell_exec", true, "");
+    t.result("shell_exec", true, "");
+    t.call("mcp__github__list_issues", &json!({"query": "bug"}));
+    t.interrupt();
+    assert_eq!(
+        t.render(Mode::Resume, false),
+        "💻 <code>make</code> (×2) · 🔌 1 appel github · ❔ 1 sans réponse\n⏹ interrompu par un redémarrage"
+    );
+    let mut t = Trace::default();
+    t.result("fs_write", false, "refusé");
+    assert_eq!(t.render(Mode::Resume, false), "🚫 1 refusé");
+}
+
+/// Le prompt du rôle `trace` ne porte que la liste déjà masquée : un jeton dans une
+/// commande, une référence `${SECRET:…}` et un extrait de résultat n'y entrent jamais.
+#[test]
+fn the_trace_role_prompt_never_carries_a_secret_nor_a_result() {
+    let key = "ghp_0123456789abcdefghijABCDEFGHIJ012345";
+    let mut t = Trace::default();
+    t.call(
+        "shell_exec",
+        &json!({"command": format!("curl -H 'Authorization: {key}' -u ${{SECRET:github_token}} https://api.github.com")}),
+    );
+    t.result(
+        "shell_exec",
+        true,
+        &format!("contenu privé du fichier {key}"),
+    );
+    t.call("fs_read", &json!({"path": "notes.txt"}));
+    let prompt = narrate::prompt(&t, Some("📄 Relecture des notes"));
+    assert!(!prompt.contains("ghp_"), "{prompt}");
+    assert!(!prompt.contains("SECRET"), "{prompt}");
+    assert!(!prompt.contains("contenu privé"), "{prompt}");
+    assert!(prompt.contains("[secret]"), "{prompt}");
+    assert!(
+        prompt.starts_with("Phrase précédente : 📄 Relecture des notes\nÉtat : en cours\n"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("1. shell_exec curl -H"), "{prompt}");
+    assert!(
+        prompt.ends_with("2. fs_read notes.txt en cours\n"),
+        "{prompt}"
+    );
+    // Sans phrase précédente, terminé, un lot groupé.
+    let mut t = Trace::default();
+    for _ in 0..3 {
+        t.call("fs_read", &json!({"path": "a"}));
+        t.result("fs_read", true, "");
+    }
+    let prompt = narrate::prompt(&t, None);
+    assert!(
+        prompt.contains("Phrase précédente : aucune\nÉtat : terminé\n"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("1. fs_read a (×3) fini\n"), "{prompt}");
+    // Une longue trace : les derniers appels seulement, les autres comptés.
+    let mut t = Trace::default();
+    for i in 0..40 {
+        t.call("fs_read", &json!({"path": format!("f{i}")}));
+        t.result("fs_read", true, "");
+    }
+    let prompt = narrate::prompt(&t, None);
+    assert!(prompt.contains("… 10 appels plus anciens\n"), "{prompt}");
+    assert_eq!(prompt.lines().filter(|l| l.contains("fs_read")).count(), 30);
+}
+
+/// La phrase rendue : un emoji de la liste fermée en tête (celui du modèle s'il est
+/// admis, sinon celui de l'activité), les autres pictogrammes retirés, guillemets et point
+/// final ôtés ; vide, trop longue ou porteuse d'un secret, elle est refusée.
+#[test]
+fn the_narrated_phrase_is_cleaned_and_bounded() {
+    let c = |raw: &str| narrate::clean(raw, "📄");
+    assert_eq!(
+        c("« 🔎 Recherche des devis ACME. »\n").as_deref(),
+        Some("🔎 Recherche des devis ACME")
+    );
+    assert_eq!(
+        c("🚀 Relecture des notes du jour").as_deref(),
+        Some("📄 Relecture des notes du jour")
+    );
+    assert_eq!(
+        c("Relecture des notes 🎉 du jour ✨").as_deref(),
+        Some("📄 Relecture des notes du jour")
+    );
+    assert_eq!(
+        c("Relecture des notes 🧠 du jour").as_deref(),
+        Some("🧠 Relecture des notes du jour")
+    );
+    assert_eq!(
+        c("✍ Écriture du rapport").as_deref(),
+        Some("✍️ Écriture du rapport")
+    );
+    assert_eq!(
+        c("⏸ Attente d'approbation").as_deref(),
+        Some("⏸️ Attente d'approbation")
+    );
+    assert!(c("  \n ").is_none());
+    assert!(c("Bonjour").is_none(), "un seul mot");
+    assert!(c(&"mot ".repeat(13)).is_none(), "trop de mots");
+    assert!(c("sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef clé").is_none());
+}
+
+/// Le modèle du rôle `trace` : `models.roles.trace`, sinon l'alias `local`, sinon le
+/// premier alias `local:` qui ne sert ni la voix, ni les images, ni les embeddings ; rien
+/// sans alias local.
+#[test]
+fn the_trace_role_defaults_to_a_local_text_alias() {
+    let mut cfg = Config::sample(1);
+    assert_eq!(narrate::role_model(&cfg), None);
+    cfg.models
+        .aliases
+        .insert("voix".into(), "local:mlx-community/whisper".into());
+    cfg.models.roles.insert("stt".into(), "voix".into());
+    assert_eq!(
+        narrate::role_model(&cfg),
+        None,
+        "un alias de voix n'est pas un narrateur"
+    );
+    cfg.models
+        .aliases
+        .insert("petit".into(), "local:mlx-community/Qwen3-1.7B-4bit".into());
+    cfg.models
+        .aliases
+        .insert("gros".into(), "local:mlx-community/Qwen3-8B-4bit".into());
+    assert_eq!(
+        narrate::role_model(&cfg),
+        Some(Narrator {
+            alias: "gros".into(),
+            model: "local:mlx-community/Qwen3-8B-4bit".into()
+        }),
+        "le premier alias local par ordre alphabétique"
+    );
+    cfg.models
+        .aliases
+        .insert("local".into(), "local:mlx-community/Qwen3-4B-4bit".into());
+    assert_eq!(
+        narrate::role_model(&cfg).map(|n| n.alias),
+        Some("local".into())
+    );
+    cfg.models.roles.insert("trace".into(), "fast".into());
+    let n = narrate::role_model(&cfg).unwrap();
+    assert_eq!(n.alias, "fast");
+    assert!(!n.is_local(), "{n:?}");
+    assert!(
+        Narrator {
+            alias: "x".into(),
+            model: "local:m".into()
+        }
+        .is_local()
+    );
+}
