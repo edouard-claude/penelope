@@ -569,7 +569,8 @@ async fn a_real_stdio_server_runs_under_the_sandbox() {
     std::fs::write(
         sup.dir().join("pyfake.toml"),
         format!(
-            "command = \"{}\"\nargs = [\"{}\"]\ntimeout = \"10s\"\n[env]\nFAKE_GREETING = \"bonjour\"\n",
+            "command = \"{}\"\nargs = [\"{}\"]\ntimeout = \"10s\"\n[env]\nFAKE_GREETING = \"bonjour\"\n\
+             FAKE_DATA_DIR = \"{{data}}/mcp-data/pyfake\"\n",
             python.display(),
             script.display()
         ),
@@ -592,6 +593,13 @@ async fn a_real_stdio_server_runs_under_the_sandbox() {
     assert_eq!(v["content"][0]["text"], "bonjour salut");
     let logs = sup.logs("pyfake", 10).await.unwrap();
     assert!(logs.iter().any(|l| l.contains("pyfake prêt")), "{logs:?}");
+    // #270 : `{data}` de `env` arrive développé au processus, jamais tel quel.
+    let data_dir = s.platform.dirs.data().join("mcp-data").join("pyfake");
+    assert!(
+        logs.iter()
+            .any(|l| *l == format!("pyfake données {}", data_dir.display())),
+        "{logs:?}"
+    );
 
     let pid_file = s.platform.dirs.pid_dir().join("mcp-pyfake.pid");
     assert!(pid_file.exists());
@@ -659,6 +667,7 @@ async fn real_mcp_server_handshake() {
 const FAKE_PY: &str = r#"
 import json, os, sys
 print("pyfake prêt", file=sys.stderr, flush=True)
+print("pyfake données " + os.environ.get("FAKE_DATA_DIR", "?"), file=sys.stderr, flush=True)
 greeting = os.environ.get("FAKE_GREETING", "?")
 for line in sys.stdin:
     line = line.strip()

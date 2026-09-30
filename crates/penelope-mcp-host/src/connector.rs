@@ -120,6 +120,28 @@ pub fn keychain_hint(s: &Services, cfg: &ServerConfig, text: &str) -> Option<Str
     ))
 }
 
+/// Processus d'un serveur stdio, secrets déjà résolus : `command`, `args`, `cwd` et les
+/// valeurs de `env` développent `{data}`, `{config}`, `{state}`, `{logs}`, `{cache}` et
+/// `~/` comme les chemins de la configuration. `env` ne l'était pas : `WA_DATA_DIR =
+/// "{data}/…"` arrivait tel quel au serveur, qui créait un dossier nommé `{data}`
+/// (issue #270).
+pub fn stdio_spec(
+    dirs: &dyn penelope_platform::Directories,
+    cfg: &ServerConfig,
+) -> penelope_platform::ProcessSpec {
+    let path = |raw: &str| dirs.expand(raw).to_string_lossy().to_string();
+    let mut spec = penelope_platform::ProcessSpec::new(path(&cfg.command))
+        .args(cfg.args.iter().map(|a| path(a)))
+        .pid_tag(format!("mcp-{}", cfg.name));
+    if !cfg.cwd.is_empty() {
+        spec = spec.cwd(dirs.expand(&cfg.cwd));
+    }
+    for (k, v) in &cfg.env {
+        spec = spec.env(k.clone(), path(v));
+    }
+    spec
+}
+
 #[async_trait::async_trait]
 impl Connector for ProcessConnector {
     async fn open(&self, cfg: &ServerConfig) -> Result<Arc<dyn Transport>, String> {
@@ -127,24 +149,9 @@ impl Connector for ProcessConnector {
         let resolved = cfg
             .resolve_secrets(s.platform.secrets.as_ref())
             .map_err(|e| format!("{e} (poser le secret : `penelope secret set <nom>`)"))?;
-        let dirs = &s.platform.dirs;
         match resolved.effective_transport() {
             "stdio" => {
-                let program = dirs.expand(&resolved.command).to_string_lossy().to_string();
-                let args: Vec<String> = resolved
-                    .args
-                    .iter()
-                    .map(|a| dirs.expand(a).to_string_lossy().to_string())
-                    .collect();
-                let mut spec = penelope_platform::ProcessSpec::new(program)
-                    .args(args)
-                    .pid_tag(format!("mcp-{}", cfg.name));
-                if !resolved.cwd.is_empty() {
-                    spec = spec.cwd(dirs.expand(&resolved.cwd));
-                }
-                for (k, v) in &resolved.env {
-                    spec = spec.env(k.clone(), v.clone());
-                }
+                let spec = stdio_spec(s.platform.dirs.as_ref(), &resolved);
                 let profile = self.profile(cfg)?;
                 let t =
                     penelope_mcp::StdioTransport::spawn(self.host.clone(), spec, Some(&profile))
