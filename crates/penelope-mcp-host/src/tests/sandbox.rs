@@ -320,3 +320,74 @@ async fn a_server_keeps_its_own_directories_readable() {
     let data = s.platform.dirs.data();
     assert_eq!(p.deny_read, vec![data.join("secrets.enc")]);
 }
+
+/// #270 : les valeurs de `env` développent `{data}`, `{config}`, `{state}`, `{logs}` et
+/// `~/` comme `command`, `args` et `cwd`, qui l'étaient déjà ; `WA_DATA_DIR =
+/// "{data}/…"` arrivait tel quel au serveur, qui créait un dossier nommé `{data}`. Une
+/// accolade qui n'est pas un gabarit reste intacte.
+#[test]
+fn env_values_expand_the_same_templates_as_args_and_cwd() {
+    let dirs = penelope_platform::RootedDirs::new("/r");
+    let mut cfg = ServerConfig::stdio(
+        "whatsapp",
+        "{data}/bin/wa-mcp",
+        &["--state", "{state}/wa", "--json", "{\"a\":1}"],
+    );
+    cfg.cwd = "{config}/wa".into();
+    cfg.env
+        .insert("WA_DATA_DIR".into(), "{data}/mcp-data/whatsapp".into());
+    cfg.env.insert("WA_LOG".into(), "{logs}/wa.log".into());
+    cfg.env.insert("WA_HOME".into(), "~/wa".into());
+    cfg.env
+        .insert("WA_TOKEN".into(), "tok-{pas-un-gabarit}".into());
+    let spec = stdio_spec(&dirs, &cfg);
+    assert_eq!(spec.program, "/r/data/bin/wa-mcp");
+    assert_eq!(
+        spec.args,
+        vec!["--state", "/r/state/wa", "--json", "{\"a\":1}"]
+    );
+    assert_eq!(spec.cwd, Some(PathBuf::from("/r/config/wa")));
+    assert_eq!(spec.env["WA_DATA_DIR"], "/r/data/mcp-data/whatsapp");
+    assert_eq!(spec.env["WA_LOG"], "/r/logs/wa.log");
+    assert_eq!(spec.env["WA_TOKEN"], "tok-{pas-un-gabarit}");
+    if let Some(home) = penelope_platform::dirs::home_dir() {
+        assert_eq!(spec.env["WA_HOME"], home.join("wa").to_string_lossy());
+    }
+    assert_eq!(spec.pid_tag.as_deref(), Some("mcp-whatsapp"));
+}
+
+/// #270 : un serveur qui meurt sur un chemin où `{data}` est resté tel quel est expliqué
+/// par le gabarit, pas par le bac à sable : Pénélope conseillait `sandbox_profile =
+/// "full"` pour un dossier `{data}` introuvable. Un gabarit qui n'est pas de Pénélope est
+/// nommé avec ceux qu'elle connaît ; un refus d'écriture sans gabarit garde le conseil.
+#[test]
+fn a_literal_template_in_stderr_names_the_template_not_the_sandbox() {
+    let cfg = ServerConfig::stdio("whatsapp", "/opt/mcp/wa", &[]);
+    let died =
+        McpError::Transport("le serveur s'est arrêté : sorti avec le code 1 après 40 ms".into());
+    let logs = vec![
+        "Error: création de {data}/mcp-data/whatsapp".to_string(),
+        "Caused by: Operation not permitted (os error 1)".to_string(),
+    ];
+    let said = explain(&cfg, &died, &logs);
+    assert!(said.contains("`{data}` tel quel"), "{said}");
+    assert!(said.contains("`env`"), "{said}");
+    assert!(!said.contains("sandbox_profile"), "{said}");
+    assert!(!said.contains("allow_full_for"), "{said}");
+
+    let logs = vec!["mkdir {home}/wa: Operation not permitted".to_string()];
+    let said = explain(&cfg, &died, &logs);
+    assert!(said.contains("`{home}` n'est pas un gabarit"), "{said}");
+    assert!(said.contains("`{data}`"), "{said}");
+    assert!(!said.contains("allow_full_for"), "{said}");
+
+    // Ce qui marchait : sans gabarit, le refus d'écriture désigne le bac à sable ; un
+    // `{0}` de format ou une accolade vide ne sont pas des gabarits.
+    let logs = vec!["mkdir /Users/moi/wa: Operation not permitted (os error 1) {0} {}".to_string()];
+    let said = explain(&cfg, &died, &logs);
+    assert!(said.contains("allow_full_for"), "{said}");
+    assert!(!said.contains("tel quel"), "{said}");
+    let mut full = cfg.clone();
+    full.sandbox_profile = "full".into();
+    assert!(!explain(&full, &died, &logs).contains("allow_full_for"));
+}

@@ -12,6 +12,41 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.28
+
+**Serveurs MCP : `{data}` n'était pas développé dans les valeurs de `env` (#270).** Une
+déclaration `mcp.d/whatsapp.toml` avec `WA_DATA_DIR = "{data}/mcp-data/whatsapp"` passait
+le gabarit tel quel au processus, qui tentait de créer un dossier nommé `{data}` dans son
+répertoire courant ; le bac à sable refusait (« Operation not permitted »), et Pénélope
+concluait à tort que le bac à sable était en cause, en conseillant `sandbox_profile =
+"full"`. `docs/mcp.md` donnait pourtant `env = { COMPTA_BASE = "{data}/compta" }` en
+exemple. Deux tests rouges avant le correctif : un `env` avec `{data}` rendu littéral dans
+la spécification du processus ; l'explication d'une mort sur `{data}/…` qui recommandait
+le profil `full`.
+
+- Cause : le connecteur de processus développait `command`, `args` et `cwd` avec
+  `Directories::expand` (et `roots` dans le profil de bac à sable et `roots/list`), mais
+  recopiait les valeurs de `env` après la seule résolution des secrets.
+- Correctif : `stdio_spec` (penelope-mcp-host) construit la spécification du processus et
+  développe les valeurs de `env` avec la même fonction que les autres champs ; la
+  déclaration garde le gabarit. L'explication d'un échec relève un gabarit resté tel quel
+  dans la sortie d'erreur et le nomme comme cause (renvoi aux champs développés, ou liste
+  des gabarits connus pour un nom inconnu comme `{home}`), sans plus conseiller le profil
+  `full` ; un refus d'écriture sans gabarit garde le conseil.
+- Tests : la spécification développe `env` comme `args` et `cwd`, une accolade qui n'est
+  pas un gabarit reste intacte ; l'explication nomme `{data}`, `{home}`, et garde le bac à
+  sable pour `{0}` ou `{}` ; le serveur stdio réel (macOS) reçoit `{data}` développé et
+  l'écrit sur sa sortie d'erreur.
+- Scénario `rpc-mcp-et-import` : `forge` est essayé et déclaré avec `FORGE_DATA =
+  "{data}/mcp-data/forge"` ; `mcp.show` rend la déclaration avec son gabarit. Le
+  connecteur de test n'ouvre aucun processus : le développement à l'ouverture est prouvé
+  par les tests unitaires.
+- Ce qui continue de marcher : `command`, `args`, `cwd` et `roots` développés comme avant ;
+  `${SECRET:nom}` résolu dans `env` et `headers` ; la phrase du trousseau (#122) ; le
+  conseil du bac à sable pour un refus d'écriture sans gabarit.
+
+Closes #270.
+
 ### 1.0.27
 
 **Trace des outils : deux modes résumés, `resume` sans modèle et `narre` par un petit

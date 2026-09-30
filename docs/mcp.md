@@ -75,6 +75,13 @@ idle_timeout = "10m"
 roots = ["{data}/compta"]
 ```
 
+`{data}`, `{config}`, `{state}`, `{logs}`, `{cache}` et `~/` sont développés au lancement
+du processus dans `command`, `args`, `cwd`, les valeurs de `env` et `roots` ; la
+déclaration garde le gabarit, `penelope mcp show` le montre tel quel. Jusqu'à la 1.0.26,
+`env` faisait exception : `{data}` arrivait tel quel au serveur, qui créait un dossier
+nommé `{data}` dans son répertoire courant (#270). Les secrets s'écrivent `${SECRET:nom}`
+dans `env` et `headers`.
+
 Un fichier invalide est **signalé**, pas fatal : les autres serveurs se chargent quand
 même. Déposer, modifier ou retirer un fichier est pris en compte à chaud, sans
 redémarrage.
@@ -361,6 +368,14 @@ sur la sortie d'erreur ; processus sorti avec le code 1 après 40 ms »), jamais
 liste vide. Un code non nul très rapide sans un mot désigne presque toujours le programme
 lui-même (binaire absent de son `PATH`, dépendance manquante, service tiers arrêté) : le
 lancer à la main avec la même commande le confirme.
+
+Quand la sortie d'erreur parle d'une écriture refusée (« Operation not permitted »,
+« Permission denied »), l'erreur se termine par la cause la plus probable. Si une ligne
+porte un gabarit resté tel quel (`{data}/…`), c'est lui : le serveur a créé un dossier
+nommé `{data}` dans son répertoire courant, et le bac à sable l'a refusé ; l'erreur
+rappelle où Pénélope développe ses gabarits, ou dit qu'un nom (`{home}/…`) n'en est pas un,
+sans conseiller `sandbox_profile = "full"` (#270). Sinon, c'est le bac à sable qui refuse
+peut-être une écriture hors de `mcp-data/<nom>`, et l'erreur donne la marche à suivre.
 
 ## Tester
 

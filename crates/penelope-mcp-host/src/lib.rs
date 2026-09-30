@@ -49,7 +49,9 @@ mod lifecycle;
 mod render;
 mod tools;
 
-pub use connector::{Connector, ProcessConnector, keychain_hint, keychain_open, stdio_profile};
+pub use connector::{
+    Connector, ProcessConnector, keychain_hint, keychain_open, stdio_profile, stdio_spec,
+};
 pub use render::result_json;
 use render::*;
 

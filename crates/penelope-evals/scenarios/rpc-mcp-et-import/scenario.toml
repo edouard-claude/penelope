@@ -1,7 +1,8 @@
 name = "rpc-mcp-et-import"
 description = """Les serveurs MCP administrés par la socket locale, comme `penelope mcp …`, sur le
 vrai superviseur branché sur un connecteur de test (aucun processus lancé) : un serveur
-servi est essayé sans être déclaré (`mcp.test`), déclaré (`mcp.add`), listé, montré,
+servi est essayé sans être déclaré (`mcp.test`), déclaré (`mcp.add`) avec un `env` en
+`{data}` que la déclaration garde tel quel (#270), listé, montré,
 modifié, désactivé, réactivé, redémarré, ses journaux lus, puis retiré ; un serveur
 inconnu est refusé. Ensuite une instance Hermes semée dans le workspace est simulée
 puis importée (`import.hermes`) : sa skill, sa mémoire, son profil et ses serveurs MCP
@@ -56,12 +57,12 @@ method = "mcp.list"
 [[steps]]
 kind = "rpc"
 method = "mcp.test"
-params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n[env]\nFORGE_DATA = \"{data}/mcp-data/forge\"\n" }
 
 [[steps]]
 kind = "rpc"
 method = "mcp.add"
-params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n" }
+params = { name = "forge", toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n[env]\nFORGE_DATA = \"{data}/mcp-data/forge\"\n" }
 
 [[steps]]
 kind = "rpc"

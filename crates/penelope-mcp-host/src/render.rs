@@ -72,8 +72,9 @@ pub(super) fn call_error(e: &McpError) -> String {
     }
 }
 
-/// Message d'échec de connexion, avec les dernières lignes de stderr et, si le bac à
-/// sable semble en cause, la marche à suivre.
+/// Message d'échec de connexion, avec les dernières lignes de stderr et la cause quand
+/// elle se lit : un gabarit resté tel quel, sinon le bac à sable qui semble refuser une
+/// écriture, avec la marche à suivre.
 pub(super) fn explain(cfg: &ServerConfig, e: &McpError, logs: &[String]) -> String {
     let mut msg = e.to_string();
     // Les lignes ajoutées par le transport (fin du processus, sortie vide) sont déjà dans
@@ -101,7 +102,10 @@ pub(super) fn explain(cfg: &ServerConfig, e: &McpError, logs: &[String]) -> Stri
         let l = l.to_lowercase();
         l.contains("operation not permitted") || l.contains("permission denied")
     });
-    if blocked && cfg.sandbox_profile != "full" {
+    if let Some(hint) = template_hint(logs) {
+        msg.push_str(" → ");
+        msg.push_str(&hint);
+    } else if blocked && cfg.sandbox_profile != "full" {
         msg.push_str(&format!(
             " → le bac à sable `{0}` bloque peut-être une écriture : `sandbox_profile = \
              \"full\"` dans sa déclaration, puis `penelope config set \
@@ -110,6 +114,50 @@ pub(super) fn explain(cfg: &ServerConfig, e: &McpError, logs: &[String]) -> Stri
         ));
     }
     msg
+}
+
+/// Un gabarit de chemin resté tel quel dans la sortie d'erreur du serveur : c'est lui la
+/// cause, pas le bac à sable qui refuse ensuite le dossier `{data}` créé dans le
+/// répertoire courant (issue #270 : Pénélope conseillait `sandbox_profile = "full"`). Un
+/// gabarit de Pénélope est renvoyé à sa déclaration ; un autre nom (`{home}`, `{Data}`)
+/// suivi d'un `/` est nommé avec ceux qu'elle connaît. `{0}` et `{}` ne sont pas des
+/// gabarits.
+fn template_hint(logs: &[String]) -> Option<String> {
+    let known: Vec<String> = penelope_platform::Dir::ALL
+        .iter()
+        .map(|d| format!("{{{}}}", d.as_str()))
+        .collect();
+    for line in logs {
+        let mut rest = line.as_str();
+        while let Some(open) = rest.find('{') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('}') else { break };
+            let (ident, after) = (&rest[..close], &rest[close + 1..]);
+            let token = format!("{{{ident}}}");
+            if known.contains(&token) {
+                return Some(format!(
+                    "le serveur a reçu `{token}` tel quel : Pénélope développe ce gabarit \
+                     dans `command`, `args`, `cwd`, `env` et `roots` de sa déclaration, pas \
+                     dans les fichiers ou options que le serveur lit lui-même ; le bac à \
+                     sable n'est pas en cause"
+                ));
+            }
+            let word = !ident.is_empty()
+                && ident
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && !ident.bytes().all(|b| b.is_ascii_digit());
+            if word && after.starts_with('/') {
+                let list: Vec<String> = known.iter().map(|k| format!("`{k}`")).collect();
+                return Some(format!(
+                    "`{token}` n'est pas un gabarit de Pénélope ({}, `~/`) : le serveur l'a \
+                     reçu tel quel ; le bac à sable n'est pas en cause",
+                    list.join(", ")
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Résultat d'outil au format MCP, sans les données binaires : une image ou un audio
