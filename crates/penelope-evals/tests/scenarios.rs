@@ -229,12 +229,19 @@ fn the_trace_role_sees_the_masked_list_of_the_narrated_scenario() {
         .filter(|v| v["model"].as_str().is_some_and(|m| m.starts_with("local:")))
         .collect();
     assert_eq!(trace_calls.len(), 2, "un appel au rôle trace par tour");
-    let user = trace_calls[0]["messages"][1]["text"].as_str().unwrap();
+    let messages = trace_calls[0]["messages"].as_array().unwrap();
+    assert_eq!(
+        messages.len(),
+        10,
+        "système, quatre exemples, la liste (#280)"
+    );
+    let user = messages[9]["text"].as_str().unwrap();
     assert!(user.contains("fs_search [secret masqué] fini"), "{user}");
     assert!(
-        user.starts_with("Phrase précédente : aucune\nÉtat : terminé\n"),
+        user.starts_with("1. fs_read notes.txt (×2) fini\n"),
         "{user}"
     );
+    assert!(!user.contains("précédente"), "{user}");
     assert!(
         !surface.contains("ghp_0123"),
         "jeton en clair dans une requête"

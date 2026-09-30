@@ -369,11 +369,6 @@ impl Trace {
         self.finish();
     }
 
-    /// Un appel attend encore son résultat.
-    pub(crate) fn is_running(&self) -> bool {
-        self.groups.iter().any(|g| g.open > 0)
-    }
-
     /// Les lignes de fin : des événements perdus, un redémarrage en plein tour.
     fn tail(&self) -> Vec<String> {
         let mut tail: Vec<String> = Vec::new();

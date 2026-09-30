@@ -76,10 +76,11 @@ Les entrées de `scenario.toml` : `message` (mis en file, réclamé, joué jusqu
 (mis en file sans être joué, pour les messages fusionnés), `command` (`/compact`,
 `/fork [titre]`, `/rewind [n]`, `/purge`, appelés comme les commandes Telegram et RPC les
 appellent : `compaction::compact(Manual)`, `session_ops::fork`, `session_ops::rewind`,
-`purge::session`), `advance_clock` (`10m`, `3h`), `restart` (services détruits puis
-reconstruits sur le même répertoire, `recover()`, tours en attente joués, comme
-`resilience::boot`), `approve` (première demande en attente de la session approuvée, tour
-de reprise joué), `usage` (dernier appel facturé de N tokens, fixture de la session
+`purge::session`), `advance_clock` (`10m`, `3h` ; avec `[[mcp_servers]]`, l'entretien du
+superviseur MCP passe ensuite : sonde de santé, arrêt des inactifs), `restart` (services
+détruits puis reconstruits sur le même répertoire, `recover()`, tours en attente joués,
+comme `resilience::boot`), `approve` (première demande en attente de la session approuvée,
+tour de reprise joué), `usage` (dernier appel facturé de N tokens, fixture de la session
 froide) et `seed` (échanges semés dans l'historique sans appel au modèle). En tête :
 `pin_model` (alias épinglé, donc pas de classifieur), `[config]` (patchs
 `"chemin.pointé" = valeur`, réappliqués à chaque démarrage parce que la configuration de

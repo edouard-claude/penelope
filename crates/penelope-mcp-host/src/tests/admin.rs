@@ -77,6 +77,58 @@ async fn maintenance_stops_idle_servers_and_checks_health() {
     assert!(sonde.last_error.is_some(), "{sonde:?}");
 }
 
+/// Le serveur MCP de Slack répond `-32601 Method not found` à `ping` (#276). La sonde
+/// d'entretien comptait ce refus comme une panne : à chaque minute de silence le serveur
+/// repassait en `connecting` avec cette erreur, et `doctor` avertissait alors que ses
+/// outils répondaient. Il reste `ready`, et `ping` n'est envoyé qu'une fois par session.
+#[tokio::test]
+async fn a_server_that_refuses_ping_stays_ready_through_maintenance() {
+    let (_d, _s, clock, fake, sup) = setup().await;
+    let base = server(two_tools());
+    fake.serve(
+        "slack",
+        Arc::new(move |m, p| {
+            if m == "ping" {
+                return Err(McpError::Rpc {
+                    code: penelope_mcp::protocol::METHOD_NOT_FOUND,
+                    message: "Method not found: ping".into(),
+                    data: None,
+                });
+            }
+            base(m, p)
+        }),
+    );
+    declare(&sup, "slack", "idle_timeout = \"1h\"\n");
+    sup.reload().await;
+    sup.call("mcp__slack__list_issues", &json!({}), Default::default())
+        .await
+        .unwrap();
+
+    for _ in 0..2 {
+        clock.advance_ms(2 * 60_000);
+        sup.maintenance().await;
+    }
+    let st = sup
+        .statuses()
+        .await
+        .into_iter()
+        .find(|s| s.name == "slack")
+        .unwrap();
+    assert_eq!(st.state, ServerState::Ready, "{st:?}");
+    assert!(st.running && st.last_error.is_none(), "{st:?}");
+    let pings = fake
+        .last_transport("slack")
+        .call_log()
+        .await
+        .iter()
+        .filter(|(m, _)| m == "ping")
+        .count();
+    assert_eq!(pings, 1, "le refus est retenu pour la session");
+    sup.call("mcp__slack__list_issues", &json!({}), Default::default())
+        .await
+        .unwrap();
+}
+
 /// Au-delà de `mcp.max_processes`, les serveurs lazy les moins récemment utilisés
 /// s'arrêtent.
 #[tokio::test]

@@ -83,6 +83,8 @@ struct Life {
     services: Arc<Services>,
     daemon: Arc<Daemon>,
     gateway: Option<Arc<Gateway>>,
+    /// Le superviseur MCP de `[[mcp_servers]]`, pour que son entretien suive l'horloge.
+    mcp: Option<Arc<penelope_mcp_host::McpSupervisor>>,
 }
 
 struct Harness<'a> {
@@ -294,6 +296,11 @@ impl Harness<'_> {
                 Step::AdvanceClock { by } => {
                     let d = parse_duration(by).with_context(|| format!("durée `{by}`"))?;
                     self.clock.advance_ms(d.as_millis() as i64);
+                    // L'entretien MCP rattrape l'horloge, comme sa boucle de quinze
+                    // secondes l'aurait fait pendant ce temps (#276).
+                    if let Some(sup) = self.life.as_ref().and_then(|l| l.mcp.clone()) {
+                        sup.maintenance().await;
+                    }
                     Ok(json!({"clock": self.clock.now_rfc3339()}))
                 }
                 Step::Restart => self.restart().await,
