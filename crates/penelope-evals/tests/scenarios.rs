@@ -107,8 +107,11 @@ scenario_cases! {
     rpc_autorisation_mcp => "rpc-autorisation-mcp",
     rpc_mise_a_jour => "rpc-mise-a-jour",
     rpc_installation_skill => "rpc-installation-skill",
-    // Trace des outils sur Telegram (#222) : une bulle, créée puis modifiée en place.
+    // Trace des outils sur Telegram (#222) : une bulle, créée puis modifiée en place ;
+    // résumée en une ligne, ou narrée par le modèle du rôle `trace` (#273).
     trace_des_outils => "trace-des-outils",
+    trace_des_outils_resume => "trace-des-outils-resume",
+    trace_des_outils_narre => "trace-des-outils-narre",
     // Plan approuvé exécuté en phases durables (#191), par Telegram puis par la RPC.
     plan_en_phases => "plan-en-phases",
     rpc_plans => "rpc-plans",
@@ -211,4 +214,29 @@ async fn ca_4_6_reindex_is_lossless() {
     let audit = scenario::audit(&root().join(JOURNAL_CA)).await.unwrap();
     // Neuf messages, un résumé, des contextes figés, le plein texte : bien plus que rien.
     assert!(audit.reindexed >= 20, "{audit:?}");
+}
+
+/// #273 : le modèle du rôle `trace` ne voit que la liste déjà caviardée. Dans le scénario
+/// `trace-des-outils-narre`, le jeton passé à `fs_search` arrive au rôle sous la forme
+/// « [secret masqué] », et aucune requête vue par un modèle ne le porte en clair.
+#[test]
+fn the_trace_role_sees_the_masked_list_of_the_narrated_scenario() {
+    let surface =
+        std::fs::read_to_string(root().join("trace-des-outils-narre/surface.jsonl")).unwrap();
+    let trace_calls: Vec<serde_json::Value> = surface
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["model"].as_str().is_some_and(|m| m.starts_with("local:")))
+        .collect();
+    assert_eq!(trace_calls.len(), 2, "un appel au rôle trace par tour");
+    let user = trace_calls[0]["messages"][1]["text"].as_str().unwrap();
+    assert!(user.contains("fs_search [secret masqué] fini"), "{user}");
+    assert!(
+        user.starts_with("Phrase précédente : aucune\nÉtat : terminé\n"),
+        "{user}"
+    );
+    assert!(
+        !surface.contains("ghp_0123"),
+        "jeton en clair dans une requête"
+    );
 }

@@ -1,0 +1,9 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_read", "arguments": {"path": "notes.txt", "limit": 2}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "fs_read", "arguments": {"path": "notes.txt", "limit": 3}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "mem_search", "arguments": {"query": "Borealis"}}, {"id": "c4", "name": "time_now", "arguments": {}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "fs_search", "arguments": {"pattern": "ghp_0123456789abcdefghijABCDEFGHIJ012345", "path": "."}}]}}
+{"text": "Trois tâches : Borealis, la TVA d'ACME, la migration PROJ-7."}
+{"role": "trace", "text": "📄 Relecture des notes et du calendrier 🚀"}
+{"tool_calls": {"text": "", "calls": [{"id": "c6", "name": "fs_search", "arguments": {"pattern": "PROJ-7", "path": "."}}]}}
+{"text": "La migration PROJ-7 est à préparer."}
+{"role": "trace", "error": {"kind": "transient", "message": "connexion refusée (127.0.0.1:8080)"}}

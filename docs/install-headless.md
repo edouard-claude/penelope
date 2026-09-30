@@ -311,7 +311,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.burst_chars` | `20000` | Caractères cumulés à partir desquels elle demande de même. 0 : jamais. |
 | `telegram.home.chat` | `0` | Identifiant du chat (un groupe : `-100…`). 0 : le chat privé du propriétaire. |
 | `telegram.home.topic` | `0` | Sujet du groupe (`message_thread_id`). 0 : le sujet « Général ». |
-| `telegram.tool_trace` | `"compact"` | Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle), `compact` (l'outil et son argument principal, sans argument dans un groupe), `full` (plus un extrait du résultat, en privé seulement). Arguments et extraits sont caviardés. |
+| `telegram.tool_trace` | `"compact"` | Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle), `compact` (l'outil et son argument principal, sans argument dans un groupe), `full` (plus un extrait du résultat, en privé seulement), `resume` (une ligne par familles et verbes, « 📄 6 lectures, 7 recherches · 💻 `cargo test` en cours », sans modèle), `narre` (une phrase de 5 à 10 mots et un emoji, écrite par le modèle du rôle `trace`, par défaut un alias `local:` ; sans modèle joignable, `resume`) (#273). Arguments et extraits sont caviardés. |
 
 **[providers]**
 
@@ -641,6 +641,14 @@ penelope model set pointage openrouter:bytedance/ui-tars-1.5-7b
 penelope config set models.roles.image_locate pointage
 ```
 
+Le rôle `trace` (1.0.26, #273) écrit la phrase de la trace des outils sur Telegram quand
+`telegram.tool_trace = "narre"` : quelques centaines de jetons par appel, borné à 500 ms,
+donc un tout petit modèle. Il n'a pas d'entrée par défaut dans `models.roles` : sans
+`models.roles.trace`, l'alias `local`, puis le premier alias `local:` de texte, est pris ;
+sans alias local, la trace reste en `resume` et `penelope doctor` (`telegram.trace`) le dit.
+Un alias distant y est possible, à ses frais, et facturé comme tout appel du rôle. Voir
+[telegram.md](telegram.md#signes-de-vie).
+
 Changer de modèle, c'est donc changer **une** ligne : l'alias. Les workflows, les skills et
 les rôles n'ont pas à bouger. Le format est `provider:identifiant`, l'identifiant étant
 celui affiché sur openrouter.ai :
@@ -947,7 +955,10 @@ penelope config set models.routing.fallback.main '["cloud"]'
 (contrôle `local.<endpoint>`) : serveur joignable, modèles visés servis, fenêtre (celle
 annoncée, sinon `context_window`, `mlx_lm.server` ne l'annonçant pas), et part de l'entrée
 relue du cache du serveur sur sept jours. Un serveur arrêté est signalé avec la commande
-qui le relance. Un endpoint qui ne sert que la voix n'est pas sondé.
+qui le relance. Un endpoint qui ne sert que la voix n'est pas sondé. Quand la trace des
+outils est narrée (`telegram.tool_trace = "narre"`, #273), le contrôle `telegram.trace`
+nomme le modèle du rôle `trace` et échoue s'il n'y en a pas ou si son serveur ne répond
+pas : la bulle retombe alors sur la ligne `resume`.
 
 **Chiffres mesurés** le 29/09/2026 sur un MacBook Air M2 (`Mac14,2`), 24 Go,
 macOS 27.0, `mlx-lm` 0.31.3 (MLX 0.32.3), modèle `mlx-community/Qwen3-1.7B-4bit`, pendant

@@ -3,7 +3,7 @@
 //! fermeture attendue plutôt que supposée (références relâchées, checkpoint de l'écrivain
 //! SQLite fini) ; nouvel essai borné quand la base est encore verrouillée.
 
-use super::super::{Mode, ScriptLine, SeedRoot};
+use super::super::{Mode, ScriptEntry, ScriptLine, SeedRoot};
 use super::{
     Gateway, HEARTBEAT, Harness, Life, RETRY_STEP, SHUTDOWN_WAIT, descriptor, lock, outcome_json,
     workspace_of,
@@ -193,8 +193,13 @@ impl Harness<'_> {
     }
 
     /// Le fournisseur de la vie : mock qui rejoue le script, ou enregistreur autour du
-    /// vrai fournisseur (`RECORD_SCENARIO`, `OPENROUTER_API_KEY`).
+    /// vrai fournisseur (`RECORD_SCENARIO`, `OPENROUTER_API_KEY`). Les appels du modèle
+    /// du rôle `trace` (#273) prennent leurs lignes dans la file `"role": "trace"`.
     fn provider(&self, services: &Services) -> anyhow::Result<Arc<dyn Provider>> {
+        let trace_model = penelope_gateway_telegram::trace_role_model(&services.config.config());
+        let role_of = move |model: &str| -> Option<String> {
+            (trace_model.as_deref() == Some(model)).then(|| "trace".to_string())
+        };
         if self.mode == Mode::Record {
             let key = std::env::var("OPENROUTER_API_KEY")
                 .ok()
@@ -216,26 +221,38 @@ impl Harness<'_> {
                 set,
                 self.recorded.clone(),
                 self.seen.clone(),
+                Arc::new(role_of),
             )));
         }
         let mock = MockProvider::new();
-        let (script, seen) = (self.script.clone(), self.seen.clone());
+        let (script, roles, seen) = (self.script.clone(), self.roles.clone(), self.seen.clone());
         let errors = self.script_errors.clone();
         mock.set_responder(Some(Arc::new(move |req: &ChatRequest| {
             lock(&seen).push(req.clone());
-            match lock(&script).pop_front() {
-                Some(line) => match super::ids::resolve(&line, req) {
+            let next = match role_of(&req.model) {
+                Some(role) => lock(&roles)
+                    .get_mut(&role)
+                    .and_then(|q| q.pop_front())
+                    .ok_or_else(|| {
+                        format!(
+                            "script du rôle `{role}` épuisé : model.jsonl prévoit moins de \
+                             lignes `\"role\": \"{role}\"` que le scénario n'en appelle"
+                        )
+                    }),
+                None => lock(&script).pop_front().ok_or_else(|| {
+                    "script épuisé : model.jsonl prévoit moins d'appels que le scénario n'en fait"
+                        .to_string()
+                }),
+            };
+            match next {
+                Ok(line) => match super::ids::resolve(&line, req) {
                     Ok(line) => line.to_scripted(),
                     Err(e) => {
                         lock(&errors).push(e.clone());
                         Scripted::Error(LlmErrorKind::Other, e)
                     }
                 },
-                None => Scripted::Error(
-                    LlmErrorKind::Other,
-                    "script épuisé : model.jsonl prévoit moins d'appels que le scénario n'en fait"
-                        .into(),
-                ),
+                Err(e) => Scripted::Error(LlmErrorKind::Other, e),
             }
         })));
         Ok(Arc::new(mock))
@@ -423,18 +440,23 @@ pub(super) fn set_path(tree: &mut Value, path: &str, value: Value) -> Result<(),
 /// Fournisseur enregistreur (`RECORD_SCENARIO`) : enveloppe le vrai jeu de fournisseurs
 /// et transcrit chaque réponse en une ligne de `model.jsonl`. Implémenté, pas encore
 /// exercé contre un vrai modèle.
+/// Le rôle qu'un modèle sert dans le script (`trace`), `None` pour la conversation.
+type RoleOf = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 struct Recorder {
     set: ProviderSet,
     name: String,
-    lines: Shared<Vec<ScriptLine>>,
+    lines: Shared<Vec<ScriptEntry>>,
     seen: Shared<Vec<ChatRequest>>,
+    role_of: RoleOf,
 }
 
 impl Recorder {
     fn new(
         set: ProviderSet,
-        lines: Shared<Vec<ScriptLine>>,
+        lines: Shared<Vec<ScriptEntry>>,
         seen: Shared<Vec<ChatRequest>>,
+        role_of: RoleOf,
     ) -> Self {
         let name = if set.openrouter.is_some() {
             "openrouter"
@@ -446,6 +468,7 @@ impl Recorder {
             name: name.into(),
             lines,
             seen,
+            role_of,
         }
     }
 
@@ -519,18 +542,20 @@ impl Provider for Recorder {
         cancel: CancelToken,
     ) -> penelope_llm::types::Result<ChunkStream> {
         lock(&self.seen).push(req.clone());
+        let role = (self.role_of)(&req.model);
         let inner = self.inner(&req.model)?;
         let mut stream = match inner.chat_stream(req, cancel).await {
             Ok(s) => s,
             Err(e) => {
-                lock(&self.lines).push(if e.kind == LlmErrorKind::ContextLength {
+                let line = if e.kind == LlmErrorKind::ContextLength {
                     ScriptLine::ContextOverflow
                 } else {
                     ScriptLine::Error {
                         kind: format!("{:?}", e.kind).to_lowercase(),
                         message: e.message.clone(),
                     }
-                });
+                };
+                lock(&self.lines).push(ScriptEntry { role, line });
                 return Err(e);
             }
         };
@@ -557,7 +582,10 @@ impl Provider for Recorder {
                     break;
                 }
             }
-            lock(&lines).push(fold(text, calls, images, usage, finish, error));
+            lock(&lines).push(ScriptEntry {
+                role,
+                line: fold(text, calls, images, usage, finish, error),
+            });
         });
         Ok(rx)
     }

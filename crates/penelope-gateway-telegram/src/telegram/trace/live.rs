@@ -11,9 +11,14 @@
 //!   elle ne prend jamais le créneau de la réponse.
 //! - **Redémarrage** : chaque bulle ouverte est inscrite sous `tg.trace.open` ; au
 //!   démarrage suivant, elle est close (« interrompu par un redémarrage »).
+//! - **Narration** (`narre`, #273) : la bulle est créée avec la ligne `resume` ; c'est
+//!   dans la tâche de chaque modification, et à la clôture une fois la réponse partie, que
+//!   le modèle du rôle `trace` est appelé, borné, avec la phrase précédente. La boucle et
+//!   la réponse ne l'attendent jamais.
 
 use super::super::*;
 use super::Trace;
+use super::narrate::{self, Ask, Narrator};
 use penelope_kernel::config::ToolTrace as Mode;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
@@ -30,6 +35,8 @@ const FINAL_WAIT: Duration = Duration::from_secs(60);
 /// Attente maximale du rattrapage de la boucle par `deliver` : au-delà, la boucle est
 /// bloquée et la réponse ne l'attend plus.
 const BARRIER_WAIT: Duration = Duration::from_secs(10);
+/// Attente, à la clôture, d'une modification encore en vol (narration bornée comprise).
+const SETTLE_WAIT: Duration = Duration::from_secs(5);
 /// Bulles ouvertes, par tour : `kv` n'a pas de listage par préfixe, d'où une seule clé.
 pub(crate) const OPEN_KEY: &str = "tg.trace.open";
 
@@ -45,10 +52,24 @@ struct Open {
     trace: Trace,
     mode: Mode,
     group: bool,
+    /// Dernière phrase narrée (`narre`), absente des bulles d'avant #273.
+    #[serde(default)]
+    phrase: Option<String>,
+}
+
+/// Ce qu'une modification rapporte à la boucle une fois finie.
+struct Edited {
+    /// L'état acquitté ; `None` : la modification a échoué, le prochain pas la rejoue.
+    acked: Option<String>,
+    /// Le texte posé sur la bulle, s'il a changé.
+    shown: Option<String>,
+    /// La phrase rendue par le modèle, s'il y en a eu une.
+    phrase: Option<String>,
 }
 
 /// L'état d'un tour suivi par la boucle.
 struct Live {
+    turn_id: String,
     session_id: String,
     chat_id: i64,
     topic_id: Option<i64>,
@@ -58,17 +79,25 @@ struct Live {
     /// Ligne `tg_outbox` de la création ; `None` tant qu'aucun outil n'a été appelé.
     outbox_id: Option<String>,
     message_id: Option<i64>,
-    /// Dernier texte posé sur la bulle (création comprise).
+    /// Dernier état acquitté : le rendu de la trace (création comprise). En `narre`,
+    /// c'est la ligne `resume`, clé de l'état que la dernière narration a décrit.
     acked: String,
+    /// Le texte réellement posé sur la bulle : en `narre`, la phrase.
+    shown: String,
+    /// Le modèle du rôle `trace` (`narre` seulement, résolu au début du tour).
+    narrator: Option<Narrator>,
+    /// La dernière phrase rendue, passée au modèle pour qu'il la garde si rien n'a changé.
+    phrase: Option<String>,
     last: Instant,
     checked: Instant,
     /// Modification en vol : elle rend son texte si elle a abouti.
-    in_flight: Option<tokio::task::JoinHandle<Option<String>>>,
+    in_flight: Option<tokio::task::JoinHandle<Edited>>,
     /// Session passée en arrière-plan : la bulle se fige (#10).
     frozen: bool,
 }
 
 impl Live {
+    /// Le rendu de la trace : ce que la bulle montre hors narration, et la clé de l'état.
     fn text(&self) -> String {
         self.trace.render(self.mode, self.group)
     }
@@ -87,15 +116,86 @@ impl Live {
             trace: self.trace.clone(),
             mode: self.mode,
             group: self.group,
+            phrase: self.phrase.clone(),
         })
     }
-    /// Relève le texte d'une modification terminée.
+    fn apply(&mut self, e: Edited) {
+        if let Some(k) = e.acked {
+            self.acked = k;
+        }
+        if let Some(t) = e.shown {
+            self.shown = t;
+        }
+        if e.phrase.is_some() {
+            self.phrase = e.phrase;
+        }
+    }
+    /// Relève ce qu'une modification terminée rapporte.
     async fn reap(&mut self) {
         if self.in_flight.as_ref().is_some_and(|h| h.is_finished())
             && let Some(h) = self.in_flight.take()
-            && let Ok(Some(text)) = h.await
+            && let Ok(e) = h.await
         {
-            self.acked = text;
+            self.apply(e);
+        }
+    }
+    /// Attend la modification en vol, bornée : à la clôture, la phrase qu'elle a obtenue
+    /// est celle que la dernière narration doit connaître.
+    async fn settle(&mut self) {
+        if let Some(h) = self.in_flight.take() {
+            match tokio::time::timeout(SETTLE_WAIT, h).await {
+                Ok(Ok(e)) => self.apply(e),
+                Ok(Err(_)) => {}
+                Err(_) => tracing::warn!("modification de la trace des outils bloquée"),
+            }
+        }
+    }
+    /// Ce qu'une modification emporte pour composer le texte hors de la boucle.
+    fn job(&self) -> Job {
+        Job {
+            turn_id: self.turn_id.clone(),
+            session_id: self.session_id.clone(),
+            mode: self.mode,
+            narrator: self.narrator.clone(),
+            trace: self.trace.clone(),
+            previous: self.phrase.clone(),
+        }
+    }
+}
+
+/// L'état d'un tour au moment d'une modification, hors de la boucle.
+struct Job {
+    turn_id: String,
+    session_id: String,
+    mode: Mode,
+    narrator: Option<Narrator>,
+    trace: Trace,
+    previous: Option<String>,
+}
+
+impl Job {
+    /// Le texte à poser pour l'état `key` : en `narre`, la phrase du modèle (bornée, une
+    /// tentative) coiffée des lignes de fin ; sans phrase, `key` (la ligne `resume`).
+    async fn compose(&self, daemon: &Core, key: &str) -> (String, Option<String>) {
+        let Some(n) = self.narrator.as_ref().filter(|_| self.mode.narrates()) else {
+            return (key.to_string(), None);
+        };
+        let ask = Ask {
+            session_id: &self.session_id,
+            turn_id: &self.turn_id,
+            previous: self.previous.as_deref(),
+        };
+        match narrate::narrate(
+            &daemon.services,
+            daemon.providers.as_ref(),
+            n,
+            &self.trace,
+            ask,
+        )
+        .await
+        {
+            Some(p) => (self.trace.narrated(&p), Some(p)),
+            None => (key.to_string(), None),
         }
     }
 }
@@ -199,14 +299,23 @@ impl TelegramGateway {
         let turn_id = ev.turn_id.clone();
         if let BusKind::Started = ev.kind {
             // Relu à chaque tour : `config set telegram.tool_trace` s'applique à chaud.
-            let mode = self.daemon.services.config.config().telegram.tool_trace;
+            let cfg = self.daemon.services.config.config();
+            let mut mode = cfg.telegram.tool_trace;
             if mode == Mode::Off || self.out_of_focus(&ev.session_id, chat_id, topic_id).await {
                 return;
             }
+            // `narre` sans modèle pour le rôle `trace` : `resume` pour ce tour, `doctor`
+            // le dit (#273).
+            let narrator = mode.narrates().then(|| narrate::role_model(&cfg)).flatten();
+            if mode.narrates() && narrator.is_none() {
+                tracing::debug!("trace des outils : aucun modèle pour le rôle trace, resume");
+                mode = Mode::Resume;
+            }
             self.trace_busy.fetch_add(1, Ordering::SeqCst);
             lives.insert(
-                turn_id,
+                turn_id.clone(),
                 Live {
+                    turn_id,
                     session_id: ev.session_id.clone(),
                     chat_id,
                     topic_id,
@@ -216,6 +325,9 @@ impl TelegramGateway {
                     outbox_id: None,
                     message_id: None,
                     acked: String::new(),
+                    shown: String::new(),
+                    narrator,
+                    phrase: None,
                     last: Instant::now(),
                     checked: Instant::now(),
                     in_flight: None,
@@ -225,11 +337,10 @@ impl TelegramGateway {
             return;
         }
         if let BusKind::Finished(_) = ev.kind {
+            // La modification en vol n'est pas abandonnée : `close_bubble` l'attend, pour
+            // connaître le texte posé et la phrase obtenue avant la dernière narration.
             if let Some(mut l) = lives.remove(&turn_id) {
                 l.trace.finish();
-                if let Some(h) = l.in_flight.take() {
-                    h.abort();
-                }
                 let me = self.clone();
                 tokio::spawn(async move { me.close_bubble(&turn_id, l).await });
             }
@@ -261,7 +372,8 @@ impl TelegramGateway {
         }
     }
 
-    /// Le premier appel du tour : la bulle part par la file d'envoi.
+    /// Le premier appel du tour : la bulle part par la file d'envoi. En `narre`, avec la
+    /// ligne `resume` : le modèle n'est jamais attendu avant la réponse.
     async fn create_bubble(&self, turn_id: &str, l: &mut Live) {
         let text = l.text();
         let mut payload = json!({
@@ -280,7 +392,8 @@ impl TelegramGateway {
         {
             Ok(id) => {
                 l.outbox_id = Some(id);
-                l.acked = text;
+                l.acked = text.clone();
+                l.shown = text;
                 l.last = Instant::now();
                 self.remember_open(turn_id, l.open()).await;
             }
@@ -293,14 +406,15 @@ impl TelegramGateway {
     }
 
     /// Une modification si l'état a changé, que rien n'est en vol et que la cadence le
-    /// permet.
+    /// permet. Le texte est composé dans la tâche : en `narre`, c'est là que le modèle
+    /// parle, et une phrase identique à celle posée ne modifie rien (pas de clignotement).
     async fn maybe_edit(&self, l: &mut Live) {
         l.reap().await;
         if l.frozen || l.outbox_id.is_none() || l.in_flight.is_some() {
             return;
         }
-        let text = l.text();
-        if text == l.acked || l.last.elapsed() < l.every() {
+        let key = l.text();
+        if key == l.acked || l.last.elapsed() < l.every() {
             return;
         }
         if l.message_id.is_none() {
@@ -310,19 +424,36 @@ impl TelegramGateway {
             return;
         };
         l.last = Instant::now();
-        let (bot, chat_id) = (self.bot.clone(), l.chat_id);
+        let (bot, chat_id, shown) = (self.bot.clone(), l.chat_id, l.shown.clone());
+        let (daemon, job) = (self.daemon.clone(), l.job());
         l.in_flight = Some(tokio::spawn(async move {
-            bot.edit_trace(chat_id, message_id, &text)
-                .await
-                .ok()
-                .map(|_| text)
+            let (text, phrase) = job.compose(&daemon, &key).await;
+            if text == shown {
+                return Edited {
+                    acked: Some(key),
+                    shown: None,
+                    phrase,
+                };
+            }
+            match bot.edit_trace(chat_id, message_id, &text).await {
+                Ok(()) => Edited {
+                    acked: Some(key),
+                    shown: Some(text),
+                    phrase,
+                },
+                Err(_) => Edited {
+                    acked: None,
+                    shown: None,
+                    phrase,
+                },
+            }
         }));
     }
 
     /// Fin du tour : la file du chat se vide (la réponse est partie), puis l'état final.
     async fn close_bubble(&self, turn_id: &str, mut l: Live) {
         if l.outbox_id.is_some() && !l.frozen {
-            let text = l.text();
+            let key = l.text();
             let started = Instant::now();
             while self.chat_pending(l.chat_id).await > 0
                 && started.elapsed() < FINAL_WAIT
@@ -330,13 +461,17 @@ impl TelegramGateway {
             {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+            l.settle().await;
             if l.message_id.is_none() {
                 l.message_id = self.sent_message_id(l.outbox_id.as_deref()).await;
             }
             if let Some(message_id) = l.message_id
-                && text != l.acked
+                && key != l.acked
             {
-                self.final_edit(l.chat_id, message_id, &text).await;
+                let (text, _) = l.job().compose(&self.daemon, &key).await;
+                if text != l.shown {
+                    self.final_edit(l.chat_id, message_id, &text).await;
+                }
             }
         }
         self.forget_open(turn_id).await;

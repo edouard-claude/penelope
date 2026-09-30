@@ -106,6 +106,12 @@ pub trait ChannelDelivery: Send + Sync {
         Ok(())
     }
 
+    /// Les contrôles de `doctor` qui n'ont de sens que pour ce canal (#273 : le modèle du
+    /// rôle `trace` quand la trace des outils est narrée). Par défaut : aucun.
+    async fn doctor_checks(&self) -> Vec<penelope_kernel::api::DoctorCheck> {
+        Vec::new()
+    }
+
     /// Alerte d'une planification qui n'a pas pu s'exécuter, avec ses boutons (issue #39).
     async fn schedule_alert(
         &self,

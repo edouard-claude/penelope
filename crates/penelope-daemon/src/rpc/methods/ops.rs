@@ -39,6 +39,9 @@ impl Rpc {
                     .await,
                 );
                 checks.push(penelope_ops::backup::doctor_check(&self.daemon.services).await);
+                if let Some(channel) = self.daemon.hooks.delivery() {
+                    checks.extend(channel.doctor_checks().await);
+                }
                 // Boucles de fond relancées ou mortes (#84).
                 checks.push(penelope_app::tasks::doctor_check(
                     &self.daemon.supervision(),

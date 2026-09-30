@@ -81,12 +81,15 @@ pub struct Telegram {
     /// Trace des outils d'un tour (issue #222) : une bulle éditée en place qui groupe les
     /// appels consécutifs (« 💻 shell_exec · echo test (×4) ✅ »). `off` (aucune bulle),
     /// `compact` (l'outil et son argument principal, sans argument dans un groupe),
-    /// `full` (plus un extrait du résultat, en privé seulement). Arguments et extraits
-    /// sont caviardés.
+    /// `full` (plus un extrait du résultat, en privé seulement), `resume` (une ligne par
+    /// familles et verbes, « 📄 6 lectures, 7 recherches · 💻 `cargo test` en cours »,
+    /// sans modèle), `narre` (une phrase de 5 à 10 mots et un emoji, écrite par le modèle
+    /// du rôle `trace`, par défaut un alias `local:` ; sans modèle joignable, `resume`)
+    /// (#273). Arguments et extraits sont caviardés.
     pub tool_trace: ToolTrace,
 }
 
-/// Trace des outils d'un tour sur Telegram (issue #222).
+/// Trace des outils d'un tour sur Telegram (issue #222 ; `resume` et `narre` : #273).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolTrace {
@@ -96,6 +99,28 @@ pub enum ToolTrace {
     #[default]
     Compact,
     Full,
+    /// Une ligne déterministe, par famille et par verbe, sans appel de modèle. C'est
+    /// aussi le repli de `narre`.
+    Resume,
+    /// Une phrase courte avec un emoji, écrite par le modèle du rôle `trace` à chaque
+    /// modification de la bulle ; `resume` quand le modèle manque, tarde ou déraille.
+    Narre,
+}
+
+impl ToolTrace {
+    /// Les valeurs admises, dans l'ordre du moins au plus bavard puis les deux modes
+    /// résumés : pour les messages qui les listent.
+    pub const ALL: &'static [&'static str] = &["off", "compact", "full", "resume", "narre"];
+
+    /// Le mode passe par le modèle du rôle `trace`.
+    pub fn narrates(self) -> bool {
+        matches!(self, ToolTrace::Narre)
+    }
+
+    /// La bulle tient en une ligne résumée (modèle ou non) plutôt qu'en une liste.
+    pub fn summarises(self) -> bool {
+        matches!(self, ToolTrace::Resume | ToolTrace::Narre)
+    }
 }
 
 /// Foyer du propriétaire sur Telegram (issue #143) : le chat privé n'est plus lu dès que

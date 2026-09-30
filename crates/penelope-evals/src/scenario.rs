@@ -421,6 +421,44 @@ impl ScriptLine {
     }
 }
 
+/// Une ligne de `model.jsonl` et le rôle qu'elle sert : sans `"role"`, le modèle de
+/// conversation, dans l'ordre du fichier ; `"role": "trace"` (#273), le modèle du rôle
+/// `trace` de la trace des outils, dont les appels se glissent entre ceux du tour sans
+/// leur voler une ligne. Chaque rôle a sa file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptEntry {
+    pub role: Option<String>,
+    pub line: ScriptLine,
+}
+
+impl Serialize for ScriptEntry {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut v = serde_json::to_value(&self.line).map_err(serde::ser::Error::custom)?;
+        if let (Some(role), Some(map)) = (&self.role, v.as_object_mut()) {
+            map.insert("role".into(), Value::String(role.clone()));
+        }
+        v.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let mut v = Value::deserialize(d)?;
+        let role = v
+            .as_object_mut()
+            .and_then(|m| m.remove("role"))
+            .map(|r| match r {
+                Value::String(r) => Ok(r),
+                other => Err(serde::de::Error::custom(format!(
+                    "`role` attend un nom de rôle, reçu {other}"
+                ))),
+            })
+            .transpose()?;
+        let line = serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+        Ok(ScriptEntry { role, line })
+    }
+}
+
 fn error_kind(name: &str) -> LlmErrorKind {
     match name {
         "transient" => LlmErrorKind::Transient,
@@ -442,7 +480,7 @@ fn error_kind(name: &str) -> LlmErrorKind {
 pub struct Scenario {
     pub dir: PathBuf,
     pub spec: Spec,
-    pub script: Vec<ScriptLine>,
+    pub script: Vec<ScriptEntry>,
 }
 
 pub const SPEC_FILE: &str = "scenario.toml";
@@ -503,7 +541,7 @@ pub fn load(dir: &Path) -> anyhow::Result<Scenario> {
     })
 }
 
-fn load_script(path: &Path) -> anyhow::Result<Vec<ScriptLine>> {
+fn load_script(path: &Path) -> anyhow::Result<Vec<ScriptEntry>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -513,7 +551,7 @@ fn load_script(path: &Path) -> anyhow::Result<Vec<ScriptLine>> {
         .enumerate()
         .filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
         .map(|(i, l)| {
-            serde_json::from_str::<ScriptLine>(l)
+            serde_json::from_str::<ScriptEntry>(l)
                 .map_err(|e| anyhow::anyhow!("{} ligne {} : {e}", path.display(), i + 1))
         })
         .collect()

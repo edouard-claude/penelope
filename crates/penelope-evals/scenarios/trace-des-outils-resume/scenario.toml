@@ -1,0 +1,28 @@
+name = "trace-des-outils-resume"
+description = """Trace des outils en mode `resume` (issue #273) : la bulle tient en une ligne comptée
+par famille et par verbe, sans appel de modèle. Treize appels de fichiers (sept recherches, six
+lectures) puis une commande : la bulle est créée à la première recherche (« 📄 1 recherche en
+cours ») et finit sur « 📄 7 recherches, 6 lectures · 💻 `ls` · ✅ », la réponse partie entre
+les deux. Le motif de recherche qui porte un jeton est caviardé avant tout."""
+
+[config]
+"models.routing.classifier" = false
+"telegram.tool_trace" = "resume"
+
+[[files]]
+path = "notes/septembre.md"
+content = """- relancer le client Borealis
+- vérifier la TVA du devis ACME
+"""
+
+[[files]]
+path = "notes/aout.md"
+content = "- préparer la migration PROJ-7\n"
+
+[[files]]
+path = "notes/juillet.md"
+content = "- congés\n"
+
+[[steps]]
+kind = "telegram"
+text = "fais le point sur mes notes de septembre"

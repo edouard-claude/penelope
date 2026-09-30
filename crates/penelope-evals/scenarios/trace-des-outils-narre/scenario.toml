@@ -1,0 +1,27 @@
+name = "trace-des-outils-narre"
+description = """Trace des outils en mode `narre` (issue #273) : la bulle est créée avec la ligne
+`resume` (le modèle n'est jamais sur le chemin de la réponse), puis la phrase du modèle du rôle
+`trace` la remplace, un emoji de la liste fermée en tête ; le prompt du rôle ne porte que la
+liste déjà caviardée. Le rôle n'est pas configuré : l'alias `local:` est pris par défaut, et
+ses lignes de `model.jsonl` portent `"role": "trace"`. Deuxième tour : le serveur du rôle
+répond par une erreur, la bulle finit sur la ligne `resume`, sans un mot d'erreur."""
+
+[config]
+"models.routing.classifier" = false
+"telegram.tool_trace" = "narre"
+"models.aliases.local" = "local:mlx-community/Qwen3-1.7B-4bit"
+
+[[files]]
+path = "notes.txt"
+content = """- relancer le client Borealis
+- vérifier la TVA du devis ACME
+- préparer la migration PROJ-7
+"""
+
+[[steps]]
+kind = "telegram"
+text = "fais le point sur mes notes"
+
+[[steps]]
+kind = "telegram"
+text = "et la migration ?"

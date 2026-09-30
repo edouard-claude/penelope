@@ -1,0 +1,8 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_search", "arguments": {"pattern": "Borealis", "path": "notes"}}, {"id": "c2", "name": "fs_search", "arguments": {"pattern": "ACME", "path": "notes"}}, {"id": "c3", "name": "fs_search", "arguments": {"pattern": "PROJ-7", "path": "notes"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c4", "name": "fs_list", "arguments": {"path": "notes"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c5", "name": "fs_read", "arguments": {"path": "notes/septembre.md"}}, {"id": "c6", "name": "fs_read", "arguments": {"path": "notes/septembre.md", "limit": 1}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c7", "name": "fs_search", "arguments": {"pattern": "TVA", "path": "notes"}}, {"id": "c8", "name": "fs_search", "arguments": {"pattern": "devis", "path": "notes"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c9", "name": "fs_read", "arguments": {"path": "notes/septembre.md", "limit": 2}}, {"id": "c10", "name": "fs_read", "arguments": {"path": "notes/aout.md"}}, {"id": "c11", "name": "fs_read", "arguments": {"path": "notes/juillet.md"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c12", "name": "fs_search", "arguments": {"pattern": "ghp_0123456789abcdefghijABCDEFGHIJ012345", "path": "."}}, {"id": "c13", "name": "fs_search", "arguments": {"pattern": "migration", "path": "notes"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c14", "name": "shell_exec", "arguments": {"command": "ls"}}]}}
+{"text": "Deux tâches en septembre : Borealis et la TVA d'ACME."}
