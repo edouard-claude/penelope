@@ -683,8 +683,33 @@ fn first_difference(x: &Value, y: &Value, path: String) -> Option<(String, Strin
             }
             None
         }
+        // Deux textes longs (un prompt système rendu) : `short` ne montrerait que leur
+        // début commun. On cadre le premier caractère qui diffère, des deux côtés.
+        (Value::String(a), Value::String(b)) => Some((path, text_window(a, b), text_window(b, a))),
         _ => Some((path, short(x), short(y))),
     }
+}
+
+/// `text` cadré autour du premier caractère où il diverge de `other` : la position, 60
+/// caractères avant et 200 après, pour lire l'écart sans rejouer.
+fn text_window(text: &str, other: &str) -> String {
+    let a: Vec<char> = text.chars().collect();
+    let b: Vec<char> = other.chars().collect();
+    let at = a
+        .iter()
+        .zip(b.iter())
+        .position(|(x, y)| x != y)
+        .unwrap_or(a.len().min(b.len()));
+    if a.len() <= 400 && at < 200 {
+        return serde_json::to_string(text).unwrap_or_default();
+    }
+    let start = at.saturating_sub(60);
+    let end = (at + 200).min(a.len());
+    let window: String = a[start..end].iter().collect();
+    format!(
+        "[car. {at}] …{}…",
+        serde_json::to_string(&window).unwrap_or_default()
+    )
 }
 
 pub fn compare_world(name: &str, expected: &[Value], actual: &[Value]) -> Result<(), String> {
@@ -803,6 +828,25 @@ mod tests {
         assert!(
             err.contains("premier écart en .result[1].ok : attendu true, obtenu false"),
             "{err}"
+        );
+    }
+
+    /// Un long texte (prompt système rendu) est cadré autour du premier caractère qui
+    /// diffère, avec sa position : le début commun ne cache plus l'écart.
+    #[test]
+    fn a_long_text_difference_is_framed_around_the_first_differing_char() {
+        let common = "x".repeat(900);
+        let e = vec![json!({"type": "event", "rendered": format!("{common}Machine : A")})];
+        let a = vec![json!({"type": "event", "rendered": format!("{common}Machine : B")})];
+        let err = compare_world("x", &e, &a).unwrap_err();
+        assert!(err.contains("[car. 910]"), "{err}");
+        assert!(
+            err.contains("Machine : A") && err.contains("Machine : B"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(&"x".repeat(100)),
+            "le début commun ne doit pas être recopié : {err}"
         );
     }
     use super::*;
