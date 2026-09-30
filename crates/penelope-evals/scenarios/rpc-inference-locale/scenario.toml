@@ -6,16 +6,12 @@ contrôle `local.local` le dit, avec la fenêtre configurée faute d'annonce et 
 préfixe pas encore mesuré. `main` repointé (`model.set`) vers un modèle absent du cache : le
 contrôle échoue en nommant l'alias, le modèle et ce que le serveur sert.
 
-Puis `main` repointé vers Llama 3.2, servi, dont les appels sont rendus en texte : deux
+D'abord `main` repointé vers Llama 3.2, servi, dont les appels sont rendus en texte : deux
 appels identiques (`time_now`) qui portent le **même identifiant**, `call_0`, celui que la
 relecture donnait à chacun (#266). Le second est un autre appel : il s'exécute et rend
 l'heure avancée, le ledger porte deux effets, le second sous une identité ancrée au message
 qui le porte, et l'écart est journalisé (`tool.call_id_reused`)."""
 pin_model = "main"
-# Le `doctor` du premier pas rafraîchit l'inventaire de la machine, donc la ligne
-# « Machine : » entre dans le prompt système avec l'OS et le profil de bac à sable
-# réels (macOS ici, Linux en CI) : masqués, le reste de la ligne est déterministe.
-masks = ["Machine : [^,]+, bac à sable `[a-z-]+`"]
 
 [config]
 "providers.local.enabled" = true
@@ -26,21 +22,6 @@ masks = ["Machine : [^,]+, bac à sable `[a-z-]+`"]
 path = "/v1/models"
 method = "GET"
 body = """{"object": "list", "data": [{"id": "mlx-community/Qwen3-1.7B-4bit", "object": "model", "created": 1790674667}, {"id": "mlx-community/Llama-3.2-1B-Instruct-4bit", "object": "model", "created": 1790674667}]}"""
-
-[[steps]]
-kind = "rpc"
-method = "doctor"
-only = { id = ["local.*"] }
-
-[[steps]]
-kind = "rpc"
-method = "model.set"
-params = { alias = "main", model = "local:mlx-community/Qwen3-8B-4bit" }
-
-[[steps]]
-kind = "rpc"
-method = "doctor"
-only = { id = ["local.*"] }
 
 [[steps]]
 kind = "rpc"
@@ -58,3 +39,23 @@ by = "10m"
 [[steps]]
 kind = "message"
 text = "et maintenant ?"
+
+[[steps]]
+kind = "rpc"
+method = "model.set"
+params = { alias = "main", model = "local:mlx-community/Qwen3-1.7B-4bit" }
+
+[[steps]]
+kind = "rpc"
+method = "doctor"
+only = { id = ["local.*"] }
+
+[[steps]]
+kind = "rpc"
+method = "model.set"
+params = { alias = "main", model = "local:mlx-community/Qwen3-8B-4bit" }
+
+[[steps]]
+kind = "rpc"
+method = "doctor"
+only = { id = ["local.*"] }
