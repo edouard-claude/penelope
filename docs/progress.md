@@ -12,6 +12,35 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.28
+
+**Détecteur d'injection : `hidden_unicode` prenait l'emoji 🏃‍♀️ pour des caractères cachés
+(#271).** Chaque message WhatsApp lu par MCP dont le nom de conversation contient un emoji
+composé déclenchait l'alerte du détecteur local, ce qui la rend bruyante et finira par la
+faire ignorer.
+
+- Cause : la règle était une classe de caractères `[\u{200b}-\u{200f} …]` qui compte le
+  joigneur U+200D quel que soit son voisinage ; 🏃‍♀️ est U+1F3C3 U+200D U+2640 U+FE0F. Le
+  sélecteur U+FE0F, lui, n'était pas regardé du tout.
+- Correctif : la règle devient un parcours qui lit les voisins (`Matcher::Scan`, à côté des
+  règles regex). Le joigneur ne compte pas entre deux pictogrammes (en sautant un sélecteur,
+  cas de 👁️‍🗨️), un U+FE0E/U+FE0F ne compte pas derrière un caractère qui admet la
+  présentation emoji (pictogramme ou base de touche `#️⃣`). Restent signalés : les balises
+  de tag U+E0000..U+E007F (même dans un drapeau subdivisionnel, c'est le vecteur des
+  injections invisibles), les contrôles bidi, dont les isolats U+2066..U+2069 qui
+  manquaient, les espaces de largeur nulle et gluons, le BOM, un joigneur isolé, doublé ou
+  entre lettres, et tout sélecteur de variante hors séquence (une lettre suivie de FE0F, un
+  second sélecteur derrière un emoji, FE00..FE0D). Les pictogrammes sont reconnus par
+  blocs (`is_pictograph`), sans dépendance : distinguer un symbole d'une lettre suffit ici.
+- Tests : `emoji_sequences_are_not_hidden_unicode` (l'extrait de l'issue, drapeaux, tons de
+  peau, famille à trois joigneurs, ⚡️, ©️, touches, ☺︎) et
+  `hidden_unicode_still_catches_invisible_payloads` (seize charges invisibles), tous deux
+  rouges avant le correctif ; `detects_hidden_unicode` et `ca_13_1` inchangés.
+- Ce qui continue de marcher : les neuf autres règles et leur ordre, la borne de dix
+  signalements, l'extrait cité dans l'alerte, `wrap_untrusted`.
+
+Closes #271.
+
 ### 1.0.25
 
 **Scénarios : deux rejeux de `plan-en-phases` différaient par intermittence sur la CI
