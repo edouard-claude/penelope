@@ -241,6 +241,10 @@ pub enum LocalCmd {
         /// Plafond de sortie par réponse : le défaut du serveur (512) coupe les réponses.
         #[arg(long, default_value_t = 16_384)]
         max_tokens: u32,
+        /// Éteint la réflexion au serveur (`--chat-template-args '{"enable_thinking": false}'`) :
+        /// sinon Qwen3 écrit `<think>` avant chaque réponse et le rôle `trace` la rejette (#280).
+        #[arg(long)]
+        no_think: bool,
     },
     /// Arrête le serveur et retire son LaunchAgent.
     Uninstall {

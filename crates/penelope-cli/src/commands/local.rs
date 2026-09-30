@@ -30,6 +30,7 @@ pub(super) fn run(cli: &Cli, cmd: &LocalCmd) -> CliResult<()> {
             model,
             server,
             max_tokens,
+            no_think,
             ..
         } => {
             let server = match server {
@@ -42,7 +43,7 @@ pub(super) fn run(cli: &Cli, cmd: &LocalCmd) -> CliResult<()> {
                     )
                 })?,
             };
-            let args = server_args(&server, model, &endpoint.base_url, *max_tokens)?;
+            let args = server_args(&server, model, &endpoint.base_url, *max_tokens, *no_think)?;
             let unit = service(args.clone())?
                 .install(&server, None)
                 .map_err(|e| CliError::Io(e.to_string()))?;
@@ -97,13 +98,19 @@ fn endpoint_of<'a>(cfg: &'a Config, name: &str) -> CliResult<&'a LocalProvider> 
     })
 }
 
+/// Le réglage du gabarit de conversation qui éteint la réflexion de Qwen3 : un seul
+/// argument, le LaunchAgent le reçoit sans passer par un shell.
+const NO_THINK_ARGS: &str = r#"{"enable_thinking": false}"#;
+
 /// Arguments de `mlx_lm.server` pour l'adresse de l'endpoint. Seule une adresse de
-/// bouclage est acceptée : le serveur n'a pas d'authentification.
+/// bouclage est acceptée : le serveur n'a pas d'authentification. `no_think` ajoute
+/// `--chat-template-args` (#280).
 pub(super) fn server_args(
     server: &std::path::Path,
     model: &str,
     base_url: &str,
     max_tokens: u32,
+    no_think: bool,
 ) -> CliResult<Vec<String>> {
     let rest = base_url.strip_prefix("http://").ok_or_else(|| {
         CliError::Usage(format!(
@@ -129,7 +136,7 @@ pub(super) fn server_args(
             )));
         }
     };
-    Ok(vec![
+    let mut args = vec![
         server.to_string_lossy().to_string(),
         "--model".into(),
         model.into(),
@@ -139,7 +146,12 @@ pub(super) fn server_args(
         port.to_string(),
         "--max-tokens".into(),
         max_tokens.to_string(),
-    ])
+    ];
+    if no_think {
+        args.push("--chat-template-args".into());
+        args.push(NO_THINK_ARGS.into());
+    }
+    Ok(args)
 }
 
 /// Ce qui reste à régler pour que Pénélope se serve du serveur installé.
@@ -178,6 +190,7 @@ mod tests {
             "mlx-community/Qwen3-8B-4bit",
             "http://127.0.0.1:8081/v1",
             16_384,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -186,15 +199,35 @@ mod tests {
              --port 8081 --max-tokens 16384"
         );
         let s = Path::new("mlx_lm.server");
-        assert!(server_args(s, "m", "http://localhost:8080/v1", 1).is_ok());
+        assert!(server_args(s, "m", "http://localhost:8080/v1", 1, false).is_ok());
         for refused in [
             "http://0.0.0.0:8080/v1",
             "http://192.168.1.2:8080/v1",
             "https://127.0.0.1:8080/v1",
             "http://127.0.0.1/v1",
         ] {
-            assert!(server_args(s, "m", refused, 1).is_err(), "{refused}");
+            assert!(server_args(s, "m", refused, 1, false).is_err(), "{refused}");
         }
+    }
+
+    /// `--no-think` (#280) : le réglage du gabarit part en un seul argument, du JSON que
+    /// `mlx_lm.server` lit tel quel ; sans l'option, rien n'est ajouté.
+    #[test]
+    fn no_think_turns_off_the_thinking_at_the_server() {
+        let s = Path::new("mlx_lm.server");
+        let args = server_args(s, "m", "http://127.0.0.1:8080/v1", 1, true).unwrap();
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["--chat-template-args", r#"{"enable_thinking": false}"#]
+        );
+        let v: serde_json::Value = serde_json::from_str(&args[args.len() - 1]).unwrap();
+        assert_eq!(v["enable_thinking"], false);
+        assert!(
+            !server_args(s, "m", "http://127.0.0.1:8080/v1", 1, false)
+                .unwrap()
+                .iter()
+                .any(|a| a.contains("thinking"))
+        );
     }
 
     #[test]

@@ -529,27 +529,38 @@ Deux modes de plus, du moins cher au plus riche (1.0.26, #273), quand quinze lig
   « rappels » et « notes », un outil MCP « appels `<serveur>` » ; la commande shell est
   citée en privé, comptée en groupe. Aucun appel de modèle, aucune latence.
 - `narre` : à chaque modification de la bulle, le modèle du rôle `trace` reçoit la liste
-  des appels dans l'ordre, avec leurs arguments **déjà caviardés**, leur état (en cours,
-  fini, échoué, refusé) et la phrase précédente, et rend une phrase de 5 à 10 mots derrière
-  un emoji d'une liste fermée (📄 lecture, ✍️ écriture, 🔎 recherche, 💻 commande, 🌐
-  réseau, 🧠 mémoire, 🌿 git, 🔌 MCP, ⏸️ attente d'approbation, ✅ fini, 🚫 refusé) :
-  « 📄 Relecture des notes de septembre ». La phrase remplace la liste ; un emoji hors
-  liste est remplacé par celui de l'activité, un pictogramme de plus est retiré, une réponse
-  vide, trop longue ou porteuse d'un secret est ignorée. La consigne « garde la phrase
-  précédente si l'activité n'a pas changé » évite le clignotement : une phrase identique ne
-  modifie pas la bulle. Le modèle ne voit jamais un résultat d'outil ni un contenu de
+  des douze derniers groupes d'appels dans l'ordre (« 2. fs_read notes.txt (×2) fini »),
+  arguments **déjà caviardés**, état (en cours, fini, échoué, refusé, sans réponse), et
+  rend une phrase de 4 à 8 mots qui dit le sujet du travail, derrière un emoji d'une liste
+  fermée donnée au modèle (📄 lecture de fichiers, ✍️ écriture ou modification, 🔎
+  recherche, 💻 commande, 🌐 web, 🧠 mémoire, 🌿 git, 🔌 service externe, 💬 message
+  envoyé) : « 💻 Historique des logs et correction des fichiers ». La phrase remplace la
+  liste ; un emoji hors liste est remplacé par celui de l'activité (ou ⏸️, ✅, 🚫 selon
+  l'état), un pictogramme de plus est retiré, une réponse vide, trop longue ou porteuse
+  d'un secret est ignorée. Le modèle ne voit jamais un résultat d'outil ni un contenu de
   fichier ; une référence `${SECRET:…}` dans une commande devient `[secret]`.
+
+Le prompt du rôle (1.0.29, #280) est celui mesuré sur dix tours réels : une consigne
+**sans phrase d'exemple** (le prompt de la 1.0.27 en donnait une, « Relecture des notes de
+septembre », et les petits modèles la recopiaient neuf fois sur dix), la liste des emojis
+et leur sens, quatre tours d'exemple en few-shot, puis la liste seule. La phrase précédente
+n'y est plus : c'était une seconde source de recopie. L'anti-clignotement est dans la
+boucle : le modèle n'est rappelé que si la trace a changé, et une phrase identique à celle
+posée ne modifie pas la bulle.
 
 Le rôle `trace` se règle par `models.roles.trace` ; sans lui, l'alias `local` puis le
 premier alias `local:` de texte (ni voix, ni image, ni embeddings) est pris : un modèle de
-1,7 milliard de paramètres en 4 bits suffit, et rien ne sort de la machine. Sans alias
-local, le tour passe en `resume` et `penelope doctor` le dit (contrôle `telegram.trace`,
-qui sonde aussi le serveur du rôle). L'appel est **borné à 500 ms, une seule tentative**,
-et n'est jamais sur le chemin de la réponse : la bulle est créée avec la ligne `resume`,
-le modèle parle dans la tâche de chaque modification (au plus une toutes les 1,5 s) et à
-la clôture, une fois la réponse partie ; un dépassement, un serveur arrêté ou une réponse
-inutilisable laissent la ligne `resume` pour cette modification, sans un mot d'erreur dans
-la bulle. Chaque narration est journalisée (`trace.narrated` : jetons, durée, repli et sa
+1,7 milliard de paramètres en 4 bits suffit (`mlx-community/Qwen3-1.7B-4bit`, réflexion
+éteinte par `penelope local install --no-think`, voir
+[l'inférence locale](install-headless.md#inférence-locale-sur-mac)), et rien ne sort de la
+machine. Sans alias local, le tour passe en `resume` et `penelope doctor` le dit (contrôle
+`telegram.trace`, qui sonde aussi le serveur du rôle). L'appel est **borné à 1 200 ms, une
+seule tentative** (un modèle de cette taille répond en 0,5 à 1,1 s sur un M1 Pro ; la bulle
+ne s'édite de toute façon qu'au plus toutes les 1,5 s), et n'est jamais sur le chemin de la
+réponse : la bulle est créée avec la ligne `resume`, le modèle parle dans la tâche de chaque
+modification et à la clôture, une fois la réponse partie ; un dépassement, un serveur
+arrêté ou une réponse inutilisable laissent la ligne `resume` pour cette modification, sans
+un mot d'erreur dans la bulle. Chaque narration est journalisée (`trace.narrated` : jetons, durée, repli et sa
 raison) et comptée au rôle `trace` dans l'usage, à 0 $ pour un modèle local et au coût
 mesuré pour un modèle distant, qu'un propriétaire peut choisir en le sachant.
 

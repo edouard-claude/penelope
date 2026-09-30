@@ -370,6 +370,8 @@ fn resume_counts_failures_refusals_and_lost_calls() {
 
 /// Le prompt du rôle `trace` ne porte que la liste déjà masquée : un jeton dans une
 /// commande, une référence `${SECRET:…}` et un extrait de résultat n'y entrent jamais.
+/// Une ligne par groupe, « n. outil argument (×N) état », et rien d'autre : ni phrase
+/// précédente ni état du tour à recopier (#280).
 #[test]
 fn the_trace_role_prompt_never_carries_a_secret_nor_a_result() {
     let key = "ghp_0123456789abcdefghijABCDEFGHIJ012345";
@@ -384,41 +386,85 @@ fn the_trace_role_prompt_never_carries_a_secret_nor_a_result() {
         &format!("contenu privé du fichier {key}"),
     );
     t.call("fs_read", &json!({"path": "notes.txt"}));
-    let prompt = narrate::prompt(&t, Some("📄 Relecture des notes"));
+    let prompt = narrate::prompt(&t);
     assert!(!prompt.contains("ghp_"), "{prompt}");
     assert!(!prompt.contains("SECRET"), "{prompt}");
     assert!(!prompt.contains("contenu privé"), "{prompt}");
     assert!(prompt.contains("[secret]"), "{prompt}");
+    assert!(prompt.starts_with("1. shell_exec curl -H"), "{prompt}");
     assert!(
-        prompt.starts_with("Phrase précédente : 📄 Relecture des notes\nÉtat : en cours\n"),
+        prompt.ends_with("\n2. fs_read notes.txt en cours"),
         "{prompt}"
     );
-    assert!(prompt.contains("1. shell_exec curl -H"), "{prompt}");
-    assert!(
-        prompt.ends_with("2. fs_read notes.txt en cours\n"),
-        "{prompt}"
-    );
-    // Sans phrase précédente, terminé, un lot groupé.
+    assert_eq!(prompt.lines().count(), 2, "{prompt}");
+    // Un lot groupé, terminé : une seule ligne.
     let mut t = Trace::default();
     for _ in 0..3 {
         t.call("fs_read", &json!({"path": "a"}));
         t.result("fs_read", true, "");
     }
-    let prompt = narrate::prompt(&t, None);
-    assert!(
-        prompt.contains("Phrase précédente : aucune\nÉtat : terminé\n"),
-        "{prompt}"
-    );
-    assert!(prompt.contains("1. fs_read a (×3) fini\n"), "{prompt}");
-    // Une longue trace : les derniers appels seulement, les autres comptés.
+    assert_eq!(narrate::prompt(&t), "1. fs_read a (×3) fini");
+    // Une longue trace : les douze derniers groupes seulement, numérotés de 1 à 12.
     let mut t = Trace::default();
     for i in 0..40 {
         t.call("fs_read", &json!({"path": format!("f{i}")}));
         t.result("fs_read", true, "");
     }
-    let prompt = narrate::prompt(&t, None);
-    assert!(prompt.contains("… 10 appels plus anciens\n"), "{prompt}");
-    assert_eq!(prompt.lines().filter(|l| l.contains("fs_read")).count(), 30);
+    let prompt = narrate::prompt(&t);
+    assert_eq!(prompt.lines().count(), 12, "{prompt}");
+    assert!(prompt.starts_with("1. fs_read f28 fini\n"), "{prompt}");
+    assert!(prompt.ends_with("\n12. fs_read f39 fini"), "{prompt}");
+}
+
+/// La requête du rôle `trace` (#280) : le système donne la liste des emojis d'activité et
+/// leur sens, sans phrase d'exemple à recopier ; quatre tours d'exemple alternent
+/// propriétaire et assistant, chaque réponse d'exemple passe `clean` telle quelle ; le
+/// dernier message est la liste seule.
+#[test]
+fn the_trace_role_request_is_a_system_four_shots_and_the_list() {
+    use penelope_llm::types::Role;
+    let mut t = Trace::default();
+    t.call("fs_read", &json!({"path": "notes.txt"}));
+    let m = narrate::messages(&t);
+    assert_eq!(m.len(), 10, "système, quatre paires, la liste");
+    assert_eq!(m[0].role, Role::System);
+    let system = m[0].text();
+    for (e, sense) in narrate::EMOJIS {
+        assert!(system.contains(&format!("{e} {sense}")), "{system}");
+    }
+    assert!(system.contains("💬 message envoyé"), "{system}");
+    for (e, _) in narrate::STATE_EMOJIS {
+        assert!(
+            !system.contains(e),
+            "un emoji d'état n'est pas proposé : {system}"
+        );
+    }
+    assert!(
+        !system.contains("Relecture"),
+        "pas de phrase à recopier : {system}"
+    );
+    assert!(!system.contains("précédente"), "{system}");
+    for pair in m[1..9].chunks(2) {
+        assert_eq!(pair[0].role, Role::User);
+        assert_eq!(pair[1].role, Role::Assistant);
+        let user = pair[0].text();
+        assert!(
+            user.lines()
+                .enumerate()
+                .all(|(i, l)| l.starts_with(&format!("{}. ", i + 1))
+                    && (l.ends_with(" fini") || l.ends_with(" en cours"))),
+            "l'exemple a la forme de la liste : {user}"
+        );
+        let answer = pair[1].text();
+        assert_eq!(
+            narrate::clean(&answer, "📄").as_deref(),
+            Some(answer.as_str()),
+            "l'exemple respecte la forme demandée"
+        );
+    }
+    assert_eq!(m[9].role, Role::User);
+    assert_eq!(m[9].text(), "1. fs_read notes.txt en cours");
+    assert_eq!(m[9].text(), narrate::prompt(&t));
 }
 
 /// La phrase rendue : un emoji de la liste fermée en tête (celui du modèle s'il est
@@ -451,6 +497,14 @@ fn the_narrated_phrase_is_cleaned_and_bounded() {
         c("⏸ Attente d'approbation").as_deref(),
         Some("⏸️ Attente d'approbation")
     );
+    assert_eq!(
+        c("💬 Réponse envoyée au propriétaire").as_deref(),
+        Some("💬 Réponse envoyée au propriétaire"),
+        "💬 est admis (#280)"
+    );
+    // Qwen3 qui réfléchit : la première ligne est `<think>`, un seul mot, la phrase est
+    // rejetée ; d'où `penelope local install --no-think`.
+    assert!(c("<think>\nLe propriétaire veut…\n</think>\n📄 Lecture des notes").is_none());
     assert!(c("  \n ").is_none());
     assert!(c("Bonjour").is_none(), "un seul mot");
     assert!(c(&"mot ".repeat(13)).is_none(), "trop de mots");

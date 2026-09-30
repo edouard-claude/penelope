@@ -428,8 +428,9 @@ async fn in_resume_mode_the_bubble_is_one_counted_line_without_any_model_call() 
 }
 
 /// `narre` : la bulle est créée avec la ligne `resume` (le modèle n'est pas sur le chemin
-/// de la réponse), puis chaque modification porte la phrase du rôle `trace`. Le modèle
-/// reçoit la phrase précédente et, quand il la renvoie, la bulle n'est pas retouchée.
+/// de la réponse), puis chaque modification porte la phrase du rôle `trace`. Le modèle ne
+/// reçoit que la liste (système, quatre exemples, la liste : #280) et, quand il rend la
+/// même phrase, la bulle n'est pas retouchée.
 #[tokio::test]
 async fn in_narre_mode_the_phrase_replaces_the_line_and_is_kept_when_returned() {
     let (_d, g, t, p) = gateway().await;
@@ -440,7 +441,7 @@ async fn in_narre_mode_the_phrase_replaces_the_line_and_is_kept_when_returned() 
         Scripted::Text("🧠 Relecture de la facturation en cours 🚀".into()),
     );
     // Un tour de six réponses à 350 ms : plus long que la cadence d'édition (1,5 s), et
-    // chaque narration reste sous les 500 ms de budget.
+    // chaque narration reste sous les 1 200 ms de budget.
     p.slow(Duration::from_millis(350));
     let loops = (g.spawn_trace(), tokio::spawn(g.clone().outbox_loop()));
     g.process_update(&updates::text_message(931, OWNER, OWNER, "on en est où ?"))
@@ -469,19 +470,17 @@ async fn in_narre_mode_the_phrase_replaces_the_line_and_is_kept_when_returned() 
     );
     let asked = trace_requests(&p);
     assert!(!asked.is_empty(), "le rôle trace a été appelé");
-    for (i, r) in asked.iter().enumerate() {
-        let user = r.messages[1].text();
+    for r in &asked {
+        assert_eq!(r.messages.len(), 10, "système, quatre exemples, la liste");
+        assert!(r.messages[0].text().contains("💬 message envoyé"));
+        let user = r.messages.last().unwrap().text();
         assert!(!user.contains("Voilà"), "jamais un résultat : {user}");
-        assert!(user.contains("mem_search facturation"), "{user}");
-        if i > 0 {
-            assert!(
-                user.starts_with("Phrase précédente : 🧠 Relecture de la facturation en cours\n"),
-                "appel {i} : {user}"
-            );
-        } else {
-            assert!(user.starts_with("Phrase précédente : aucune\n"), "{user}");
-        }
-        assert_eq!(r.max_tokens, Some(60));
+        assert!(user.starts_with("1. mem_search facturation"), "{user}");
+        assert!(
+            !user.contains("Relecture") && !user.contains("précédente"),
+            "la phrase précédente n'est plus dans le prompt (#280) : {user}"
+        );
+        assert_eq!(r.max_tokens, Some(30));
     }
     let events = narrated_events(&g).await;
     assert_eq!(events.len(), asked.len(), "{events:?}");

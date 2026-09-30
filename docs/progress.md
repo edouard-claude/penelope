@@ -14,6 +14,48 @@ La charte et les spécifications sont dans `design/v1/`.
 
 ### 1.0.29
 
+**Trace narrée : le prompt du rôle `trace` refait au banc, budget porté à 1 200 ms,
+`penelope local install --no-think` (#280).** Constat du 30/09 sur l'instance réelle
+(MacBook Pro M1 Pro, `mlx_lm.server`, dix tours réels de l'historique) : avec le prompt de
+la 1.0.27 (#273), les trois petits modèles essayés recopiaient l'exemple de la consigne
+(« Relecture des notes de septembre ») neuf fois sur dix ; la consigne annonçait « un emoji
+de la liste » sans donner la liste ; la phrase précédente, passée au modèle, était une
+seconde source de recopie ; la latence mesurée (0,5 à 1,1 s) dépassait souvent le budget
+de 500 ms ; Qwen3 écrivait `<think>` avant la phrase, rejetée par le nettoyage.
+
+- Cause : un exemple dans le message système est, pour un modèle de 1,7 milliard de
+  paramètres, une réponse à recopier plutôt qu'une forme à suivre ; la liste d'emojis
+  n'était que dans le code ; la réflexion de Qwen3 ne s'éteint qu'au serveur.
+- Correctif (`trace/narrate.rs`) : consigne sans phrase d'exemple, liste des emojis
+  d'activité et leur sens donnée au modèle (💬 message envoyé ajouté ; ⏸️, ✅ et 🚫
+  restent admis en tête d'une phrase sans être proposés, le modèle les collait à la
+  phrase), quatre tours d'exemple en few-shot, message du propriétaire réduit à la liste
+  des douze derniers groupes (« n. outil argument (×N) état »), plus de phrase précédente
+  ni d'état du tour. L'anti-clignotement reste dans la boucle, où il était déjà : le
+  modèle n'est rappelé que si la ligne `resume` (clé de l'état) a changé, et une phrase
+  identique ne retouche pas la bulle. `BUDGET` 500 → 1 200 ms (la bulle s'édite au plus
+  toutes les 1,5 s, hors chemin de la réponse) ; `max_tokens` 60 → 30.
+- `penelope local install --no-think` : ajoute `--chat-template-args '{"enable_thinking":
+  false}'` aux arguments du LaunchAgent de `mlx_lm.server`, en un seul argument, sans
+  shell.
+- Mesuré avec le nouveau prompt : Qwen3-1.7B-4bit sans réflexion, médiane 0,54 s, phrases
+  justes (« 💻 Historique des logs et correction des fichiers »).
+- Tests : forme de la requête (système avec la liste, quatre paires, dernier message = la
+  liste, chaque exemple passe `clean` tel quel), prompt sans secret ni résultat ni phrase
+  précédente, douze derniers groupes numérotés de 1 à 12, 💬 admis, `<think>` rejeté ;
+  passerelle : dix messages par appel, `max_tokens` 30, phrase gardée sans retouche ;
+  `--no-think` ajoute l'argument, sans l'option rien ne change. Scénario
+  `trace-des-outils-narre` régénéré : seuls le prompt, `max_tokens` et `budget_ms`
+  changent.
+- Ce qui continue de marcher : `off`, `compact`, `full` et `resume` inchangés ; la bulle
+  précède toujours la réponse ; repli `resume` sur erreur, dépassement ou phrase invalide ;
+  `trace.narrated` et l'usage au rôle `trace` ; `kept` dans le journal ; une bulle ouverte
+  d'avant #273 se relit.
+- Doc : `docs/telegram.md` (Trace des outils), `docs/install-headless.md` (rôle `trace`,
+  `--no-think`, modèle conseillé, chiffres du banc sur M1 Pro).
+
+Closes #280.
+
 **MCP : un serveur qui répond `-32601` à `ping` reste `ready` (#276).** Constat du 30/09
 sur l'instance (1.0.22) : le serveur MCP de Slack (protocole 2025-06-18) sert ses 26
 outils et `penelope mcp test slack` passe, mais `mcp list` le montre `connecting` avec
