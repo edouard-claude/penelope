@@ -24,6 +24,7 @@ pub struct Config {
     pub providers: Providers,
     pub models: Models,
     pub budget: Budget,
+    pub agent: Agent,
     pub context: Context,
     pub memory: Memory,
     pub mcp: Mcp,

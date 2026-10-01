@@ -409,6 +409,13 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `budget.show_turn_cost_usd` | `0.5` | Coût d'un tour au-delà duquel la réponse finale l'indique. 0 : jamais. |
 | `budget.delegate_after_calls` | `10` | Nombre d'appels au modèle dans un tour à chaque multiple duquel le résultat d'outil suggère de regrouper les commandes ou de déléguer à un sous-agent. 0 : jamais. |
 | `budget.compaction_reserve_usd` | `0.5` | Dépense du jour réservée aux résumés de compaction une fois le plafond du jour atteint, en dollars ; les plafonds de session et de run ne les arrêtent jamais. |
+| `budget.delegation_nudge_style` | `"classique"` | Style du rappel de `delegate_after_calls` (expérience #291) : `classique` cite le nombre d'appels et le coût du tour ; `doux` ne cite ni l'un ni l'autre et dit de continuer jusqu'au bout de la demande. |
+
+**[agent]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `agent.context_hint` | `""` | Expérience (#291) : vide, rien ; sinon ce texte exact (par exemple « You have 500000 tokens context window. ») est ajouté, à chaque appel au modèle d'un tour de conversation, en toute fin de la requête envoyée dans un message de rôle `developer`, hors historique et hors empreinte, pour les modèles `codex:` seulement (les autres fournisseurs ignorent ce rôle). Jamais persisté ; sa présence est journalisée dans `runtime.llm`. |
 
 **[context]**
 
@@ -1054,6 +1061,7 @@ alert_ratio = 0.8           # une alerte par périmètre au premier passage de 8
 turn_checkpoint_usd = 1.0   # « Ce tour a coûté 1,05 $, je continue ? » à chaque dollar
 show_turn_cost_usd = 0.5    # coût du tour ajouté à la réponse au-delà
 delegate_after_calls = 10   # rappel de regrouper ou de déléguer tous les 10 appels
+delegation_nudge_style = "classique"   # "doux" : sans compte ni coût (expérience, voir plus bas)
 ```
 
 À 80 % d'un plafond (jour, session ou run), une seule notification arrive avec les trois
@@ -1095,6 +1103,47 @@ rend le prompt de l'appel pour comparer.
 
 `model set` signale un identifiant absent du catalogue (`known: false`) quand le catalogue
 est chargé ; sinon, une faute de frappe ne se verra qu'au premier appel.
+
+### Expérience : persévérance
+
+Deux interrupteurs, **éteints par défaut**, pour tester une hypothèse (#291) : rappeler au
+modèle son budget (appels, dollars, jetons restants) le pousserait à conclure trop tôt, à
+rendre une réponse partielle alors que ni le plafond d'appels ni le budget ne sont atteints.
+La source est anecdotique (issue 49735 du dépôt openai/codex) et rien n'est prouvé : c'est
+une expérience à mesurer, pas un réglage recommandé. La même source rapporte qu'un texte
+« unlimited tokens » ne change rien chez elle, et qu'une fenêtre chiffrée (« You have
+500000 tokens context window. ») si : le texte est donc libre, à essayer.
+
+- `agent.context_hint = "You have 500000 tokens context window."` : vide (le défaut), rien
+  ne part ; renseigné, à chaque appel au modèle d'un tour de conversation, la requête
+  envoyée porte en toute fin un message de rôle `developer` avec ce texte exact. Il vit
+  hors de l'historique : jamais dans le transcript, le journal `conv.*` ni l'instantané du
+  prompt, et il ne change ni `system_hash`, ni `tools_hash`, ni `request_hash` (le cache de
+  préfixe reste chaud). Il ne part que vers les modèles `codex:`, dont l'API connaît ce
+  rôle ; DeepSeek, un modèle local ou `openai/…` via OpenRouter (dont le schéma ne liste
+  pas `developer`) ne le reçoivent pas, et un repli hors Codex part sans. Sa présence se
+  lit dans l'événement `runtime.llm` (`context_hint: true`) ; `penelope audit show` ne le
+  montre pas, puisqu'il n'est pas persisté.
+- `budget.delegation_nudge_style = "doux"` : le rappel de `delegate_after_calls` ne cite
+  plus ni le nombre d'appels ni le coût du tour ; il dit de regrouper les commandes ou de
+  déléguer à `sub_agent_spawn`, de tenir `session_notes` à jour, et de continuer jusqu'au
+  bout de la demande. L'événement `tool.result` qui porte la note dit son style
+  (`nudge_style`).
+
+```bash
+penelope config set agent.context_hint "You have 500000 tokens context window."
+penelope config set budget.delegation_nudge_style doux
+```
+
+Les deux clés s'appliquent à l'appel suivant, sans redémarrage. Pour mesurer : sur des
+demandes comparables, avec et sans, compter les appels par tour (`penelope usage --by
+turn`) et les réponses rendues avant la fin de la demande ; `runtime.llm` dit pour chaque
+appel si l'indice était là. Pour revenir en arrière :
+
+```bash
+penelope config set agent.context_hint ""
+penelope config set budget.delegation_nudge_style classique
+```
 
 ### Shell et bac à sable
 

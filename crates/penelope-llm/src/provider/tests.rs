@@ -487,3 +487,39 @@ async fn collect_stream_propagates_errors() {
         .unwrap_err();
     assert_eq!(e.kind, LlmErrorKind::Transient);
 }
+
+/// #291 : la note `developer` est le **dernier** message du corps, et seulement quand la
+/// requête la porte ; l'historique sérialisé ne change pas.
+#[test]
+fn the_developer_note_closes_the_openai_body_when_present() {
+    let plain = ChatRequest {
+        model: "m".into(),
+        messages: vec![
+            ChatMessage::system("Tu es Pénélope."),
+            ChatMessage::user("corrige le bug"),
+        ],
+        ..Default::default()
+    };
+    let hinted = ChatRequest {
+        developer_note: Some("You have 500000 tokens context window.".into()),
+        ..plain.clone()
+    };
+    let without = to_openai_body(&plain);
+    let with = to_openai_body(&hinted);
+    assert_eq!(without["messages"].as_array().unwrap().len(), 2);
+    assert!(
+        without["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["role"] != "developer")
+    );
+    let messages = with["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(&messages[..2], &without["messages"].as_array().unwrap()[..]);
+    assert_eq!(messages[2]["role"], "developer");
+    assert_eq!(
+        messages[2]["content"],
+        "You have 500000 tokens context window."
+    );
+}

@@ -8,7 +8,7 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
     // là qu'il sert à enchaîner l'appel et sa suite. La règle ne dépend pas du tour en
     // cours, sinon le tour suivant réécrirait ces messages et casserait le cache de
     // préfixe (issue #17) ; une réponse finale ne le renvoie jamais.
-    let messages: Vec<Value> = req
+    let mut messages: Vec<Value> = req
         .messages
         .iter()
         .map(|m| {
@@ -26,6 +26,10 @@ pub fn to_openai_body(req: &ChatRequest) -> Value {
             v
         })
         .collect();
+    // Après l'historique, jamais dedans : la partie volatile de la requête (#291).
+    if let Some(note) = &req.developer_note {
+        messages.push(json!({"role": "developer", "content": note}));
+    }
     let mut b = json!({
         "model": strip_provider(&req.model),
         "messages": messages,

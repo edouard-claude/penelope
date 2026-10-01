@@ -240,6 +240,11 @@ pub struct ChatRequest {
     /// cache de préfixe est chaud (issue #17). OpenRouter seulement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_upstream: Option<String>,
+    /// Message de rôle `developer` ajouté en **toute fin** de la requête envoyée, hors
+    /// `messages` : jamais dans l'historique ni dans l'empreinte du cache (expérience
+    /// #291). Seuls les dialectes qui connaissent ce rôle le sérialisent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub developer_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

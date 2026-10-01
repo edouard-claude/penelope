@@ -8,6 +8,26 @@ use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
 use penelope_app::attempts::{Attempt, AttemptCause};
 use retry::{Phase, RetryAction, RetryPlan};
 
+/// Une réponse du modèle, et ce que la requête portait de plus que l'historique.
+pub(crate) struct Called {
+    pub response: ChatResponse,
+    /// La requête portait l'indice de contexte `agent.context_hint` (#291).
+    pub hinted: bool,
+}
+
+/// L'indice de contexte pour ce modèle (#291) : le texte exact de `agent.context_hint`,
+/// quand il est renseigné et que le modèle passe par le backend Codex, dont l'API
+/// Responses connaît le rôle `developer`. Le schéma d'OpenRouter ne le liste pas, un
+/// serveur local non plus : un repli vers un autre fournisseur part sans.
+pub(crate) fn context_hint(
+    cfg: &penelope_kernel::config::Config,
+    model_id: &str,
+) -> Option<String> {
+    let hint = &cfg.agent.context_hint;
+    (!hint.trim().is_empty() && penelope_llm::catalog::provider_of(model_id) == "codex")
+        .then(|| hint.clone())
+}
+
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
 pub(crate) struct CallFailure {
     pub message: String,
@@ -49,7 +69,7 @@ impl AgentLoop {
         pinned_upstream: Option<String>,
         tool_choice: Option<ToolChoice>,
         attempts: &Attempts,
-    ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
+    ) -> anyhow::Result<Result<Called, CallFailure>> {
         let s = &self.services;
         let mut plan = RetryPlan::new(
             &spec.model_id,
@@ -61,6 +81,10 @@ impl AgentLoop {
         loop {
             let model_id = plan.model().to_string();
             let provider = self.provider_of(&model_id, plan.is_primary()).await;
+            // Expérience #291 : décidé par le modèle de **cette** tentative, hors
+            // `messages`, donc hors historique et hors empreinte.
+            let developer_note = context_hint(&s.config.config(), &model_id);
+            let hinted = developer_note.is_some();
             let request = ChatRequest {
                 model: model_id.clone(),
                 messages: fit_modalities(&messages, &s.catalog, &model_id),
@@ -75,6 +99,7 @@ impl AgentLoop {
                 fallback_models: plan.server_fallbacks(),
                 // Collant pour le modèle principal seulement : un repli change de fournisseur.
                 pinned_upstream: plan.is_primary().then(|| pinned_upstream.clone()).flatten(),
+                developer_note,
                 ..Default::default()
             };
 
@@ -198,7 +223,10 @@ impl AgentLoop {
                             model_id: r.model.clone(),
                         });
                     }
-                    return Ok(Ok(r));
+                    return Ok(Ok(Called {
+                        response: r,
+                        hinted,
+                    }));
                 }
                 Err(e) => {
                     s.llm_state

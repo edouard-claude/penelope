@@ -43,7 +43,9 @@ session s'applique au replay du journal.
 `runtime.tool` contient `tool`, `args`, `result`, `ok`, `duration_ms` et
 `cost_usd_estimated` (0 pour les outils natifs, `null` pour MCP sans mesure).
 `runtime.llm` contient modèle, fournisseur, rôle, compteurs de tokens et coût
-mesuré ou estimé. Les événements de session et HITL portent leur cycle de vie ;
+mesuré ou estimé ; `context_hint: true` quand la requête portait l'indice de contexte de
+l'expérience persévérance (#291, `agent.context_hint`), absent sinon. Les
+événements de session et HITL portent leur cycle de vie ;
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
 et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi ;
 un créneau parti plus de cinq minutes après son heure y ajoute `planned` (l'heure prévue)
@@ -104,7 +106,7 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `turn.merged` | des messages du propriétaire rejoignent le tour : avant qu'il parte (`phase: queued`) ou pendant, avant un appel au modèle ou entre deux appels d'outils (`phase: running`) | `turn`, `count`, `phase` |
 | `turn.empty_answer` | le modèle n'a rendu ni texte ni appel d'outil ; relancé une fois, sauf si le raisonnement a mangé la sortie | `model`, `upstream`, `generation_id`, `finish`, `native_finish`, `completion_tokens`, `reasoning_tokens`, `retried` |
 | `turn.loop_aborted` | le détecteur de boucles arrête les outils du tour | `report` |
-| `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) |
+| `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) ; `nudge_style` (`classique` ou `doux`, #291) quand le résultat porte le rappel de délégation |
 | `tool.call_id_reused` | un appel en attente porte un identifiant que la session a déjà vu (#266) : pour la carte d'approbation et le ledger d'effets, il est renuméroté sous une identité ancrée au message qui le porte ; le transcript garde l'identifiant émis | `call_id`, `identity`, `tool` |
 | `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |
 | `llm.fallback_used` | la réponse vient d'un autre modèle que celui demandé : repli fait par OpenRouter entre ses modèles. Un repli joué par la boucle elle-même vers un autre fournisseur (1.0.22, #259 : serveur local arrêté, la suite part chez OpenRouter) ne l'écrit pas ; il ne laisse qu'un `conv.attempt` de cause `fallback`, puis le `conv.assistant` du modèle qui a répondu | `requested`, `served` |

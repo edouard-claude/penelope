@@ -24,6 +24,10 @@ pub struct Budget {
     /// Dépense du jour réservée aux résumés de compaction une fois le plafond du jour
     /// atteint, en dollars ; les plafonds de session et de run ne les arrêtent jamais.
     pub compaction_reserve_usd: f64,
+    /// Style du rappel de `delegate_after_calls` (expérience #291) : `classique` cite le
+    /// nombre d'appels et le coût du tour ; `doux` ne cite ni l'un ni l'autre et dit de
+    /// continuer jusqu'au bout de la demande.
+    pub delegation_nudge_style: NudgeStyle,
 }
 
 impl Default for Budget {
@@ -37,8 +41,42 @@ impl Default for Budget {
             show_turn_cost_usd: 0.5,
             delegate_after_calls: 10,
             compaction_reserve_usd: 0.5,
+            delegation_nudge_style: NudgeStyle::Classique,
         }
     }
+}
+
+/// Style du rappel de délégation attaché au résultat d'outil (expérience #291).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NudgeStyle {
+    /// Le rappel cite le nombre d'appels au modèle et le coût du tour.
+    #[default]
+    Classique,
+    /// Le rappel ne cite ni compte ni coût, et dit de continuer jusqu'au bout.
+    Doux,
+}
+
+impl NudgeStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NudgeStyle::Classique => "classique",
+            NudgeStyle::Doux => "doux",
+        }
+    }
+}
+
+/// Expériences sur la conduite du modèle pendant un tour (#291).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Agent {
+    /// Expérience (#291) : vide, rien ; sinon ce texte exact (par exemple « You have
+    /// 500000 tokens context window. ») est ajouté, à chaque appel au modèle d'un tour de
+    /// conversation, en toute fin de la requête envoyée dans un message de rôle `developer`,
+    /// hors historique et hors empreinte, pour les modèles `codex:` seulement (les autres
+    /// fournisseurs ignorent ce rôle). Jamais persisté ; sa présence est journalisée dans
+    /// `runtime.llm`.
+    pub context_hint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

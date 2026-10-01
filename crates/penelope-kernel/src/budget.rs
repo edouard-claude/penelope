@@ -86,6 +86,9 @@ pub struct UsageRecord {
     pub tools_hash: Option<String>,
     /// Cause probable d'un raté de cache, `None` quand le cache a servi.
     pub miss_cause: Option<String>,
+    /// La requête portait l'indice de contexte `agent.context_hint` (expérience #291) :
+    /// journalisé dans `runtime.llm` pour la mesure, pas en base.
+    pub context_hint: bool,
 }
 
 /// Dernier appel de conversation d'une session : ce à quoi la requête suivante se compare
@@ -241,22 +244,25 @@ impl BudgetLedger {
         let (session, run) = (u.session_id.clone(), u.run_id.clone());
         self.insert(u.clone()).await?;
         if let Some(events) = &self.events {
-            let mut event = EventDraft::new(
-                "runtime.llm",
-                serde_json::json!({
-                    "model": u.model,
-                    "provider": u.provider,
-                    "role": u.role,
-                    "turn_id": u.turn_id,
-                    "generation_id": u.generation_id,
-                    "prompt_tokens": u.prompt,
-                    "completion_tokens": u.completion,
-                    "cached_tokens": u.cached,
-                    "reasoning_tokens": u.reasoning,
-                    "cost_usd": u.cost_usd,
-                    "cost_estimated": u.estimated,
-                }),
-            );
+            let mut payload = serde_json::json!({
+                "model": u.model,
+                "provider": u.provider,
+                "role": u.role,
+                "turn_id": u.turn_id,
+                "generation_id": u.generation_id,
+                "prompt_tokens": u.prompt,
+                "completion_tokens": u.completion,
+                "cached_tokens": u.cached,
+                "reasoning_tokens": u.reasoning,
+                "cost_usd": u.cost_usd,
+                "cost_estimated": u.estimated,
+            });
+            // Présent seulement quand l'indice est parti (#291) : les appels ordinaires
+            // gardent leur forme.
+            if u.context_hint {
+                payload["context_hint"] = serde_json::json!(true);
+            }
+            let mut event = EventDraft::new("runtime.llm", payload);
             if let Some(session_id) = &session {
                 event = event.session(session_id);
             }

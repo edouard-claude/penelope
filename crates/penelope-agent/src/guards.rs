@@ -317,12 +317,23 @@ impl TurnGuard for CostCheckpointGuard {
     }
 }
 
+/// Le rappel de délégation en style `doux` (expérience #291) : ni compte d'appels ni coût,
+/// rien qui ressemble à un budget qui s'épuise, et la consigne de continuer.
+const DELEGATION_NUDGE_SOFT: &str = "\n\n[Harnais : chaque appel au modèle renvoie tout le contexte. Regroupe les commandes \
+     restantes dans un seul `shell_exec`, ou confie la suite à `sub_agent_spawn`, qui ne rend \
+     que sa conclusion. Mets aussi à jour tes notes de travail (`session_notes` : plan, \
+     décisions, prochaine étape). Continue jusqu'au bout de la demande : ce rappel ne demande \
+     pas de conclure.]";
+
 impl AgentLoop {
     /// Tous les `delegate_after_calls` appels au modèle d'un tour, le résultat d'outil
-    /// suivant rappelle de regrouper les commandes ou de déléguer (issue #19).
+    /// suivant rappelle de regrouper les commandes ou de déléguer (issue #19). Le style
+    /// `classique` cite le compte et le coût ; `doux` (#291) ne cite rien et dit de
+    /// continuer.
     pub(super) async fn delegation_nudge(&self, spec: &TurnSpec) -> anyhow::Result<Option<String>> {
         let s = &self.services;
-        let every = s.config.config().budget.delegate_after_calls as i64;
+        let cfg = s.config.config();
+        let every = cfg.budget.delegate_after_calls as i64;
         let Some(turn_id) = &spec.turn_id else {
             return Ok(None);
         };
@@ -333,12 +344,16 @@ impl AgentLoop {
         if calls == 0 || calls % every != 0 {
             return Ok(None);
         }
-        Ok(Some(format!(
-            "\n\n[Harnais : {calls} appels au modèle dans ce tour ({}), chacun renvoie tout le \
-             contexte. Regroupe les commandes restantes dans un seul `shell_exec`, ou confie la \
-             suite à `sub_agent_spawn`, qui ne rend que sa conclusion. Mets aussi à jour tes \
-             notes de travail (`session_notes` : plan, décisions, prochaine étape).]",
-            penelope_kernel::budget::usd(turn_cost)
-        )))
+        Ok(Some(match cfg.budget.delegation_nudge_style {
+            penelope_kernel::config::NudgeStyle::Classique => format!(
+                "\n\n[Harnais : {calls} appels au modèle dans ce tour ({}), chacun renvoie tout \
+                 le contexte. Regroupe les commandes restantes dans un seul `shell_exec`, ou \
+                 confie la suite à `sub_agent_spawn`, qui ne rend que sa conclusion. Mets aussi \
+                 à jour tes notes de travail (`session_notes` : plan, décisions, prochaine \
+                 étape).]",
+                penelope_kernel::budget::usd(turn_cost)
+            ),
+            penelope_kernel::config::NudgeStyle::Doux => DELEGATION_NUDGE_SOFT.to_string(),
+        }))
     }
 }

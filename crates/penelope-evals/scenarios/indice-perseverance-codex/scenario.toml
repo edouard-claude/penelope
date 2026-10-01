@@ -1,0 +1,20 @@
+name = "indice-perseverance-codex"
+description = """Expérience persévérance (#291) : `agent.context_hint` renseigné et l'alias `main`
+sur un modèle `codex:`. Chaque requête vue par le modèle porte, hors `messages` et en toute
+fin, le message de rôle `developer` au texte exact configuré (« You have 500000 tokens
+context window. », `developer_note` dans la surface) ; l'historique envoyé est le même qu'il
+serait sans. Le monde ne le montre nulle part : ni dans les messages, ni dans le journal
+`conv.*` ; seul `runtime.llm` porte `context_hint: true`."""
+pin_model = "main"
+
+[config]
+"agent.context_hint" = "You have 500000 tokens context window."
+"models.aliases.main" = "codex:gpt-6-astra"
+
+[[steps]]
+kind = "message"
+text = "fais le point sur les factures en retard"
+
+[[steps]]
+kind = "message"
+text = "et les devis en attente ?"

@@ -2,7 +2,7 @@
 
 use super::attachments::{self, RejectedImages, owner_note};
 use super::attempts::{call_record, of_response};
-use super::model::CallFailure;
+use super::model::{CallFailure, Called};
 use super::*;
 use penelope_app::attempts::{Attempt, AttemptCause};
 use penelope_kernel::journal::CallRecord;
@@ -108,11 +108,11 @@ impl AgentLoop {
             let previous = s.budget.previous_call(&spec.session_id).await?;
             let pinned = sticky_upstream(previous.as_ref(), &spec.model_id, s.clock.now_ms());
             let fingerprint = Fingerprint::of(&messages, &spec.tools);
-            let response = match self
+            let Called { response, hinted } = match self
                 .call_model(spec, messages, sink, pinned, None, &attempts)
                 .await?
             {
-                Ok(r) => r,
+                Ok(called) => called,
                 Err(failure) => {
                     match self
                         .recover(spec, conv, failure, &mut recovery, sent_images)
@@ -133,7 +133,7 @@ impl AgentLoop {
             {
                 tracing::warn!(error = %e, "instantané du prompt non enregistré");
             }
-            self.record_usage(spec, previous.as_ref(), &fingerprint, &response)
+            self.record_usage(spec, previous.as_ref(), &fingerprint, &response, hinted)
                 .await?;
 
             // Ce que l'appel dit de lui-même, pour le journal (T5).
@@ -267,12 +267,14 @@ impl AgentLoop {
     }
 
     /// L'appel entre au budget, avec son empreinte et la cause d'un raté de cache.
+    /// `hinted` : la requête portait l'indice de l'expérience #291.
     async fn record_usage(
         &self,
         spec: &TurnSpec,
         previous: Option<&penelope_kernel::budget::PreviousCall>,
         fingerprint: &Fingerprint,
         response: &penelope_llm::types::ChatResponse,
+        hinted: bool,
     ) -> anyhow::Result<()> {
         let s = &self.services;
         let miss = miss_cause(
@@ -321,6 +323,7 @@ impl AgentLoop {
                 reasoning: response.usage.reasoning,
                 cost_usd: response.cost_usd,
                 estimated: response.cost_estimated,
+                context_hint: hinted,
                 ..Default::default()
             })
             .await?;
