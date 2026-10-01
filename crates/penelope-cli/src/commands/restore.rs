@@ -43,11 +43,196 @@ pub(super) async fn restore_offline(cli: &Cli, file: &std::path::Path) -> CliRes
     Ok(())
 }
 
+/// Les arguments de `penelope restore-all`.
+#[derive(Debug, Clone, Default)]
+pub(super) struct RestoreAllArgs {
+    pub source: Option<String>,
+    pub dry_run: bool,
+    pub list: bool,
+    pub archive: Option<String>,
+    pub endpoint: Option<String>,
+    pub region: Option<String>,
+}
+
+/// Variables d'environnement qui portent les clés S3 d'une restauration sur une machine
+/// neuve, avant tout magasin de secrets.
+pub const S3_ACCESS_KEY_ENV: &str = "PENELOPE_S3_ACCESS_KEY_ID";
+pub const S3_SECRET_KEY_ENV: &str = "PENELOPE_S3_SECRET_ACCESS_KEY";
+
+/// Ce que `s3` ou `s3://bucket/prefixe` désigne, complété par `[backup.s3]` de la
+/// configuration locale et par les options de la ligne de commande (#289).
+pub(super) fn resolve_s3(
+    source: &str,
+    local: &penelope_kernel::config::BackupS3,
+    endpoint: Option<&str>,
+    region: Option<&str>,
+) -> Result<penelope_kernel::config::BackupS3, String> {
+    let mut s3 = local.clone();
+    if let Some(rest) = source.strip_prefix("s3://") {
+        let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        s3.bucket = bucket.to_string();
+        s3.prefix = prefix.to_string();
+    } else if source != "s3" {
+        return Err(format!("`{source}` n'est pas une source S3"));
+    }
+    if let Some(e) = endpoint {
+        s3.endpoint = e.to_string();
+    }
+    if let Some(r) = region {
+        s3.region = r.to_string();
+    }
+    if s3.endpoint.trim().is_empty() {
+        return Err(
+            "adresse S3 inconnue : `--endpoint https://…`, ou `backup.s3.endpoint` \
+                    dans config.toml"
+                .into(),
+        );
+    }
+    if s3.bucket.trim().is_empty() {
+        return Err(
+            "bucket S3 inconnu : `s3://bucket/prefixe`, ou `backup.s3.bucket` dans config.toml"
+                .into(),
+        );
+    }
+    Ok(s3)
+}
+
+/// Les clés S3 : l'environnement d'abord, puis le magasin de secrets de la machine, sinon
+/// l'invite (jamais un argument).
+fn s3_credentials(
+    dirs: &dyn penelope_platform::Directories,
+    s3: &penelope_kernel::config::BackupS3,
+) -> CliResult<penelope_ops::backup::sigv4::Credentials> {
+    use penelope_ops::backup::sigv4::Credentials;
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    if let (Some(a), Some(k)) = (env(S3_ACCESS_KEY_ENV), env(S3_SECRET_KEY_ENV)) {
+        return Ok(Credentials {
+            access_key: a.trim().to_string(),
+            secret_key: k.trim().to_string(),
+        });
+    }
+    if let Ok(store) = penelope_platform::backend::secret_store(dirs)
+        && let (Ok(a), Ok(k)) = (
+            store.expand(&s3.access_key_id),
+            store.expand(&s3.secret_access_key),
+        )
+        && !a.trim().is_empty()
+        && !k.trim().is_empty()
+    {
+        return Ok(Credentials {
+            access_key: a.trim().to_string(),
+            secret_key: k.trim().to_string(),
+        });
+    }
+    eprintln!(
+        "Clés S3 absentes de l'environnement ({S3_ACCESS_KEY_ENV}, {S3_SECRET_KEY_ENV}) et du \
+         magasin de secrets."
+    );
+    let access_key = penelope_platform::terminal::read_secret("Identifiant de la clé S3 : ")
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let secret_key = penelope_platform::terminal::read_secret("Clé secrète S3 : ")
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    if access_key.trim().is_empty() || secret_key.trim().is_empty() {
+        return Err(CliError::Usage("clés S3 vides".into()));
+    }
+    Ok(Credentials {
+        access_key: access_key.trim().to_string(),
+        secret_key: secret_key.trim().to_string(),
+    })
+}
+
+/// La section `[backup.s3]` du config.toml local, ou ses défauts s'il n'existe pas encore.
+fn local_s3(dirs: &dyn penelope_platform::Directories) -> penelope_kernel::config::BackupS3 {
+    std::fs::read_to_string(dirs.config_file())
+        .ok()
+        .and_then(|raw| penelope_kernel::config::Config::parse(&raw).ok())
+        .map(|(c, _)| c.backup.s3)
+        .unwrap_or_default()
+}
+
+/// Télécharge l'archive choisie depuis le bucket (ou les liste), et rend son chemin.
+async fn fetch_from_s3(
+    dirs: &dyn penelope_platform::Directories,
+    args: &RestoreAllArgs,
+    source: &str,
+    work: &std::path::Path,
+) -> CliResult<Option<PathBuf>> {
+    use penelope_ops::backup::s3;
+    let s3cfg = resolve_s3(
+        source,
+        &local_s3(dirs),
+        args.endpoint.as_deref(),
+        args.region.as_deref(),
+    )
+    .map_err(CliError::Usage)?;
+    let creds = s3_credentials(dirs, &s3cfg)?;
+    let client = s3::S3Client::new(
+        &s3cfg.endpoint,
+        &s3cfg.bucket,
+        &s3cfg.region,
+        s3cfg.path_style,
+        creds,
+    )
+    .map_err(|e| CliError::Validation(e.to_string()))?;
+    let prefix = s3::normalized_prefix(&s3cfg.prefix);
+    let archives = s3::list_archives(&client, &prefix)
+        .await
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    if args.list {
+        if archives.is_empty() {
+            println!("Aucune sauvegarde sous {}/{prefix}", s3cfg.bucket);
+        }
+        for o in &archives {
+            println!(
+                "{}  {:>6} Mo  {}",
+                o.last_modified,
+                o.size / (1024 * 1024),
+                o.key
+            );
+        }
+        return Ok(None);
+    }
+    let chosen = match &args.archive {
+        Some(k) => archives
+            .iter()
+            .find(|o| o.key == *k || o.key.ends_with(k.as_str()))
+            .ok_or_else(|| {
+                CliError::Validation(format!(
+                    "archive `{k}` absente de {}/{prefix} ; `--list` donne celles qui existent",
+                    s3cfg.bucket
+                ))
+            })?,
+        None => archives.first().ok_or_else(|| {
+            CliError::Validation(format!(
+                "aucune sauvegarde chiffrée sous {}/{prefix}",
+                s3cfg.bucket
+            ))
+        })?,
+    };
+    let name = chosen
+        .key
+        .rsplit('/')
+        .next()
+        .unwrap_or("sauvegarde.tar.gz.enc");
+    let dest = work.join(name);
+    println!(
+        "Téléchargement de {} ({} Mo)…",
+        chosen.key,
+        chosen.size / (1024 * 1024)
+    );
+    client
+        .get_to_file(&chosen.key, &dest)
+        .await
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    Ok(Some(dest))
+}
+
 /// `penelope restore-all` : remonte une instance entière depuis une sauvegarde chiffrée
 /// (issue #42). Se fait daemon arrêté, sur une machine où il n'y a encore rien.
-pub(super) async fn restore_all(cli: &Cli, source: Option<String>, dry_run: bool) -> CliResult<()> {
+pub(super) async fn restore_all(cli: &Cli, args: RestoreAllArgs) -> CliResult<()> {
+    let dry_run = args.dry_run;
     let socket = socket_path(cli.home.clone())?;
-    if !dry_run && call(&socket, m::STATUS, json!({})).await.is_ok() {
+    if !dry_run && !args.list && call(&socket, m::STATUS, json!({})).await.is_ok() {
         return Err(CliError::Usage(
             "le daemon tourne : `penelope stop` d'abord, puis relancer la restauration".into(),
         ));
@@ -58,16 +243,28 @@ pub(super) async fn restore_all(cli: &Cli, source: Option<String>, dry_run: bool
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| CliError::Io(e.to_string()))?;
 
-    // Source : une archive locale, ou un dépôt à cloner.
-    let source = source.ok_or_else(|| {
+    // Source : une archive locale, un bucket S3, ou un dépôt à cloner.
+    let source = args.source.clone().ok_or_else(|| {
         CliError::Usage(
-            "donner l'archive `.tar.gz.enc` ou le dépôt privé des sauvegardes : \
-             `penelope restore-all git@github.com:moi/penelope-backups.git`"
+            "donner l'archive `.tar.gz.enc`, le dépôt privé des sauvegardes ou `s3` : \
+             `penelope restore-all git@github.com:moi/penelope-backups.git`, \
+             `penelope restore-all s3 --list`"
                 .into(),
         )
     })?;
+    let is_s3 = source == "s3" || source.starts_with("s3://");
+    if args.list && !is_s3 {
+        return Err(CliError::Usage(
+            "`--list` ne vaut que pour une source S3 (`penelope restore-all s3 --list`)".into(),
+        ));
+    }
     let archive = if source.ends_with(".enc") {
         PathBuf::from(&source)
+    } else if is_s3 {
+        match fetch_from_s3(dirs.as_ref(), &args, &source, &work).await? {
+            Some(p) => p,
+            None => return Ok(()),
+        }
     } else {
         let repo = work.join("depot");
         println!("Clonage de {source}…");

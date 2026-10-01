@@ -178,3 +178,42 @@ fn retired_keys_are_recognised_with_their_children() {
     assert!(retired("historyx").is_none());
     assert!(retired("memory").is_none());
 }
+
+/// #289 : la destination S3 se valide au chargement : adresse et bucket ensemble, HTTPS
+/// hors boucle locale, pas d'identifiants dans l'adresse, pas de chemin dans le bucket.
+#[test]
+fn the_s3_destination_is_checked_at_load() {
+    let mut c = cfg();
+    c.backup.s3.endpoint = "http://127.0.0.1:9000".into();
+    c.backup.s3.bucket = "sauvegardes".into();
+    c.validate().unwrap();
+    assert!(c.backup.s3.enabled());
+    c.backup.s3.endpoint = "https://s3.exemple.net".into();
+    c.validate().unwrap();
+    assert!(!cfg().backup.s3.enabled());
+
+    let e = refused(|c| c.backup.s3.endpoint = "https://s3.exemple.net".into());
+    assert!(e.contains("vont ensemble"), "{e}");
+    let e = refused(|c| c.backup.s3.bucket = "seul".into());
+    assert!(e.contains("vont ensemble"), "{e}");
+    let e = refused(|c| {
+        c.backup.s3.endpoint = "http://s3.exemple.net".into();
+        c.backup.s3.bucket = "b".into();
+    });
+    assert!(e.contains("HTTPS obligatoire"), "{e}");
+    let e = refused(|c| {
+        c.backup.s3.endpoint = "https://AK:secret@s3.exemple.net".into();
+        c.backup.s3.bucket = "b".into();
+    });
+    assert!(e.contains("identifiants"), "{e}");
+    let e = refused(|c| {
+        c.backup.s3.endpoint = "https://s3.exemple.net".into();
+        c.backup.s3.bucket = "b/prefixe".into();
+    });
+    assert!(e.contains("backup.s3.prefix"), "{e}");
+    let e = refused(|c| {
+        c.backup.s3.endpoint = "s3.exemple.net".into();
+        c.backup.s3.bucket = "b".into();
+    });
+    assert!(e.contains("https://"), "{e}");
+}

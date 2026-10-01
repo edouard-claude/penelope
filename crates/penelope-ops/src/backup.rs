@@ -23,6 +23,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod s3;
+pub mod sigv4;
+
 /// Nom du secret qui porte la phrase de passe des sauvegardes.
 pub const PASSPHRASE_SECRET: &str = "backup_passphrase";
 /// Clé de suivi de la dernière sauvegarde réussie.
@@ -256,7 +259,47 @@ fn secret_passphrase(platform: &penelope_platform::Platform) -> anyhow::Result<S
         })
 }
 
-/// Sauvegarde complète : archive chiffrée, et envoi vers le dépôt privé si demandé.
+/// Où une sauvegarde poussée part : dépôt git privé, stockage S3, ou les deux (#289).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Destination {
+    Git(String),
+    S3,
+}
+
+impl Destination {
+    fn label(&self) -> &'static str {
+        match self {
+            Destination::Git(_) => "git",
+            Destination::S3 => "s3",
+        }
+    }
+}
+
+/// Dépôt git des sauvegardes : `backup.git_remote`, sinon celui du vault.
+fn git_remote(cfg: &penelope_kernel::config::Config) -> String {
+    if cfg.backup.git_remote.trim().is_empty() {
+        cfg.memory.vault_git_remote.clone()
+    } else {
+        cfg.backup.git_remote.clone()
+    }
+}
+
+fn destinations(cfg: &penelope_kernel::config::Config) -> Vec<Destination> {
+    let mut v = Vec::new();
+    let remote = git_remote(cfg);
+    if !remote.trim().is_empty() {
+        v.push(Destination::Git(remote));
+    }
+    if cfg.backup.s3.enabled() {
+        v.push(Destination::S3);
+    }
+    v
+}
+
+/// Sauvegarde complète : archive chiffrée, et envoi vers chaque destination si demandé.
+///
+/// Avec un dépôt git et un bucket S3, les deux reçoivent l'archive ; l'échec de l'un ne
+/// retient pas l'autre, et le rapport le dit (`failed`). Tout en échec : erreur.
 pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Result<Value> {
     let cfg = s.config.config();
     let media = media.unwrap_or(cfg.backup.include_media);
@@ -264,43 +307,111 @@ pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Resul
     let bytes = report["bytes"].as_u64().unwrap_or(0);
 
     if push {
-        if bytes > cfg.backup.max_push_bytes {
+        let targets = destinations(&cfg);
+        if targets.is_empty() {
             anyhow::bail!(
-                "archive de {} Mo : au-delà de la limite de {} Mo du dépôt. Relancer sans les \
-                 médias (`backup.include_media = false`) ou pousser à la main.",
-                bytes / (1024 * 1024),
-                cfg.backup.max_push_bytes / (1024 * 1024)
+                "aucune destination de sauvegarde : `penelope config set backup.git_remote \
+                 git@github.com:moi/penelope-backups.git` (dépôt **privé**), ou une section \
+                 `[backup.s3]` (endpoint, bucket, clés dans le magasin de secrets)"
             );
         }
-        let pushed = push_archive(s, &archive, &report).await?;
-        report["pushed"] = pushed;
+        let mut failed = serde_json::Map::new();
+        for target in &targets {
+            let result = match target {
+                // La limite de taille est celle du dépôt git ; S3 n'en a pas.
+                Destination::Git(_) if bytes > cfg.backup.max_push_bytes => Err(anyhow::anyhow!(
+                    "archive de {} Mo : au-delà de la limite de {} Mo du dépôt. Relancer sans \
+                     les médias (`backup.include_media = false`) ou pousser à la main.",
+                    bytes / (1024 * 1024),
+                    cfg.backup.max_push_bytes / (1024 * 1024)
+                )),
+                Destination::Git(remote) => push_archive(s, remote, &archive, &report).await,
+                Destination::S3 => push_s3(s, &archive, &report).await,
+            };
+            match (target, result) {
+                (Destination::Git(_), Ok(v)) => report["pushed"] = v,
+                (Destination::S3, Ok(v)) => report["pushed_s3"] = v,
+                (t, Err(e)) => {
+                    failed.insert(t.label().to_string(), json!(e.to_string()));
+                }
+            }
+        }
+        if !failed.is_empty() {
+            let detail = failed
+                .iter()
+                .map(|(k, v)| format!("{k} : {}", v.as_str().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(" ; ");
+            if failed.len() == targets.len() {
+                anyhow::bail!("{detail}");
+            }
+            tracing::warn!(failed = %detail, "sauvegarde partielle");
+            report["failed"] = Value::Object(failed);
+        }
     }
 
     s.kv_set(LAST_KEY, &report.to_string()).await?;
+    let failed: Vec<String> = report["failed"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
     let _ = s
         .events
         .append(EventDraft::new(
             "backup.done",
-            json!({"bytes": bytes, "pushed": push, "media": media}),
+            json!({"bytes": bytes, "pushed": push, "media": media, "failed": failed}),
         ))
         .await;
     Ok(report)
 }
 
-/// Pousse l'archive dans le dépôt privé, avec son manifeste, et applique la rotation.
-async fn push_archive(s: &Services, archive: &Path, report: &Value) -> anyhow::Result<Value> {
+/// Envoie l'archive et son manifeste dans le bucket, puis applique la rotation aux
+/// objets du préfixe (#289).
+async fn push_s3(s: &Services, archive: &Path, report: &Value) -> anyhow::Result<Value> {
     let cfg = s.config.config();
-    let remote = if cfg.backup.git_remote.trim().is_empty() {
-        cfg.memory.vault_git_remote.clone()
-    } else {
-        cfg.backup.git_remote.clone()
-    };
-    if remote.trim().is_empty() {
-        anyhow::bail!(
-            "aucun dépôt de sauvegarde : `penelope config set backup.git_remote \
-             git@github.com:moi/penelope-backups.git` (dépôt **privé**)"
-        );
+    let client = s3::S3Client::from_config(&cfg.backup.s3, s.platform.secrets.as_ref())?;
+    let prefix = s3::normalized_prefix(&cfg.backup.s3.prefix);
+    let name = archive
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "penelope.tar.gz.enc".into());
+    let key = format!("{prefix}{name}");
+    let up = client.put_file(&key, archive).await?;
+    client
+        .put_bytes(&s3::manifest_key(&key), serde_json::to_vec_pretty(report)?)
+        .await?;
+    // Rotation : la même règle que le dépôt git, sur les objets du préfixe.
+    let names: Vec<String> = s3::list_archives(&client, &prefix)
+        .await?
+        .into_iter()
+        .map(|o| o.key.strip_prefix(&prefix).unwrap_or(&o.key).to_string())
+        .collect();
+    let removed = rotation_plan(&names, &cfg.backup);
+    for n in &removed {
+        let old = format!("{prefix}{n}");
+        client.delete(&old).await?;
+        let _ = client.delete(&s3::manifest_key(&old)).await;
     }
+    Ok(json!({
+        "endpoint": client.endpoint(),
+        "bucket": client.bucket(),
+        "key": key,
+        "bytes": up.bytes,
+        "etag": up.etag,
+        "parts": up.parts,
+        "rotated": removed,
+    }))
+}
+
+/// Pousse l'archive dans le dépôt privé, avec son manifeste, et applique la rotation.
+async fn push_archive(
+    s: &Services,
+    remote: &str,
+    archive: &Path,
+    report: &Value,
+) -> anyhow::Result<Value> {
+    let cfg = s.config.config();
+    let remote = remote.to_string();
     // Dépôt public : refus avant toute écriture (issue #42).
     if let Some(visibility) = repo_visibility(&remote).await
         && visibility != "private"
@@ -375,13 +486,25 @@ pub fn github_slug(remote: &str) -> Option<String> {
 /// Rotation : 7 quotidiennes, 4 hebdomadaires, 12 mensuelles. Renvoie les archives
 /// retirées du dépôt de travail (l'historique git, lui, n'est pas réécrit).
 pub fn rotate(dir: &Path, cfg: &penelope_kernel::config::Backup) -> anyhow::Result<Vec<String>> {
-    let mut archives: Vec<String> = std::fs::read_dir(dir)?
+    let archives: Vec<String> = std::fs::read_dir(dir)?
         .flatten()
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().to_string();
-            n.ends_with(".tar.gz.enc").then_some(n)
+            n.ends_with(s3::ARCHIVE_SUFFIX).then_some(n)
         })
         .collect();
+    let removed = rotation_plan(&archives, cfg);
+    for name in &removed {
+        std::fs::remove_file(dir.join(name))?;
+    }
+    Ok(removed)
+}
+
+/// Ce que la rotation retire d'une liste d'archives `penelope-<date>…`, dans n'importe
+/// quel ordre : les quotidiennes, hebdomadaires et mensuelles du quota restent, le reste
+/// part. La même règle sert au dépôt git et au bucket S3.
+pub fn rotation_plan(names: &[String], cfg: &penelope_kernel::config::Backup) -> Vec<String> {
+    let mut archives = names.to_vec();
     archives.sort();
     archives.reverse(); // plus récentes d'abord
 
@@ -411,14 +534,7 @@ pub fn rotate(dir: &Path, cfg: &penelope_kernel::config::Backup) -> anyhow::Resu
             keep.push(name.clone());
         }
     }
-    let mut removed = Vec::new();
-    for name in &archives {
-        if !keep.contains(name) {
-            std::fs::remove_file(dir.join(name))?;
-            removed.push(name.clone());
-        }
-    }
-    Ok(removed)
+    archives.into_iter().filter(|n| !keep.contains(n)).collect()
 }
 
 /// Semaine ISO d'une date `AAAA-MM-JJ`, pour la rotation hebdomadaire.
@@ -459,9 +575,36 @@ pub async fn nightly_tick(
         return Ok(());
     }
     s.kv_set(key, &now.to_string()).await?;
+    let origin = crate::bus::Origin::Internal {
+        source: "backup".into(),
+    };
     match run(s, true, None).await {
         Ok(r) => {
             tracing::info!(report = %r, "sauvegarde nocturne");
+            // Une destination sur deux en échec : l'archive est à l'abri, mais le
+            // propriétaire doit le savoir (#289).
+            if let (Some(failed), Some(m)) = (r["failed"].as_object(), messenger) {
+                let received: Vec<&str> = [("pushed", "le dépôt git"), ("pushed_s3", "S3")]
+                    .into_iter()
+                    .filter(|(k, _)| !r[*k].is_null())
+                    .map(|(_, l)| l)
+                    .collect();
+                let detail = failed
+                    .iter()
+                    .map(|(k, v)| format!("{k} : {}", v.as_str().unwrap_or_default()))
+                    .collect::<Vec<_>>()
+                    .join(" ; ");
+                let _ = m
+                    .send_text(
+                        &origin,
+                        &format!(
+                            "⚠️ Sauvegarde de cette nuit partielle : {} l'a reçue ; en échec, \
+                             {detail}",
+                            received.join(" et ")
+                        ),
+                    )
+                    .await;
+            }
         }
         Err(e) => {
             // Jamais de silence : une sauvegarde manquée se dit (issue #39).
@@ -469,9 +612,7 @@ pub async fn nightly_tick(
             if let Some(m) = messenger {
                 let _ = m
                     .send_text(
-                        &crate::bus::Origin::Internal {
-                            source: "backup".into(),
-                        },
+                        &origin,
                         &format!("⚠️ La sauvegarde de cette nuit a échoué : {e}"),
                     )
                     .await;
@@ -490,18 +631,89 @@ pub async fn status(s: &Services) -> Value {
         .flatten()
         .and_then(|v| serde_json::from_str(&v).ok());
     let cfg = s.config.config();
-    let remote = if cfg.backup.git_remote.trim().is_empty() {
-        cfg.memory.vault_git_remote.clone()
-    } else {
-        cfg.backup.git_remote.clone()
-    };
+    let s3 = cfg.backup.s3.enabled().then(|| {
+        json!({
+            "endpoint": cfg.backup.s3.endpoint,
+            "bucket": cfg.backup.s3.bucket,
+            "prefix": s3::normalized_prefix(&cfg.backup.s3.prefix),
+        })
+    });
     json!({
         "last": last,
-        "remote": remote,
+        "remote": git_remote(&cfg),
+        "s3": s3,
         "cron": cfg.backup.cron,
         "passphrase": passphrase(s).is_ok(),
         "media_included": cfg.backup.include_media,
     })
+}
+
+/// Les contrôles `doctor` des sauvegardes : l'état général, et le bucket S3 s'il y en a un.
+pub async fn doctor_checks(s: &Services) -> Vec<penelope_kernel::api::DoctorCheck> {
+    let mut checks = vec![doctor_check(s).await];
+    if s.config.config().backup.s3.enabled() {
+        checks.push(s3_doctor_check(s).await);
+    }
+    checks
+}
+
+/// Contrôle `doctor` du bucket (#289) : joignable avec ces clés, dernière sauvegarde S3
+/// et son âge.
+async fn s3_doctor_check(s: &Services) -> penelope_kernel::api::DoctorCheck {
+    use penelope_kernel::api::DoctorCheck;
+    const ID: &str = "backup.s3";
+    const LABEL: &str = "Sauvegarde S3";
+    let cfg = s.config.config();
+    let client = match s3::S3Client::from_config(&cfg.backup.s3, s.platform.secrets.as_ref()) {
+        Ok(c) => c,
+        Err(e) => {
+            return DoctorCheck::fail(
+                ID,
+                LABEL,
+                e.to_string(),
+                Some("penelope secret set s3_access_key_id".into()),
+            );
+        }
+    };
+    let bucket = client.bucket().to_string();
+    match tokio::time::timeout(std::time::Duration::from_secs(20), client.head_bucket()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return DoctorCheck::fail(ID, LABEL, e.to_string(), None),
+        Err(_) => {
+            return DoctorCheck::fail(
+                ID,
+                LABEL,
+                format!(
+                    "bucket `{bucket}` : {} ne répond pas en 20 s",
+                    client.endpoint()
+                ),
+                None,
+            );
+        }
+    }
+    let st = status(s).await;
+    let last = &st["last"];
+    let (Some(key), Some(created)) = (
+        last["pushed_s3"]["key"].as_str(),
+        last["manifest"]["created_at"].as_str(),
+    ) else {
+        return DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!("bucket `{bucket}` joignable ; aucune sauvegarde S3 encore"),
+            Some("penelope backup --push".into()),
+        );
+    };
+    let age_h = age_hours(s, created);
+    let detail = format!(
+        "bucket `{bucket}` joignable ; dernière sauvegarde S3 il y a {age_h} h ({} Mo, {key})",
+        last["pushed_s3"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024)
+    );
+    if age_h > 48 {
+        DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup --push".into()))
+    } else {
+        DoctorCheck::ok(ID, LABEL, detail)
+    }
 }
 
 /// Contrôle `doctor` : âge de la dernière sauvegarde, destination, phrase de passe.
@@ -539,10 +751,20 @@ pub async fn doctor_check(s: &Services) -> penelope_kernel::api::DoctorCheck {
         ),
         _ => String::new(),
     };
+    let mut towards: Vec<String> = Vec::new();
+    if let Some(remote) = st["remote"].as_str().filter(|r| !r.trim().is_empty()) {
+        towards.push(remote.to_string());
+    }
+    if let Some(bucket) = st["s3"]["bucket"].as_str() {
+        towards.push(format!("S3 `{bucket}`"));
+    }
+    if towards.is_empty() {
+        towards.push("aucun dépôt".into());
+    }
     let detail = format!(
         "dernière il y a {age_h} h ({} Mo{duration}), vers {}",
         st["last"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024),
-        st["remote"].as_str().unwrap_or("aucun dépôt")
+        towards.join(" et ")
     );
     if age_h > 48 {
         DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup --push".into()))

@@ -187,7 +187,7 @@ pub enum Command {
     #[command(subcommand)]
     History(HistoryCmd),
     /// Sauvegarde cohérente. `--push` : archive chiffrée complète, poussée dans le dépôt
-    /// privé de `backup.git_remote`.
+    /// privé de `backup.git_remote` et, ou, le bucket de `[backup.s3]`.
     Backup {
         #[arg(long)]
         push: bool,
@@ -198,15 +198,28 @@ pub enum Command {
         #[arg(long)]
         media: bool,
     },
-    /// Restaure **tout** depuis une sauvegarde chiffrée (archive locale ou dépôt privé),
-    /// daemon arrêté, sur une machine neuve.
+    /// Restaure **tout** depuis une sauvegarde chiffrée (archive locale, dépôt privé ou
+    /// bucket S3), daemon arrêté, sur une machine neuve.
     #[command(name = "restore-all")]
     RestoreAll {
-        /// Archive `.tar.gz.enc`, ou dépôt git à cloner ; vide : `backup.git_remote`.
+        /// Archive `.tar.gz.enc`, dépôt git à cloner, ou `s3` (le bucket de `[backup.s3]`) ;
+        /// `s3://bucket/prefixe` désigne un autre bucket, avec `--endpoint`.
         source: Option<String>,
         /// Dire ce qui serait restauré, sans rien écrire.
         #[arg(long)]
         dry_run: bool,
+        /// S3 : lister les sauvegardes disponibles, sans rien restaurer.
+        #[arg(long)]
+        list: bool,
+        /// S3 : clé de l'archive à restaurer ; défaut : la plus récente.
+        #[arg(long)]
+        archive: Option<String>,
+        /// S3 : adresse du service (`https://…`) ; défaut : `backup.s3.endpoint`.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// S3 : région de la signature ; défaut : `backup.s3.region`.
+        #[arg(long)]
+        region: Option<String>,
     },
     /// Restaure une sauvegarde, daemon arrêté (la base actuelle est d'abord mise de côté).
     Restore { file: PathBuf },

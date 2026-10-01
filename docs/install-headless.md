@@ -599,7 +599,14 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées. |
 | `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées. |
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
-| `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub). |
+| `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée dans le dépôt git, en octets (limite de fichier de GitHub) ; sans effet sur S3. |
+| `backup.s3.endpoint` | `""` | Adresse du service (`https://s3.exemple.net`, `http://127.0.0.1:9000` en local) ; vide : pas de destination S3. |
+| `backup.s3.bucket` | `""` | Bucket, créé d'avance et réservé aux sauvegardes. |
+| `backup.s3.prefix` | `"penelope/"` | Préfixe des objets dans le bucket. |
+| `backup.s3.region` | `"us-east-1"` | Région de la signature ; `us-east-1` convient à MinIO. |
+| `backup.s3.path_style` | `true` | Adressage en chemin (`endpoint/bucket/clé`, MinIO) plutôt qu'en sous-domaine (`bucket.endpoint` ; AWS et Scaleway acceptent les deux). |
+| `backup.s3.access_key_id` | `"${SECRET:s3_access_key_id}"` | Identifiant de la clé d'accès, à ranger dans le magasin de secrets. |
+| `backup.s3.secret_access_key` | `"${SECRET:s3_secret_access_key}"` | Clé secrète, à ranger dans le magasin de secrets. |
 
 **[approval]**
 
