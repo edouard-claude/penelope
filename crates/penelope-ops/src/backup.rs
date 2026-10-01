@@ -310,9 +310,10 @@ pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Resul
         let targets = destinations(&cfg);
         if targets.is_empty() {
             anyhow::bail!(
-                "aucune destination de sauvegarde : `penelope config set backup.git_remote \
-                 git@github.com:moi/penelope-backups.git` (dépôt **privé**), ou une section \
-                 `[backup.s3]` (endpoint, bucket, clés dans le magasin de secrets)"
+                "aucun dépôt de sauvegarde ni bucket S3 : `penelope config set \
+                 backup.git_remote git@github.com:moi/penelope-backups.git` (dépôt \
+                 **privé**), ou une section `[backup.s3]` (endpoint, bucket, clés dans le \
+                 magasin de secrets)"
             );
         }
         let mut failed = serde_json::Map::new();
