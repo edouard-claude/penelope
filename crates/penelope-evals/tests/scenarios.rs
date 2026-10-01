@@ -117,6 +117,9 @@ scenario_cases! {
     rpc_plans => "rpc-plans",
     livraison_dev => "livraison-dev",
     livraison_prod => "livraison-prod",
+    // Expérience persévérance (#291) : l'indice `developer` est dans la surface, pas dans
+    // le monde.
+    indice_perseverance_codex => "indice-perseverance-codex",
 }
 
 #[test]

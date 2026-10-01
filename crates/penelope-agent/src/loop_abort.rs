@@ -100,7 +100,10 @@ impl AgentLoop {
             )
             .await?
         {
-            Ok(r) => {
+            Ok(super::model::Called {
+                response: r,
+                hinted,
+            }) => {
                 let _ = s
                     .budget
                     .record(penelope_kernel::budget::UsageRecord {
@@ -117,6 +120,7 @@ impl AgentLoop {
                         reasoning: r.usage.reasoning,
                         cost_usd: r.cost_usd,
                         estimated: r.cost_estimated,
+                        unlimited_tokens_hint: hinted,
                         ..Default::default()
                     })
                     .await;

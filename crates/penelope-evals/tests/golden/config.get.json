@@ -135,7 +135,11 @@
         "turn_checkpoint_usd": "number",
         "show_turn_cost_usd": "number",
         "delegate_after_calls": "integer",
-        "compaction_reserve_usd": "number"
+        "compaction_reserve_usd": "number",
+        "delegation_nudge_style": "string"
+      },
+      "agent": {
+        "unlimited_tokens_hint": "bool"
       },
       "context": {
         "compaction_threshold": "number",

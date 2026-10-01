@@ -57,6 +57,15 @@ pub fn to_responses_body(req: &ChatRequest, opts: &CodexOptions) -> Value {
             })),
         }
     }
+    // Dernier item de l'entrée, après l'historique : le rôle `developer` est natif de
+    // l'API Responses (#291).
+    if let Some(note) = &req.developer_note {
+        input.push(json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": note}],
+        }));
+    }
 
     let mut b = json!({
         "model": strip_provider(&req.model),

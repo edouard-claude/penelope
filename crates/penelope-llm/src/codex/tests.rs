@@ -524,3 +524,44 @@ fn the_catalog_has_windows_tools_and_no_price() {
     assert!(fallback[0].supports_tools());
     assert_eq!(fallback[0].provider, "codex");
 }
+
+/// #291 : au dialecte Responses, la note `developer` est le dernier item de `input`, en
+/// `input_text`, après le résultat d'outil ; sans elle, rien n'est ajouté.
+#[test]
+fn the_developer_note_is_the_last_input_item() {
+    let plain = ChatRequest {
+        model: "codex:gpt-6-astra".into(),
+        messages: vec![
+            ChatMessage::system("Tu es Pénélope."),
+            ChatMessage::user("liste les projets"),
+            ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+                id: "c1".into(),
+                name: "fs_list".into(),
+                arguments: json!({}),
+            }]),
+            ChatMessage::tool_result("c1", "fs_list", "a/ b/"),
+        ],
+        ..Default::default()
+    };
+    let hinted = ChatRequest {
+        developer_note: Some("You have unlimited tokens left in this context window.".into()),
+        ..plain.clone()
+    };
+    let without = to_responses_body(&plain, &opts());
+    let with = to_responses_body(&hinted, &opts());
+    let before = without["input"].as_array().unwrap();
+    let after = with["input"].as_array().unwrap();
+    assert!(before.iter().all(|i| i["role"] != "developer"));
+    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(&after[..before.len()], &before[..]);
+    let last = after.last().unwrap();
+    assert_eq!(last["type"], "message");
+    assert_eq!(last["role"], "developer");
+    assert_eq!(last["content"][0]["type"], "input_text");
+    assert_eq!(
+        last["content"][0]["text"],
+        "You have unlimited tokens left in this context window."
+    );
+    // Le prompt système, lui, ne bouge pas : le cache de préfixe reste chaud.
+    assert_eq!(with["instructions"], without["instructions"]);
+}

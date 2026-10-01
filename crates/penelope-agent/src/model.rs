@@ -8,6 +8,30 @@ use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
 use penelope_app::attempts::{Attempt, AttemptCause};
 use retry::{Phase, RetryAction, RetryPlan};
 
+/// L'indice de l'expérience #291, mot pour mot : un message de rôle `developer` en toute
+/// fin de requête, jamais dans l'historique.
+pub(crate) const UNLIMITED_TOKENS_HINT: &str =
+    "You have unlimited tokens left in this context window.";
+
+/// Une réponse du modèle, et ce que la requête portait de plus que l'historique.
+pub(crate) struct Called {
+    pub response: ChatResponse,
+    /// La requête portait l'indice « unlimited tokens » (#291).
+    pub hinted: bool,
+}
+
+/// L'indice « unlimited tokens » pour ce modèle (#291) : quand l'expérience est activée
+/// et que le modèle passe par le backend Codex, dont l'API Responses connaît le rôle
+/// `developer`. Le schéma d'OpenRouter ne le liste pas, un serveur local non plus : un
+/// repli vers un autre fournisseur part sans.
+pub(crate) fn unlimited_tokens_hint(
+    cfg: &penelope_kernel::config::Config,
+    model_id: &str,
+) -> Option<String> {
+    (cfg.agent.unlimited_tokens_hint && penelope_llm::catalog::provider_of(model_id) == "codex")
+        .then(|| UNLIMITED_TOKENS_HINT.to_string())
+}
+
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
 pub(crate) struct CallFailure {
     pub message: String,
@@ -49,7 +73,7 @@ impl AgentLoop {
         pinned_upstream: Option<String>,
         tool_choice: Option<ToolChoice>,
         attempts: &Attempts,
-    ) -> anyhow::Result<Result<ChatResponse, CallFailure>> {
+    ) -> anyhow::Result<Result<Called, CallFailure>> {
         let s = &self.services;
         let mut plan = RetryPlan::new(
             &spec.model_id,
@@ -61,6 +85,10 @@ impl AgentLoop {
         loop {
             let model_id = plan.model().to_string();
             let provider = self.provider_of(&model_id, plan.is_primary()).await;
+            // Expérience #291 : décidé par le modèle de **cette** tentative, hors
+            // `messages`, donc hors historique et hors empreinte.
+            let developer_note = unlimited_tokens_hint(&s.config.config(), &model_id);
+            let hinted = developer_note.is_some();
             let request = ChatRequest {
                 model: model_id.clone(),
                 messages: fit_modalities(&messages, &s.catalog, &model_id),
@@ -75,6 +103,7 @@ impl AgentLoop {
                 fallback_models: plan.server_fallbacks(),
                 // Collant pour le modèle principal seulement : un repli change de fournisseur.
                 pinned_upstream: plan.is_primary().then(|| pinned_upstream.clone()).flatten(),
+                developer_note,
                 ..Default::default()
             };
 
@@ -198,7 +227,10 @@ impl AgentLoop {
                             model_id: r.model.clone(),
                         });
                     }
-                    return Ok(Ok(r));
+                    return Ok(Ok(Called {
+                        response: r,
+                        hinted,
+                    }));
                 }
                 Err(e) => {
                     s.llm_state

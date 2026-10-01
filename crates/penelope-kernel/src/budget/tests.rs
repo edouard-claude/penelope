@@ -277,3 +277,36 @@ async fn the_previous_call_is_the_last_chat_call_of_the_session() {
     assert_eq!(p.system_hash.as_deref(), Some("sys"));
     assert_eq!(p.tools_hash.as_deref(), Some("tools"));
 }
+
+/// #291 : `runtime.llm` dit que l'indice « unlimited tokens » était dans la requête, et
+/// seulement alors : les appels ordinaires gardent leur forme.
+#[tokio::test]
+async fn the_runtime_event_marks_the_hint_only_when_it_was_sent() {
+    let store = Store::open_memory().unwrap();
+    let clock = Arc::new(TestClock::default());
+    let events = crate::event::EventLog::new(store.clone(), clock.clone());
+    let ledger = BudgetLedger::new(store, clock).with_events(events.clone());
+    ledger
+        .record(UsageRecord {
+            session_id: Some("s1".into()),
+            model: "codex:gpt-6-astra".into(),
+            provider: "codex".into(),
+            unlimited_tokens_hint: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    ledger
+        .record(UsageRecord {
+            session_id: Some("s1".into()),
+            model: "deepseek/deepseek-v4-pro".into(),
+            provider: "openrouter".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let logged = events.range(0, 10).await.unwrap();
+    assert_eq!(logged.len(), 2);
+    assert_eq!(logged[0].payload["unlimited_tokens_hint"], true);
+    assert!(logged[1].payload.get("unlimited_tokens_hint").is_none());
+}

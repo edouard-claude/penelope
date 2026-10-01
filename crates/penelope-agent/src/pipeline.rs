@@ -633,18 +633,30 @@ impl AgentLoop {
             ],
             1.0,
         );
+        let mut payload = json!({
+            "tool": info.effective_name,
+            "ok": !outcome.is_error,
+            // Forme de la ligne, pour mesurer la consigne « une commande par appel »
+            // (issue #150). La commande elle-même n'est pas journalée ici : seule sa
+            // forme l'est.
+            "shape": line_shape(&info.effective_name, &call.arguments),
+        });
+        // Le style du rappel de délégation que ce résultat porte (#291), pour la mesure.
+        if nudge.is_some() {
+            payload["nudge_style"] = json!(
+                self.services
+                    .config
+                    .config()
+                    .budget
+                    .delegation_nudge_style
+                    .as_str()
+            );
+        }
         self.services
             .events
             .append(
                 TurnEventKind::ToolResult
-                    .draft(json!({
-                        "tool": info.effective_name,
-                        "ok": !outcome.is_error,
-                        // Forme de la ligne, pour mesurer la consigne « une commande par
-                        // appel » (issue #150). La commande elle-même n'est pas journalée
-                        // ici : seule sa forme l'est.
-                        "shape": line_shape(&info.effective_name, &call.arguments),
-                    }))
+                    .draft(payload)
                     .session(&spec.session_id),
             )
             .await?;

@@ -381,7 +381,7 @@ fn outcome_json(o: &TurnOutcome) -> Value {
 /// Une requête vue par le modèle, réduite à ce qui compte : modèle, outils (noms),
 /// réglages, messages (rôle, texte, appels d'outils).
 fn surface_line(call: usize, req: &ChatRequest) -> Value {
-    json!({
+    let mut line = json!({
         "call": call,
         "model": req.model,
         "tool_choice": req.tool_choice,
@@ -393,7 +393,12 @@ fn surface_line(call: usize, req: &ChatRequest) -> Value {
         "fallback_models": req.fallback_models,
         "pinned_upstream": req.pinned_upstream,
         "messages": req.messages.iter().map(message_line).collect::<Vec<_>>(),
-    })
+    });
+    // L'indice de l'expérience #291, quand la requête le porte : hors `messages`, en fin.
+    if let Some(note) = &req.developer_note {
+        line["developer_note"] = json!(note);
+    }
+    line
 }
 
 fn message_line(m: &ChatMessage) -> Value {

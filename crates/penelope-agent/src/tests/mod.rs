@@ -16,6 +16,7 @@ mod effects;
 mod fallback;
 mod guards;
 mod judge;
+mod perseverance;
 mod policy;
 mod run_loop;
 mod samples;

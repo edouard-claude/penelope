@@ -141,6 +141,10 @@ turn_checkpoint_usd = 1.0
 show_turn_cost_usd = 0.5
 delegate_after_calls = 10
 compaction_reserve_usd = 0.5
+delegation_nudge_style = "classique"
+
+[agent]
+unlimited_tokens_hint = false
 
 [context]
 compaction_threshold = 0.7
