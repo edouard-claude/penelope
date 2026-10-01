@@ -43,8 +43,8 @@ session s'applique au replay du journal.
 `runtime.tool` contient `tool`, `args`, `result`, `ok`, `duration_ms` et
 `cost_usd_estimated` (0 pour les outils natifs, `null` pour MCP sans mesure).
 `runtime.llm` contient modèle, fournisseur, rôle, compteurs de tokens et coût
-mesuré ou estimé ; `unlimited_tokens_hint: true` quand la requête portait l'indice de
-l'expérience persévérance (#291, `agent.unlimited_tokens_hint`), absent sinon. Les
+mesuré ou estimé ; `context_hint: true` quand la requête portait l'indice de contexte de
+l'expérience persévérance (#291, `agent.context_hint`), absent sinon. Les
 événements de session et HITL portent leur cycle de vie ;
 les événements préexistants couvrent les tours, runs, étapes, intents, planifications
 et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement réussi ;

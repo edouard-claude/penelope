@@ -144,7 +144,7 @@ compaction_reserve_usd = 0.5
 delegation_nudge_style = "classique"
 
 [agent]
-unlimited_tokens_hint = false
+context_hint = ""
 
 [context]
 compaction_threshold = 0.7

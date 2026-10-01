@@ -70,12 +70,13 @@ impl NudgeStyle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Agent {
-    /// Expérience (#291) : à chaque appel au modèle d'un tour de conversation, un message
-    /// de rôle `developer` « You have unlimited tokens left in this context window. » est
-    /// ajouté en toute fin de la requête envoyée, hors historique et hors empreinte, pour
-    /// les modèles `codex:` seulement (les autres fournisseurs ignorent ce rôle). Jamais
-    /// persisté ; sa présence est journalisée dans `runtime.llm`.
-    pub unlimited_tokens_hint: bool,
+    /// Expérience (#291) : vide, rien ; sinon ce texte exact (par exemple « You have
+    /// 500000 tokens context window. ») est ajouté, à chaque appel au modèle d'un tour de
+    /// conversation, en toute fin de la requête envoyée dans un message de rôle `developer`,
+    /// hors historique et hors empreinte, pour les modèles `codex:` seulement (les autres
+    /// fournisseurs ignorent ce rôle). Jamais persisté ; sa présence est journalisée dans
+    /// `runtime.llm`.
+    pub context_hint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

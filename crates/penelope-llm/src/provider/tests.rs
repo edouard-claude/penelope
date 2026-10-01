@@ -501,7 +501,7 @@ fn the_developer_note_closes_the_openai_body_when_present() {
         ..Default::default()
     };
     let hinted = ChatRequest {
-        developer_note: Some("You have unlimited tokens left in this context window.".into()),
+        developer_note: Some("You have 500000 tokens context window.".into()),
         ..plain.clone()
     };
     let without = to_openai_body(&plain);
@@ -520,6 +520,6 @@ fn the_developer_note_closes_the_openai_body_when_present() {
     assert_eq!(messages[2]["role"], "developer");
     assert_eq!(
         messages[2]["content"],
-        "You have unlimited tokens left in this context window."
+        "You have 500000 tokens context window."
     );
 }

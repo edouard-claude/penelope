@@ -415,7 +415,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `agent.unlimited_tokens_hint` | `false` | Expérience (#291) : à chaque appel au modèle d'un tour de conversation, un message de rôle `developer` « You have unlimited tokens left in this context window. » est ajouté en toute fin de la requête envoyée, hors historique et hors empreinte, pour les modèles `codex:` seulement (les autres fournisseurs ignorent ce rôle). Jamais persisté ; sa présence est journalisée dans `runtime.llm`. |
+| `agent.context_hint` | `""` | Expérience (#291) : vide, rien ; sinon ce texte exact (par exemple « You have 500000 tokens context window. ») est ajouté, à chaque appel au modèle d'un tour de conversation, en toute fin de la requête envoyée dans un message de rôle `developer`, hors historique et hors empreinte, pour les modèles `codex:` seulement (les autres fournisseurs ignorent ce rôle). Jamais persisté ; sa présence est journalisée dans `runtime.llm`. |
 
 **[context]**
 
@@ -1110,18 +1110,20 @@ Deux interrupteurs, **éteints par défaut**, pour tester une hypothèse (#291) 
 modèle son budget (appels, dollars, jetons restants) le pousserait à conclure trop tôt, à
 rendre une réponse partielle alors que ni le plafond d'appels ni le budget ne sont atteints.
 La source est anecdotique (issue 49735 du dépôt openai/codex) et rien n'est prouvé : c'est
-une expérience à mesurer, pas un réglage recommandé.
+une expérience à mesurer, pas un réglage recommandé. La même source rapporte qu'un texte
+« unlimited tokens » ne change rien chez elle, et qu'une fenêtre chiffrée (« You have
+500000 tokens context window. ») si : le texte est donc libre, à essayer.
 
-- `agent.unlimited_tokens_hint = true` : à chaque appel au modèle d'un tour de
-  conversation, la requête envoyée porte en toute fin un message de rôle `developer` :
-  « You have unlimited tokens left in this context window. ». Il vit hors de l'historique :
-  jamais dans le transcript, le journal `conv.*` ni l'instantané du prompt, et il ne change
-  ni `system_hash`, ni `tools_hash`, ni `request_hash` (le cache de préfixe reste chaud).
-  Il ne part que vers les modèles `codex:`, dont l'API connaît ce rôle ; DeepSeek, un
-  modèle local ou `openai/…` via OpenRouter (dont le schéma ne liste pas `developer`) ne le
-  reçoivent pas, et un repli hors Codex part sans. Sa présence se lit dans l'événement
-  `runtime.llm` (`unlimited_tokens_hint: true`) ; `penelope audit show` ne le montre pas,
-  puisqu'il n'est pas persisté.
+- `agent.context_hint = "You have 500000 tokens context window."` : vide (le défaut), rien
+  ne part ; renseigné, à chaque appel au modèle d'un tour de conversation, la requête
+  envoyée porte en toute fin un message de rôle `developer` avec ce texte exact. Il vit
+  hors de l'historique : jamais dans le transcript, le journal `conv.*` ni l'instantané du
+  prompt, et il ne change ni `system_hash`, ni `tools_hash`, ni `request_hash` (le cache de
+  préfixe reste chaud). Il ne part que vers les modèles `codex:`, dont l'API connaît ce
+  rôle ; DeepSeek, un modèle local ou `openai/…` via OpenRouter (dont le schéma ne liste
+  pas `developer`) ne le reçoivent pas, et un repli hors Codex part sans. Sa présence se
+  lit dans l'événement `runtime.llm` (`context_hint: true`) ; `penelope audit show` ne le
+  montre pas, puisqu'il n'est pas persisté.
 - `budget.delegation_nudge_style = "doux"` : le rappel de `delegate_after_calls` ne cite
   plus ni le nombre d'appels ni le coût du tour ; il dit de regrouper les commandes ou de
   déléguer à `sub_agent_spawn`, de tenir `session_notes` à jour, et de continuer jusqu'au
@@ -1129,7 +1131,7 @@ une expérience à mesurer, pas un réglage recommandé.
   (`nudge_style`).
 
 ```bash
-penelope config set agent.unlimited_tokens_hint true
+penelope config set agent.context_hint "You have 500000 tokens context window."
 penelope config set budget.delegation_nudge_style doux
 ```
 
@@ -1139,7 +1141,7 @@ turn`) et les réponses rendues avant la fin de la demande ; `runtime.llm` dit p
 appel si l'indice était là. Pour revenir en arrière :
 
 ```bash
-penelope config set agent.unlimited_tokens_hint false
+penelope config set agent.context_hint ""
 penelope config set budget.delegation_nudge_style classique
 ```
 

@@ -544,7 +544,7 @@ fn the_developer_note_is_the_last_input_item() {
         ..Default::default()
     };
     let hinted = ChatRequest {
-        developer_note: Some("You have unlimited tokens left in this context window.".into()),
+        developer_note: Some("You have 500000 tokens context window.".into()),
         ..plain.clone()
     };
     let without = to_responses_body(&plain, &opts());
@@ -560,7 +560,7 @@ fn the_developer_note_is_the_last_input_item() {
     assert_eq!(last["content"][0]["type"], "input_text");
     assert_eq!(
         last["content"][0]["text"],
-        "You have unlimited tokens left in this context window."
+        "You have 500000 tokens context window."
     );
     // Le prompt système, lui, ne bouge pas : le cache de préfixe reste chaud.
     assert_eq!(with["instructions"], without["instructions"]);

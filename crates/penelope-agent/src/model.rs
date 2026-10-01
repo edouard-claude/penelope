@@ -8,28 +8,24 @@ use super::attempts::{Attempts, Partial, failure_cause, stream_cut_message};
 use penelope_app::attempts::{Attempt, AttemptCause};
 use retry::{Phase, RetryAction, RetryPlan};
 
-/// L'indice de l'expérience #291, mot pour mot : un message de rôle `developer` en toute
-/// fin de requête, jamais dans l'historique.
-pub(crate) const UNLIMITED_TOKENS_HINT: &str =
-    "You have unlimited tokens left in this context window.";
-
 /// Une réponse du modèle, et ce que la requête portait de plus que l'historique.
 pub(crate) struct Called {
     pub response: ChatResponse,
-    /// La requête portait l'indice « unlimited tokens » (#291).
+    /// La requête portait l'indice de contexte `agent.context_hint` (#291).
     pub hinted: bool,
 }
 
-/// L'indice « unlimited tokens » pour ce modèle (#291) : quand l'expérience est activée
-/// et que le modèle passe par le backend Codex, dont l'API Responses connaît le rôle
-/// `developer`. Le schéma d'OpenRouter ne le liste pas, un serveur local non plus : un
-/// repli vers un autre fournisseur part sans.
-pub(crate) fn unlimited_tokens_hint(
+/// L'indice de contexte pour ce modèle (#291) : le texte exact de `agent.context_hint`,
+/// quand il est renseigné et que le modèle passe par le backend Codex, dont l'API
+/// Responses connaît le rôle `developer`. Le schéma d'OpenRouter ne le liste pas, un
+/// serveur local non plus : un repli vers un autre fournisseur part sans.
+pub(crate) fn context_hint(
     cfg: &penelope_kernel::config::Config,
     model_id: &str,
 ) -> Option<String> {
-    (cfg.agent.unlimited_tokens_hint && penelope_llm::catalog::provider_of(model_id) == "codex")
-        .then(|| UNLIMITED_TOKENS_HINT.to_string())
+    let hint = &cfg.agent.context_hint;
+    (!hint.trim().is_empty() && penelope_llm::catalog::provider_of(model_id) == "codex")
+        .then(|| hint.clone())
 }
 
 /// Échec d'un appel au modèle, déjà formulé pour l'utilisateur.
@@ -87,7 +83,7 @@ impl AgentLoop {
             let provider = self.provider_of(&model_id, plan.is_primary()).await;
             // Expérience #291 : décidé par le modèle de **cette** tentative, hors
             // `messages`, donc hors historique et hors empreinte.
-            let developer_note = unlimited_tokens_hint(&s.config.config(), &model_id);
+            let developer_note = context_hint(&s.config.config(), &model_id);
             let hinted = developer_note.is_some();
             let request = ChatRequest {
                 model: model_id.clone(),

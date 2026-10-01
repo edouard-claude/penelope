@@ -86,9 +86,9 @@ pub struct UsageRecord {
     pub tools_hash: Option<String>,
     /// Cause probable d'un raté de cache, `None` quand le cache a servi.
     pub miss_cause: Option<String>,
-    /// La requête portait l'indice « unlimited tokens » (expérience #291) : journalisé
-    /// dans `runtime.llm` pour la mesure, pas en base.
-    pub unlimited_tokens_hint: bool,
+    /// La requête portait l'indice de contexte `agent.context_hint` (expérience #291) :
+    /// journalisé dans `runtime.llm` pour la mesure, pas en base.
+    pub context_hint: bool,
 }
 
 /// Dernier appel de conversation d'une session : ce à quoi la requête suivante se compare
@@ -259,8 +259,8 @@ impl BudgetLedger {
             });
             // Présent seulement quand l'indice est parti (#291) : les appels ordinaires
             // gardent leur forme.
-            if u.unlimited_tokens_hint {
-                payload["unlimited_tokens_hint"] = serde_json::json!(true);
+            if u.context_hint {
+                payload["context_hint"] = serde_json::json!(true);
             }
             let mut event = EventDraft::new("runtime.llm", payload);
             if let Some(session_id) = &session {

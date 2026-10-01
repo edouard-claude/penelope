@@ -120,7 +120,7 @@ impl AgentLoop {
                         reasoning: r.usage.reasoning,
                         cost_usd: r.cost_usd,
                         estimated: r.cost_estimated,
-                        unlimited_tokens_hint: hinted,
+                        context_hint: hinted,
                         ..Default::default()
                     })
                     .await;

@@ -139,7 +139,7 @@
         "delegation_nudge_style": "string"
       },
       "agent": {
-        "unlimited_tokens_hint": "bool"
+        "context_hint": "string"
       },
       "context": {
         "compaction_threshold": "number",

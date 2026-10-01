@@ -1,11 +1,13 @@
-//! Expérience persévérance (#291) : l'indice « unlimited tokens » en fin de requête et le
-//! rappel de délégation sans chiffres. Deux interrupteurs, éteints par défaut.
+//! Expérience persévérance (#291) : l'indice de contexte en fin de requête et le rappel de
+//! délégation sans chiffres. Deux interrupteurs, éteints par défaut.
 
-use super::model::UNLIMITED_TOKENS_HINT;
 use super::*;
 use penelope_kernel::config::NudgeStyle;
 use penelope_kernel::event::Event;
 use penelope_llm::cache::Fingerprint;
+
+/// Le texte de l'expérience, tel que la source le rapporte efficace.
+const HINT: &str = "You have 500000 tokens context window.";
 
 fn codex(session_id: &str) -> TurnSpec {
     TurnSpec {
@@ -14,11 +16,12 @@ fn codex(session_id: &str) -> TurnSpec {
     }
 }
 
-fn enable_hint(s: &AgentServices) {
+fn set_hint(s: &AgentServices, text: &str) {
+    let text = text.to_string();
     s.config
-        .mutate("test", |c| {
-            c.agent.unlimited_tokens_hint = true;
-            Ok(vec!["agent.unlimited_tokens_hint".into()])
+        .mutate("test", move |c| {
+            c.agent.context_hint = text;
+            Ok(vec!["agent.context_hint".into()])
         })
         .unwrap();
 }
@@ -49,39 +52,40 @@ async fn events_of(s: &AgentServices, session_id: &str, kind: &str) -> Vec<Event
         .collect()
 }
 
-/// Éteint par défaut : rien ne part, rien n'est journalisé, même pour `codex:`.
+/// Éteint par défaut (chaîne vide), et une chaîne blanche vaut vide : rien ne part, rien
+/// n'est journalisé, même pour `codex:`.
 #[tokio::test]
 async fn the_hint_is_off_by_default() {
     let (_d, s, _) = setup().await;
-    let sid = session(&s).await;
-    let (req, _) = one_turn(&s, &codex(&sid)).await;
-    assert_eq!(req.developer_note, None);
-    let llm = events_of(&s, &sid, "runtime.llm").await;
-    assert!(!llm.is_empty());
-    assert!(
-        llm.iter()
-            .all(|e| e.payload.get("unlimited_tokens_hint").is_none()),
-        "{llm:?}"
-    );
+    for blank in ["", "   "] {
+        set_hint(&s, blank);
+        let sid = session(&s).await;
+        let (req, _) = one_turn(&s, &codex(&sid)).await;
+        assert_eq!(req.developer_note, None, "{blank:?}");
+        let llm = events_of(&s, &sid, "runtime.llm").await;
+        assert!(!llm.is_empty());
+        assert!(
+            llm.iter().all(|e| e.payload.get("context_hint").is_none()),
+            "{llm:?}"
+        );
+    }
 }
 
-/// Activé, pour `codex:` : l'indice est dans la requête envoyée, hors `messages` ; la
-/// requête est sinon la même qu'avant, octet pour octet, donc même empreinte ; rien dans
-/// la conversation ni dans le journal, sauf le booléen de `runtime.llm`.
+/// Renseigné, pour `codex:` : le texte exact est dans la requête envoyée, hors
+/// `messages` ; la requête est sinon la même qu'avant, octet pour octet, donc même
+/// empreinte ; rien dans la conversation ni dans le journal, sauf le booléen de
+/// `runtime.llm`.
 #[tokio::test]
 async fn the_hint_rides_outside_the_history_and_leaves_the_fingerprint_alone() {
     let (_d, s, _) = setup().await;
     let sid_plain = session(&s).await;
     let (plain, _) = one_turn(&s, &codex(&sid_plain)).await;
 
-    enable_hint(&s);
+    set_hint(&s, HINT);
     let sid = session(&s).await;
     let (hinted, conv) = one_turn(&s, &codex(&sid)).await;
 
-    assert_eq!(
-        hinted.developer_note.as_deref(),
-        Some(UNLIMITED_TOKENS_HINT)
-    );
+    assert_eq!(hinted.developer_note.as_deref(), Some(HINT));
     assert_eq!(
         hinted.messages, plain.messages,
         "l'historique envoyé ne change pas"
@@ -100,38 +104,37 @@ async fn the_hint_rides_outside_the_history_and_leaves_the_fingerprint_alone() {
     assert!(
         conv.messages()
             .iter()
-            .all(|m| !m.text().contains("unlimited tokens")),
+            .all(|m| !m.text().contains("500000 tokens")),
         "{:?}",
         conv.messages()
     );
     let all = s.events.range(0, 10_000).await.unwrap();
     assert!(
         all.iter()
-            .all(|e| !e.payload.to_string().contains("unlimited tokens")),
+            .all(|e| !e.payload.to_string().contains("500000 tokens")),
         "l'indice ne doit apparaître dans aucun événement"
     );
     // Sa présence, elle, se mesure.
     let llm = events_of(&s, &sid, "runtime.llm").await;
     assert!(!llm.is_empty());
     assert!(
-        llm.iter()
-            .all(|e| e.payload["unlimited_tokens_hint"] == json!(true)),
+        llm.iter().all(|e| e.payload["context_hint"] == json!(true)),
         "{llm:?}"
     );
     let plain_llm = events_of(&s, &sid_plain, "runtime.llm").await;
     assert!(
         plain_llm
             .iter()
-            .all(|e| e.payload.get("unlimited_tokens_hint").is_none())
+            .all(|e| e.payload.get("context_hint").is_none())
     );
 }
 
-/// Activé, pour un modèle qui n'est pas `codex:` : rien ne part. DeepSeek via OpenRouter
-/// ne connaît pas le rôle `developer`.
+/// Renseigné, pour un modèle qui n'est pas `codex:` : rien ne part. DeepSeek via
+/// OpenRouter ne connaît pas le rôle `developer`.
 #[tokio::test]
 async fn the_hint_is_not_sent_to_other_providers() {
     let (_d, s, _) = setup().await;
-    enable_hint(&s);
+    set_hint(&s, HINT);
     let sid = session(&s).await;
     let deepseek = TurnSpec {
         model_id: "openrouter:deepseek/deepseek-v4-pro".into(),
@@ -141,10 +144,7 @@ async fn the_hint_is_not_sent_to_other_providers() {
     assert_eq!(req.developer_note, None);
     let llm = events_of(&s, &sid, "runtime.llm").await;
     assert!(!llm.is_empty());
-    assert!(
-        llm.iter()
-            .all(|e| e.payload.get("unlimited_tokens_hint").is_none())
-    );
+    assert!(llm.iter().all(|e| e.payload.get("context_hint").is_none()));
 }
 
 /// Un tour qui lit un fichier puis répond : le résultat d'outil, et l'événement

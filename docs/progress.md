@@ -14,25 +14,27 @@ La charte et les spécifications sont dans `design/v1/`.
 
 ### 1.0.34
 
-**Expérience persévérance : l'indice « unlimited tokens » et le rappel de délégation sans
-chiffres, deux interrupteurs éteints par défaut (#291).** Constat : sur des tours longs,
-Pénélope conclut parfois avant d'avoir fini, sans que le plafond d'appels ni le budget
-soient atteints ; le seul texte qui lui parle de budget est la note de
+**Expérience persévérance : un indice de contexte en fin de requête et le rappel de
+délégation sans chiffres, deux interrupteurs éteints par défaut (#291).** Constat : sur des
+tours longs, Pénélope conclut parfois avant d'avoir fini, sans que le plafond d'appels ni le
+budget soient atteints ; le seul texte qui lui parle de budget est la note de
 `delegate_after_calls`, qui cite le nombre d'appels et le coût du tour. Hypothèse,
 anecdotique et non prouvée (issue 49735 du dépôt openai/codex) : rappeler au modèle son
-budget le pousse à conclure. On outille la mesure sans trancher.
+budget le pousse à conclure. La même source rapporte qu'un texte « unlimited tokens » ne
+change rien chez elle et qu'une fenêtre chiffrée (« You have 500000 tokens context
+window. ») si : le texte est laissé libre. On outille la mesure sans trancher.
 
-Correctif. `agent.unlimited_tokens_hint` (défaut `false`) : à chaque appel au modèle d'un
-tour de conversation, la requête envoyée porte en toute fin un message de rôle `developer`
-« You have unlimited tokens left in this context window. », porté par un champ de
-`ChatRequest` hors `messages` (`developer_note`) : jamais dans l'historique, le journal
-`conv.*`, le transcript ni l'instantané du prompt, et hors de l'empreinte (`system_hash`,
-`tools_hash`, `request_hash` inchangés, cache de préfixe intact). Sérialisé par le corps
-Responses (dernier item de `input`) et par le corps « chat completions » (dernier message) ;
-décidé par le modèle de la tentative : `codex:` seulement, parce que le schéma d'OpenRouter
-ne liste pas le rôle `developer` (relu le 01/10) et qu'un serveur local ne le connaît pas ;
-un repli hors Codex part sans. Présence journalisée dans `runtime.llm`
-(`unlimited_tokens_hint: true`, absent sinon). `budget.delegation_nudge_style`
+Correctif. `agent.context_hint` (chaîne, défaut vide : rien ne part) : renseigné, à chaque
+appel au modèle d'un tour de conversation, la requête envoyée porte en toute fin un message
+de rôle `developer` avec ce texte exact, porté par un champ de `ChatRequest` hors
+`messages` (`developer_note`) : jamais dans l'historique, le journal `conv.*`, le transcript
+ni l'instantané du prompt, et hors de l'empreinte (`system_hash`, `tools_hash`,
+`request_hash` inchangés, cache de préfixe intact). Sérialisé par le corps Responses
+(dernier item de `input`) et par le corps « chat completions » (dernier message) ; décidé
+par le modèle de la tentative : `codex:` seulement, parce que le schéma d'OpenRouter ne
+liste pas le rôle `developer` (relu le 01/10) et qu'un serveur local ne le connaît pas ; un
+repli hors Codex part sans. Présence journalisée dans `runtime.llm` (`context_hint: true`,
+absent sinon). `budget.delegation_nudge_style`
 (`classique` par défaut, `doux`) : en `doux`, la note ne cite ni compte ni coût ; elle dit
 de regrouper ou de déléguer à `sub_agent_spawn`, de tenir `session_notes` et de continuer
 jusqu'au bout de la demande ; `tool.result` porte `nudge_style` quand il porte la note.
@@ -41,8 +43,9 @@ régénérés ; section « Expérience : persévérance » dans install-headless
 mesurer, revenir en arrière).
 
 Tests : corps « chat completions » et Responses avec et sans la note (rôle, texte exact,
-dernière position) ; la boucle : éteint par défaut, indice présent pour `codex:` avec un
-historique envoyé et des empreintes identiques à la requête sans indice, rien dans la
+dernière position) ; la boucle : éteint par défaut (chaîne vide ou blanche), texte exact
+présent pour `codex:` avec un historique envoyé et des empreintes identiques à la requête
+sans indice, rien dans la
 conversation ni dans le journal, `runtime.llm` marqué ; absent pour DeepSeek, interrupteur
 activé ; la note dans les deux styles (le doux sans chiffre ni dollar) et son style dans
 `tool.result`, rien sans note ; le ledger n'écrit le champ que quand l'indice est parti.
