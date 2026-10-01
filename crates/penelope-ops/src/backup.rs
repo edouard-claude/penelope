@@ -816,7 +816,13 @@ fn sha256_of(p: &Path) -> anyhow::Result<String> {
 }
 
 #[cfg(test)]
+mod fake_s3;
+
+#[cfg(test)]
 mod push_tests;
+
+#[cfg(test)]
+mod s3_tests;
 
 #[cfg(test)]
 mod tests;

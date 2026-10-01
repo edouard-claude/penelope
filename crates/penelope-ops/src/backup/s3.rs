@@ -226,21 +226,26 @@ impl S3Client {
         let code = xml_text(&body, "Code").unwrap_or_default();
         let message = xml_text(&body, "Message").unwrap_or_default();
         let bucket = &self.bucket;
+        // `HEAD` ne rend pas de corps : le code reste alors le seul indice.
+        let label = if code.is_empty() {
+            status.as_u16().to_string()
+        } else {
+            format!("{} {code}", status.as_u16())
+        };
         let cause = match (status.as_u16(), code.as_str()) {
             (403, _) => format!(
-                "accès refusé (403 {code}) : clé d'accès inconnue, signature rejetée ou \
-                 droits insuffisants sur le bucket `{bucket}`"
+                "accès refusé ({label}) : clé d'accès inconnue, signature rejetée ou droits \
+                 insuffisants sur le bucket `{bucket}`"
             ),
             (404, "NoSuchKey") => "objet introuvable (404 NoSuchKey)".to_string(),
             (404, _) => format!(
-                "bucket `{bucket}` introuvable sur {} (404 {code})",
+                "bucket `{bucket}` introuvable sur {} ({label})",
                 self.endpoint()
             ),
-            (301, _) | (400, "AuthorizationHeaderMalformed") => format!(
-                "région ou adressage incorrect ({} {code}) : {message}",
-                status.as_u16()
-            ),
-            _ => format!("HTTP {} {code} {message}", status.as_u16()),
+            (301, _) | (400, "AuthorizationHeaderMalformed") => {
+                format!("région ou adressage incorrect ({label}) : {message}")
+            }
+            _ => format!("HTTP {label} {message}"),
         };
         anyhow::bail!("{what} : {}", cause.trim())
     }
