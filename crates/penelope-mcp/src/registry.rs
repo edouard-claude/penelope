@@ -458,6 +458,23 @@ impl ToolRegistry {
             .await
     }
 
+    /// Reconstruit l'index plein texte depuis `mcp_tools`, quand une sauvegarde l'a laissé
+    /// hors de l'archive (#289). Renvoie le nombre de lignes.
+    pub async fn rebuild_fts(&self) -> penelope_store::Result<usize> {
+        self.store
+            .write(|tx| {
+                tx.execute("DELETE FROM mcp_tools_fts", [])?;
+                let n = tx.execute(
+                    "INSERT INTO mcp_tools_fts(name, title, description, server, qualified)
+                     SELECT name, COALESCE(title, ''), description, server, qualified
+                     FROM mcp_tools",
+                    [],
+                )?;
+                Ok(n)
+            })
+            .await
+    }
+
     /// Noms qualifiés de tous les outils connus, pour proposer un nom proche (issue #110).
     pub async fn names(&self) -> penelope_store::Result<Vec<String>> {
         self.store

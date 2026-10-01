@@ -188,6 +188,17 @@ pub(super) async fn restore_all(cli: &Cli, source: Option<String>, dry_run: bool
     }
     println!("  3. `penelope doctor` : serveurs MCP à réautoriser, modèle de transcription à");
     println!("     télécharger, phrase de passe de sauvegarde à reposer.");
+    if manifest["derived_excluded"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+    {
+        println!(
+            "Les index de recherche (plein texte, vecteurs) ne sont pas dans l'archive : le \
+             daemon les reconstruit à son premier passage de maintenance, dans la minute qui \
+             suit `penelope start` ; les vecteurs reviennent ensuite par le rattrapage \
+             d'embeddings."
+        );
+    }
     Ok(())
 }
 

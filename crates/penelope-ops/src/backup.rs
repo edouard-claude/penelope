@@ -8,7 +8,10 @@
 //! ```
 //!
 //! Ce qui n'y est **pas** : les valeurs de secrets (seuls leurs noms, pour savoir quoi
-//! ressaisir), les artefacts et les médias reçus (sauf `--media`), les journaux.
+//! ressaisir), les artefacts et les médias reçus (sauf `--media`), les journaux, et les
+//! index dérivés de la base ([`DERIVED_TABLES`], #289) : l'instantané les vide et porte la
+//! marque [`REBUILD_PENDING_KEY`], que [`rebuild_if_pending`] honore au premier passage de
+//! maintenance qui suit une restauration.
 //!
 //! La restauration vit dans la CLI (`penelope restore-all`) : elle se fait daemon arrêté,
 //! sur une machine où il n'y a encore rien.
@@ -24,6 +27,23 @@ use std::sync::Arc;
 pub const PASSPHRASE_SECRET: &str = "backup_passphrase";
 /// Clé de suivi de la dernière sauvegarde réussie.
 const LAST_KEY: &str = "backup.last";
+
+/// Tables laissées hors de l'archive (#289) : chacune se recalcule depuis sa source,
+/// `messages` pour `messages_fts`, `mem_entries` pour `mem_fts`, `mcp_tools` pour
+/// `mcp_tools_fts`, le rôle `embedding` pour les trois tables de vecteurs et leur cache.
+/// Sur une instance de 349 Mo, elles en pesaient plus de 110.
+pub const DERIVED_TABLES: &[&str] = &[
+    "messages_fts",
+    "mem_fts",
+    "mcp_tools_fts",
+    "mem_vec",
+    "intent_vec",
+    "mcp_tools_vec",
+    "embeddings_cache",
+];
+
+/// Clé `kv` posée dans l'instantané : la base restaurée demande ses index.
+pub const REBUILD_PENDING_KEY: &str = "store.rebuild_pending";
 
 /// Ce qui entre dans l'archive, en plus de l'instantané de la base.
 fn entries(s: &Services, media: bool) -> Vec<(PathBuf, String)> {
@@ -114,10 +134,14 @@ impl BuildJob {
         let root = work.join("penelope");
         std::fs::create_dir_all(&root)?;
 
-        // Instantané cohérent de la base (§15), jamais une copie à chaud.
+        // Instantané cohérent de la base (§15), jamais une copie à chaud ; allégé de ses
+        // index dérivés, qui reviendront d'eux-mêmes (#289).
         let db = root.join("penelope.db");
         let t = std::time::Instant::now();
         self.store.backup_to(&db)?;
+        let full_bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+        strip_derived(&db, &self.created_at)
+            .map_err(|e| anyhow::anyhow!("allègement de l'instantané : {e}"))?;
         let snapshot = t.elapsed();
 
         let mut contents: Vec<Value> = Vec::new();
@@ -135,6 +159,8 @@ impl BuildJob {
             "created_at": self.created_at,
             "day": self.day,
             "db_bytes": std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0),
+            "db_full_bytes": full_bytes,
+            "derived_excluded": DERIVED_TABLES,
             "contents": contents,
             "media_included": self.media,
             "secrets_expected": secrets,
@@ -162,6 +188,52 @@ impl BuildJob {
         });
         Ok((sealed, report, snapshot))
     }
+}
+
+/// Vide les tables dérivées de l'instantané et y pose la marque de reconstruction.
+///
+/// L'instantané est une copie : la base vivante et ses caches ne sont pas touchés (règle
+/// des caches de `penelope-archtest`), et la reconstruction passe par les crates qui
+/// tiennent chaque table. `VACUUM` rend l'espace : c'est lui qui fait la différence de
+/// taille, un `DELETE` seul garderait les pages.
+fn strip_derived(snapshot: &Path, created_at: &str) -> penelope_store::Result<()> {
+    let mut conn = penelope_store::rusqlite::Connection::open(snapshot)?;
+    let tx = conn.transaction()?;
+    for table in DERIVED_TABLES {
+        tx.execute_batch(&format!("DELETE FROM {table};"))?;
+    }
+    penelope_store::kv_set(&tx, REBUILD_PENDING_KEY, created_at)?;
+    tx.commit()?;
+    conn.execute_batch("VACUUM;")?;
+    Ok(())
+}
+
+/// Base restaurée d'une sauvegarde allégée : reconstruit les index plein texte depuis
+/// leurs tables sources et retire la marque. Les vecteurs reviennent par le rattrapage
+/// d'embeddings, que la passe de maintenance lance juste après. `None` : rien à faire.
+pub async fn rebuild_if_pending(s: &Services) -> anyhow::Result<Option<Value>> {
+    let Some(created_at) = s.kv_get(REBUILD_PENDING_KEY).await? else {
+        return Ok(None);
+    };
+    let started = std::time::Instant::now();
+    let messages = s.context.history.rebuild_fts().await?;
+    let memory = s.memory.rebuild_fts().await?;
+    let tools = s.mcp_tools.rebuild_fts().await?;
+    s.kv_delete(REBUILD_PENDING_KEY).await?;
+    let report = json!({
+        "backup_created_at": created_at,
+        "messages_fts": messages,
+        "mem_fts": memory,
+        "mcp_tools_fts": tools,
+        "duration_ms": started.elapsed().as_millis() as u64,
+    });
+    tracing::info!(report = %report, "index reconstruits après restauration");
+    let mut payload = report.clone();
+    payload["reason"] = json!("restore");
+    s.events
+        .append(EventDraft::new("store.rebuilt", payload))
+        .await?;
+    Ok(Some(report))
 }
 
 /// Phrase de passe des sauvegardes, rangée dans le magasin de secrets.
@@ -525,229 +597,4 @@ fn sha256_of(p: &Path) -> anyhow::Result<String> {
 mod push_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use penelope_kernel::config::Backup;
-
-    use std::sync::Arc;
-
-    async fn services() -> (tempfile::TempDir, Arc<Services>) {
-        let dir = tempfile::tempdir().unwrap();
-        let clock: penelope_kernel::clock::SharedClock =
-            Arc::new(penelope_kernel::clock::TestClock::default());
-        let s = Arc::new(
-            penelope_app::services::Services::for_tests(dir.path().to_path_buf(), clock)
-                .await
-                .unwrap(),
-        );
-        (dir, s)
-    }
-
-    /// #42 : sauvegarde puis restauration dans un répertoire vide : la base et le vault
-    /// reviennent identiques, et les valeurs de secrets ne sont jamais dans l'archive.
-    #[tokio::test]
-    async fn a_backup_restores_the_database_and_the_vault() {
-        let (_dir, s) = services().await;
-        let s = &s;
-        let vault = crate::helpers::vault_dir(s);
-        std::fs::create_dir_all(&vault).unwrap();
-        std::fs::write(vault.join("memoire.md"), "- un souvenir précis ^01UID\n").unwrap();
-        s.platform
-            .secrets
-            .set(PASSPHRASE_SECRET, "phrase de passe de sauvegarde")
-            .unwrap();
-        s.platform
-            .secrets
-            .set("openrouter_api_key", "sk-or-v1-valeur-secrete")
-            .unwrap();
-        // Une trace dans la base, pour vérifier qu'elle revient.
-        s.sessions
-            .create(
-                penelope_kernel::session::SessionKind::Chat,
-                Some("Atlas".into()),
-            )
-            .await
-            .unwrap();
-
-        let (archive, report) = build(s, false).await.unwrap();
-        assert!(archive.is_file());
-        assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
-        assert!(report["sha256"].as_str().is_some());
-        // Le manifeste dit quels secrets ressaisir, jamais leurs valeurs.
-        let names: Vec<String> = report["manifest"]["secrets_expected"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        assert!(
-            names.contains(&"openrouter_api_key".to_string()),
-            "{names:?}"
-        );
-        let raw = std::fs::read(&archive).unwrap();
-        assert!(
-            !String::from_utf8_lossy(&raw).contains("sk-or-v1-valeur-secrete"),
-            "aucune valeur de secret dans l'archive"
-        );
-
-        // Restauration dans un répertoire vide.
-        let fresh = tempfile::tempdir().unwrap();
-        let tar = fresh.path().join("s.tar.gz");
-        penelope_platform::archive::open(&archive, &tar, "phrase de passe de sauvegarde").unwrap();
-        penelope_platform::process::extract_tar_gz(&tar, fresh.path()).unwrap();
-        let root = fresh.path().join("penelope");
-        assert_eq!(
-            std::fs::read_to_string(root.join("vault/memoire.md")).unwrap(),
-            "- un souvenir précis ^01UID\n"
-        );
-        // La base restaurée porte la session créée.
-        let restored = penelope_store::Store::open(root.join("penelope.db")).unwrap();
-        let titles: Vec<String> = restored
-            .read(|c| {
-                let mut st = c.prepare("SELECT title FROM sessions")?;
-                let rows = st.query_map([], |r| r.get::<_, Option<String>>(0))?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push(r?.unwrap_or_default());
-                }
-                Ok(out)
-            })
-            .await
-            .unwrap();
-        assert!(titles.contains(&"Atlas".to_string()), "{titles:?}");
-    }
-
-    /// #77 : sur un runtime à un seul worker, une sauvegarde complète laisse passer les
-    /// écritures : l'instantané ne prend pas l'écrivain, et le tar, Argon2 et le
-    /// chiffrement ne monopolisent pas le runtime. `doctor` dit sa durée.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
-        let (_dir, s) = services().await;
-        s.platform
-            .secrets
-            .set(PASSPHRASE_SECRET, "phrase de passe")
-            .unwrap();
-        let job = {
-            let s = s.clone();
-            tokio::spawn(async move { run(&s, false, None).await })
-        };
-        let mut during = 0;
-        while !job.is_finished() {
-            s.store
-                .write(|tx| penelope_store::kv_set(tx, "battement", "1"))
-                .await
-                .unwrap();
-            if !job.is_finished() {
-                during += 1;
-            }
-            tokio::task::yield_now().await;
-        }
-        let report = job.await.unwrap().unwrap();
-        assert!(during > 0, "aucune écriture pendant la sauvegarde");
-        assert!(report["snapshot_ms"].is_u64(), "{report}");
-        assert!(report["duration_ms"].is_u64(), "{report}");
-
-        let events = s
-            .events
-            .range(0, 500)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|e| e.kind == "store.backup")
-            .count();
-        assert_eq!(events, 1);
-        let check = doctor_check(&s).await;
-        assert!(check.detail.contains("d'instantané"), "{}", check.detail);
-    }
-
-    /// #42 : sans phrase de passe, rien n'est écrit et le message dit quoi faire.
-    #[tokio::test]
-    async fn without_a_passphrase_nothing_is_written() {
-        let (_dir, s) = services().await;
-        let e = build(&s, false).await.unwrap_err();
-        assert!(e.to_string().contains(PASSPHRASE_SECRET), "{e}");
-        let out = s.platform.dirs.data().join("backups");
-        let archives = std::fs::read_dir(&out)
-            .map(|r| {
-                r.flatten()
-                    .filter(|e| e.file_name().to_string_lossy().ends_with(".enc"))
-                    .count()
-            })
-            .unwrap_or(0);
-        assert_eq!(archives, 0, "aucune archive ne doit rester");
-    }
-
-    /// #42 : une archive au-delà de la limite du dépôt est refusée, avec la marche à suivre.
-    #[tokio::test]
-    async fn an_oversized_archive_is_refused_before_pushing() {
-        let (_dir, s) = services().await;
-        let s = &s;
-        s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
-        s.publish_config("test", |c| {
-            c.backup.max_push_bytes = 64;
-            c.backup.git_remote = "git@github.com:moi/sauvegardes.git".into();
-            Ok(vec!["backup.max_push_bytes".into()])
-        })
-        .unwrap();
-        let e = run(s, true, Some(false)).await.unwrap_err();
-        assert!(e.to_string().contains("limite"), "{e}");
-    }
-
-    /// #42 : l'état des sauvegardes remonte dans `doctor`.
-    #[tokio::test]
-    async fn doctor_says_when_there_is_no_backup_yet() {
-        let (_dir, s) = services().await;
-        let c = doctor_check(&s).await;
-        assert!(!c.ok, "{c:?}");
-        assert!(c.detail.contains("phrase de passe"), "{c:?}");
-
-        s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
-        let c = doctor_check(&s).await;
-        assert!(c.detail.contains("aucune sauvegarde"), "{c:?}");
-    }
-
-    #[test]
-    fn a_github_slug_is_read_from_any_remote_form() {
-        for r in [
-            "git@github.com:moi/penelope-backups.git",
-            "https://github.com/moi/penelope-backups",
-            "ssh://git@github.com/moi/penelope-backups.git",
-        ] {
-            assert_eq!(
-                github_slug(r).as_deref(),
-                Some("moi/penelope-backups"),
-                "{r}"
-            );
-        }
-        assert!(github_slug("git@gitlab.com:moi/x.git").is_none());
-    }
-
-    /// #42 : 7 quotidiennes, 4 hebdomadaires, 12 mensuelles ; les autres partent.
-    #[test]
-    fn rotation_keeps_seven_four_and_twelve() {
-        let dir = tempfile::tempdir().unwrap();
-        // Trente sauvegardes quotidiennes consécutives.
-        for day in 1..=30 {
-            let name = format!("penelope-2026-09-{day:02}T04-00-00-000Z.tar.gz.enc");
-            std::fs::write(dir.path().join(name), b"x").unwrap();
-        }
-        let cfg = Backup::default();
-        let removed = rotate(dir.path(), &cfg).unwrap();
-        let left: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        // 7 quotidiennes + une par semaine (4 au plus) + une par mois (1 ici).
-        assert!(left.len() >= 7 && left.len() <= 12, "{left:?}");
-        assert_eq!(removed.len(), 30 - left.len());
-        assert!(
-            left.iter().any(|n| n.contains("2026-09-30")),
-            "la plus récente reste : {left:?}"
-        );
-        assert!(
-            !left.iter().any(|n| n.contains("2026-09-02")),
-            "les vieilles du même mois partent : {left:?}"
-        );
-    }
-}
+mod tests;

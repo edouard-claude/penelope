@@ -586,6 +586,33 @@ impl MemoryIndex {
             .await
     }
 
+    /// Reconstruit l'index plein texte depuis `mem_entries` (entrées actives), quand une
+    /// sauvegarde l'a laissé hors de l'archive (#289). Renvoie le nombre de lignes.
+    pub async fn rebuild_fts(&self) -> penelope_store::Result<usize> {
+        self.store
+            .write(|tx| {
+                tx.execute("DELETE FROM mem_fts", [])?;
+                let rows: Vec<(String, String, String)> = {
+                    let mut st = tx.prepare(
+                        "SELECT uid, text, declencheurs FROM mem_entries
+                         WHERE statut != 'retiree'",
+                    )?;
+                    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                        .collect::<Result<_, _>>()?
+                };
+                for (uid, text, declencheurs) in &rows {
+                    let triggers: Vec<String> =
+                        serde_json::from_str(declencheurs).unwrap_or_default();
+                    tx.execute(
+                        "INSERT INTO mem_fts(text, declencheurs, uid) VALUES(?1,?2,?3)",
+                        params![text, triggers.join(" "), uid],
+                    )?;
+                }
+                Ok(rows.len())
+            })
+            .await
+    }
+
     /// Efface l'index dérivé, **sans** toucher à la provenance ni aux signaux :
     /// c'est ce qui permet à `penelope mem reindex` de tout reconstruire du vault seul.
     pub async fn clear_derived(&self) -> penelope_store::Result<()> {
