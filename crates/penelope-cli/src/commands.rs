@@ -49,8 +49,23 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Eval { suite } => return eval_local(suite).await,
         Command::Local(cmd) => return local::run(&cli, cmd),
         Command::Restore { file } => return restore_offline(&cli, file).await,
-        Command::RestoreAll { source, dry_run } => {
-            return restore_all(&cli, source.clone(), *dry_run).await;
+        Command::RestoreAll {
+            source,
+            dry_run,
+            list,
+            archive,
+            endpoint,
+            region,
+        } => {
+            let args = restore::RestoreAllArgs {
+                source: source.clone(),
+                dry_run: *dry_run,
+                list: *list,
+                archive: archive.clone(),
+                endpoint: endpoint.clone(),
+                region: region.clone(),
+            };
+            return restore_all(&cli, args).await;
         }
         Command::Secret(SecretCmd::Set { name, value }) => {
             if value.is_some() {

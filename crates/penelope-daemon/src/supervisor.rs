@@ -547,6 +547,12 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     // Skills déposées en SSH : relues quand le dossier change, sans redémarrage (#63).
     skills_tick(d).await?;
 
+    // Base restaurée d'une sauvegarde allégée : index plein texte à refaire (#289) ; les
+    // vecteurs reviennent par le rattrapage lancé après cette passe.
+    if let Err(e) = penelope_ops::backup::rebuild_if_pending(&d.services).await {
+        tracing::warn!(error = %e, "reconstruction des index après restauration");
+    }
+
     // Sauvegarde complète à l'heure dite (issue #42).
     if let Err(e) = penelope_ops::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
         tracing::warn!(error = %e, "sauvegarde nocturne");

@@ -38,7 +38,7 @@ impl Rpc {
                     )
                     .await,
                 );
-                checks.push(penelope_ops::backup::doctor_check(&self.daemon.services).await);
+                checks.extend(penelope_ops::backup::doctor_checks(&self.daemon.services).await);
                 if let Some(channel) = self.daemon.hooks.delivery() {
                     checks.extend(channel.doctor_checks().await);
                 }

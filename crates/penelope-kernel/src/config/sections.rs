@@ -678,7 +678,7 @@ impl Default for Voice {
     }
 }
 
-/// Sauvegarde complète vers un dépôt privé (issue #42).
+/// Sauvegarde complète vers un dépôt privé (issue #42) et, ou, un stockage S3 (#289).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Backup {
@@ -694,8 +694,12 @@ pub struct Backup {
     pub keep_monthly: u32,
     /// Inclure les artefacts et les médias reçus. Lourd, et reconstructible.
     pub include_media: bool,
-    /// Taille maximale d'une archive poussée, en octets (limite de fichier de GitHub).
+    /// Taille maximale d'une archive poussée dans le dépôt git, en octets (limite de
+    /// fichier de GitHub) ; sans effet sur S3.
     pub max_push_bytes: u64,
+    /// Stockage S3 (MinIO, Scaleway, AWS…) ; actif dès que `endpoint` et `bucket` sont
+    /// renseignés. Avec un dépôt git aussi, les deux reçoivent chaque sauvegarde.
+    pub s3: BackupS3,
 }
 
 impl Default for Backup {
@@ -708,7 +712,51 @@ impl Default for Backup {
             keep_monthly: 12,
             include_media: false,
             max_push_bytes: 100 * 1024 * 1024,
+            s3: BackupS3::default(),
         }
+    }
+}
+
+/// Destination S3 des sauvegardes (#289) : tout stockage compatible S3, signature SigV4.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupS3 {
+    /// Adresse du service (`https://s3.exemple.net`, `http://127.0.0.1:9000` en local) ;
+    /// vide : pas de destination S3.
+    pub endpoint: String,
+    /// Bucket, créé d'avance et réservé aux sauvegardes.
+    pub bucket: String,
+    /// Préfixe des objets dans le bucket.
+    pub prefix: String,
+    /// Région de la signature ; `us-east-1` convient à MinIO.
+    pub region: String,
+    /// Adressage en chemin (`endpoint/bucket/clé`, MinIO) plutôt qu'en sous-domaine
+    /// (`bucket.endpoint` ; AWS et Scaleway acceptent les deux).
+    pub path_style: bool,
+    /// Identifiant de la clé d'accès, à ranger dans le magasin de secrets.
+    pub access_key_id: String,
+    /// Clé secrète, à ranger dans le magasin de secrets.
+    pub secret_access_key: String,
+}
+
+impl Default for BackupS3 {
+    fn default() -> Self {
+        BackupS3 {
+            endpoint: String::new(),
+            bucket: String::new(),
+            prefix: "penelope/".into(),
+            region: "us-east-1".into(),
+            path_style: true,
+            access_key_id: "${SECRET:s3_access_key_id}".into(),
+            secret_access_key: "${SECRET:s3_secret_access_key}".into(),
+        }
+    }
+}
+
+impl BackupS3 {
+    /// Une destination S3 est configurée : adresse et bucket renseignés.
+    pub fn enabled(&self) -> bool {
+        !self.endpoint.trim().is_empty() && !self.bucket.trim().is_empty()
     }
 }
 

@@ -603,3 +603,60 @@ fn a_fixed_routing_says_how_to_become_adaptive() {
     assert!(out.contains("Catalogue"), "{out}");
     assert!(out.ends_with("catalogue vieux de 3 jours"), "{out}");
 }
+
+/// #289 : `restore-all` lit une source S3 : `s3` prend la configuration locale,
+/// `s3://bucket/prefixe` la remplace, et les options priment ; ce qui manque est nommé.
+#[test]
+fn restore_all_resolves_its_s3_source() {
+    let c = parse(&[
+        "restore-all",
+        "s3",
+        "--list",
+        "--archive",
+        "penelope-2026-10-01.tar.gz.enc",
+        "--endpoint",
+        "https://s3.exemple.net",
+        "--region",
+        "fr-par",
+    ]);
+    let Command::RestoreAll {
+        source,
+        list,
+        archive,
+        endpoint,
+        region,
+        ..
+    } = c.command
+    else {
+        panic!("{c:?}");
+    };
+    assert_eq!(source.as_deref(), Some("s3"));
+    assert!(list);
+    assert_eq!(archive.as_deref(), Some("penelope-2026-10-01.tar.gz.enc"));
+
+    let mut local = penelope_kernel::config::BackupS3::default();
+    let e = restore::resolve_s3("s3", &local, None, None).unwrap_err();
+    assert!(e.contains("--endpoint"), "{e}");
+    let s3 = restore::resolve_s3("s3", &local, endpoint.as_deref(), region.as_deref()).unwrap_err();
+    assert!(s3.contains("bucket"), "{s3}");
+    local.endpoint = "https://minio.local:9000".into();
+    local.bucket = "sauvegardes".into();
+    let s3 = restore::resolve_s3("s3", &local, None, None).unwrap();
+    assert_eq!(
+        (s3.bucket.as_str(), s3.prefix.as_str()),
+        ("sauvegardes", "penelope/")
+    );
+    assert_eq!(s3.region, "us-east-1");
+    let s3 = restore::resolve_s3(
+        "s3://autre/archives/2026",
+        &local,
+        endpoint.as_deref(),
+        region.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(s3.bucket, "autre");
+    assert_eq!(s3.prefix, "archives/2026");
+    assert_eq!(s3.endpoint, "https://s3.exemple.net");
+    assert_eq!(s3.region, "fr-par");
+    assert!(restore::resolve_s3("git@github.com:moi/x.git", &local, None, None).is_err());
+}

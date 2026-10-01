@@ -284,7 +284,58 @@ impl Config {
             crate::cron::Cron::parse(&self.backup.cron)?;
         }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
+        self.validate_backup_s3()
+    }
 
+    /// Destination S3 (#289) : adresse en HTTPS (HTTP seulement vers la boucle locale),
+    /// sans identifiants ; bucket renseigné dès que l'adresse l'est, et réciproquement.
+    fn validate_backup_s3(&self) -> Result<()> {
+        let s3 = &self.backup.s3;
+        let (endpoint, bucket) = (s3.endpoint.trim(), s3.bucket.trim());
+        if endpoint.is_empty() && bucket.is_empty() {
+            return Ok(());
+        }
+        if endpoint.is_empty() || bucket.is_empty() {
+            return Err(KernelError::config(
+                "backup.s3.endpoint et backup.s3.bucket vont ensemble : renseigner les deux, \
+                 ou aucun",
+            ));
+        }
+        let (scheme, rest) = endpoint.split_once("://").ok_or_else(|| {
+            KernelError::config(format!(
+                "backup.s3.endpoint `{endpoint}` : une adresse `https://…` est attendue"
+            ))
+        })?;
+        let authority = rest.split('/').next().unwrap_or_default();
+        if authority.is_empty() {
+            return Err(KernelError::config(format!(
+                "backup.s3.endpoint `{endpoint}` : hôte manquant"
+            )));
+        }
+        if authority.contains('@') {
+            return Err(KernelError::config(
+                "backup.s3.endpoint ne porte pas d'identifiants : ils vont dans \
+                 backup.s3.access_key_id et backup.s3.secret_access_key",
+            ));
+        }
+        let host = authority
+            .trim_start_matches('[')
+            .split([']', ':'])
+            .next()
+            .unwrap_or_default();
+        let local = matches!(host, "127.0.0.1" | "::1" | "localhost");
+        if !(scheme == "https" || (scheme == "http" && local)) {
+            return Err(KernelError::config(format!(
+                "backup.s3.endpoint `{endpoint}` : HTTPS obligatoire hors boucle locale \
+                 (les identifiants et l'archive passeraient en clair)"
+            )));
+        }
+        if bucket.contains('/') {
+            return Err(KernelError::config(format!(
+                "backup.s3.bucket `{bucket}` : un nom de bucket, sans `/` (le chemin va dans \
+                 backup.s3.prefix)"
+            )));
+        }
         Ok(())
     }
 

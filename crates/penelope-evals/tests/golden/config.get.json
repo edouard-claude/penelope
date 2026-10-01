@@ -299,7 +299,16 @@
         "keep_weekly": "integer",
         "keep_monthly": "integer",
         "include_media": "bool",
-        "max_push_bytes": "integer"
+        "max_push_bytes": "integer",
+        "s3": {
+          "endpoint": "string",
+          "bucket": "string",
+          "prefix": "string",
+          "region": "string",
+          "path_style": "bool",
+          "access_key_id": "string",
+          "secret_access_key": "string"
+        }
       },
       "approval": {
         "judge": "string"
