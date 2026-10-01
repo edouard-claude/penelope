@@ -12,6 +12,58 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.33
+
+**Sauvegardes : les index recalculables restent hors de l'archive, et un stockage S3
+(MinIO, Scaleway, AWS) s'ajoute au dépôt git (#289).** Constat sur une instance, le
+01/10 : la sauvegarde nocturne a échoué, « archive de 111 Mo : au-delà de la limite de
+100 Mo du dépôt » ; l'archive grossissait vite (70 Mo le 23/09, 99 Mo le 30/09, 116 Mo le
+01/10) avec une base de 349 Mo dont plus de 110 Mo d'index recalculables (`embeddings_cache`
+50 Mo, `mem_vec` 33 Mo, tables d'ombre de `messages_fts` 28 Mo et plus). Deux causes :
+l'instantané `VACUUM INTO` embarquait ces index, et la seule destination hors machine était
+un dépôt git borné par `backup.max_push_bytes` ; une archive qui dépasse ne partait nulle
+part, chaque nuit.
+
+Correctif, en trois lots. **Instantané allégé** : sept tables dérivées (`messages_fts`,
+`mem_fts`, `mcp_tools_fts`, `mem_vec`, `intent_vec`, `mcp_tools_vec`, `embeddings_cache`)
+sont vidées de la copie puis `VACUUM` ; la copie porte la clé `store.rebuild_pending`, que
+la passe de maintenance du daemon honore au premier passage après une restauration (index
+plein texte reconstruits par les crates qui les tiennent, `rebuild_fts` ajouté à
+`MemoryIndex` et `ToolRegistry` ; les vecteurs reviennent par le rattrapage d'embeddings
+déjà en place). Le manifeste dit ce qui manque (`derived_excluded`, `db_full_bytes`) et
+`restore-all` le répète. Mesure sur une base synthétique de 45,9 Mo dont 32 Mo de vecteurs
+incompressibles : instantané 9,5 Mo, archive 33,2 Mo -> 3,5 Mo (test ignoré
+`measure_the_archive_with_and_without_derived_tables`) ; sur l'instance, les 83 Mo de
+vecteurs ne se compressent pas, l'archive de 116 Mo devrait tomber autour de 30 Mo
+(estimation, à relire après la première nuit). **Destination S3** : `[backup.s3]`
+(`endpoint`, `bucket`, `prefix`, `region` défaut `us-east-1`, `path_style` défaut `true`
+pour MinIO, clés en `${SECRET:…}`), validée au chargement (HTTPS hors boucle locale, pas
+d'identifiants dans l'adresse) ; signature AWS SigV4 écrite ici (`backup/sigv4.rs`,
+HMAC-SHA256 sur `sha2`, pas de SDK) ; client `backup/s3.rs` : PUT en parties au-delà de
+64 Mo, taille relue par `HEAD`, LIST paginé, DELETE, GET en flux, erreurs qui nomment leur
+cause. `backup --push` sert toutes les destinations configurées ; l'échec de l'une ne
+retient pas l'autre (`pushed`, `pushed_s3`, `failed`, message « sauvegarde partielle » la
+nuit) ; tout en échec reste une erreur ; `max_push_bytes` ne borne que le git ; la rotation
+`keep_*` s'applique aux objets du préfixe ; `doctor` gagne `backup.s3` (bucket joignable,
+dernière sauvegarde S3 et son âge). `penelope restore-all s3 [--list] [--archive <clé>]`,
+ou `s3://bucket/prefixe --endpoint …` sur une machine neuve, clés par
+`PENELOPE_S3_ACCESS_KEY_ID` et `PENELOPE_S3_SECRET_ACCESS_KEY`, sinon le magasin de
+secrets, sinon l'invite. **Doc** : install-headless.md (S3, MinIO, clé limitée au bucket,
+restauration), référence des clés et golden `config.get` régénérés.
+
+Tests : une base peuplée, sauvegardée puis restaurée dans une racine neuve rend les mêmes
+recherches (historique et mémoire) qu'avant, une fois les index reconstruits, et la base
+vivante n'a rien perdu ; SigV4 contre les vecteurs officiels d'AWS (`get-vanilla`,
+`post-x-www-form-urlencoded`, GET Object, PUT Object, GET Bucket list et lifecycle) ; un
+faux serveur S3 qui recalcule la signature de chaque requête : envoi vérifié, huit parties
+recomposées et abandon sur partie refusée, rétention avec manifestes et liste paginée,
+restauration (liste puis téléchargement), erreurs 403, 404, mauvaise clé et serveur
+injoignable, deux destinations avec échec partiel, `doctor`. Ce qui marchait déjà et
+continue : le dépôt git seul (envoi, rotation, refus au-delà de la limite, dépôt public
+refusé), la restauration depuis une archive locale ou un dépôt, la méthode RPC `backup` sans
+`push`, la base vivante jamais touchée par l'allègement (règle des caches de
+`penelope-archtest`). Closes #289.
+
 ### 1.0.32
 
 **Mémoire : `penelope mem reclaim` rattrape les rejets « ni dit ni confirmé » que le
