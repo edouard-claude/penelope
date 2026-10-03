@@ -98,3 +98,4 @@ daemon par la socket locale.
 - [0015](decisions/0015-gel-0.17-et-branche-v1.md) : gel de la 0.17 et branche `v1` ; close par la bascule du 27 septembre 2026 (la V1 sur `main`, 1.0.0-rc.1), ses règles du gel restent en vigueur.
 - [0016](decisions/0016-ptc-hors-v1.md) : le PTC (`run_code`) est hors V1 ; un appel imbriqué qui demanderait une approbation est refusé sans carte.
 - [0017](decisions/0017-journal-source-unique.md) : le journal d'événements est la source unique de la conversation ; les tables de messages sont des caches que seul `penelope-context` écrit.
+- [0018](decisions/0018-webhook-entrant.md) : un déclencheur `webhook` entrant, signé en HMAC, sur un listener local dédié (`[webhooks]`) ; le mode webhook de Telegram est refusé plutôt que promis.

@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 30 septembre 2026.
+Dernière mise à jour : 3 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,67 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.35
+
+**Webhooks entrants : un déclencheur `webhook` signé en HMAC, sur un listener local
+dédié, et le mode webhook de Telegram enfin refusé plutôt que promis (#294).** Constat :
+rien ne pouvait pousser un événement dans Pénélope depuis l'extérieur ; une forge, un
+suivi de tickets, un formulaire ou un script sur une autre machine n'avaient que la
+scrutation (`mcp_poll`). Et `telegram.mode = "webhook"` avec `telegram.webhook_url`,
+acceptés à la validation depuis la 0.17, n'ont jamais été servis : un bot ainsi réglé ne
+recevait rien, sans un mot.
+
+Correctif. **Kind `webhook`** (`penelope schedule add webhook --spec '{}' --target …`,
+ou `schedule_create` soumis à approbation) : à la création, Pénélope attribue le chemin
+`/hook/<jeton>` (24 caractères tirés au sort) et un secret de 48 caractères rangé dans le
+magasin de secrets sous `webhook_<jeton>` ; la spécification ne porte que le chemin et le
+nom du secret (`secret_ref`), jamais sa valeur, et `spec.secret` est refusé. Le secret est
+montré une fois, en ligne de commande, avec l'adresse locale du hook ; par l'outil, il
+n'est pas montré au modèle (la réponse entre dans le journal) et le propriétaire pose le
+sien avec `penelope secret set`. **Serveur** (`scheduler/webhook.rs`, listener dédié,
+décision [0018](decisions/0018-webhook-entrant.md)) : `[webhooks] listen =
+"127.0.0.1:7778"` par défaut, vide pour ne rien ouvrir, au redémarrage ; `POST` seulement
+(405 sinon, un `GET` ne déclenche jamais), chemin actif (404 pour inconnu, en pause ou
+supprimé), signature `X-Penelope-Signature: sha256=<HMAC-SHA256 hex du corps>` comparée
+en temps constant (401), corps borné par `webhooks.max_body_bytes` (64 Ko, 413 avant
+lecture), débit par hook `webhooks.rate_per_minute` (60, 429 avec `Retry-After`), plafond
+`webhooks.prompt_turns_per_hour` de tours `prompt` pour l'ensemble des hooks (20, 429),
+`Expect: 100-continue` honoré, transfert par morceaux refusé (411), connexion coupée à
+20 s. Le corps JSON est l'événement, filtrable par `filter` comme un élément de
+`mcp_poll` (202 `accepted: false` quand il est écarté), et passe aux mêmes cibles :
+`notify` reçoit `{{payload}}` et les champs de premier niveau, `workflow` le corps en
+`{{item}}`, `prompt` ne le substitue **jamais** dans son texte, il arrive après, encadré
+par `wrap_untrusted` avec l'alerte du détecteur local (#92), un tour par réception
+dédoublonné par l'identifiant de livraison. Chaque réception, acceptée ou refusée, est un
+événement `webhook.received` de l'audit : statut, motif, taille, empreinte SHA-256 du
+corps, adresse ; jamais le corps ni les en-têtes. La suppression d'un hook (RPC, outil)
+efface son secret du magasin. Le HMAC-SHA256 de la signature SigV4 (#289) remonte dans
+`penelope_kernel::hmac`, partagé. **Telegram** : `telegram.mode` n'admet plus que
+`polling`, la validation nomme le refus et sa raison ; `webhook_url` reste lue, sans
+effet, et la doc le dit. CLI et `/schedules` montrent `POST /hook/<jeton>` ; doc
+« Webhooks entrants » dans install-headless.md (créer, signer avec `openssl`, exposer par
+un tunnel ou un réseau privé sans rien ouvrir), référence des clés, fixture 0.17 et
+golden `config.get` régénérés.
+
+Tests : serveur sur un port éphémère servi par `serve_on`, interrogé par le client HTTP du
+workspace. Un POST signé déclenche la notification (corps et champs), la réception et le
+tir sont au journal, le secret n'est ni dans le store ni dans le journal et la création le
+montre une fois avec l'adresse locale ; signature absente, fausse, mal formée, d'un autre
+secret ou d'un autre corps : 401 et rien ne part, chaque refus journalisé, préfixe
+`sha256=` facultatif ; `GET` 405 avec `Allow`, chemin inconnu, hook en pause ou supprimé
+404, corps trop grand 413, non JSON 400 ; le filtre écarte sans déclencher ; débit par hook
+et plafond horaire des prompts partagé entre deux hooks, `Retry-After`, fenêtres qui
+glissent à l'horloge de test ; le prompt porte le corps encadré, le motif d'injection
+signalé et son texte non substitué, trois livraisons font trois tours ; la création refuse
+un chemin ou un secret choisis par l'appelant et n'oublie pas un secret rangé pour une
+planification refusée ; dialogue HTTP brut (`100 Continue`, 411, 431, 413 avant lecture,
+400) ; magasin : validation du kind (chemin, `secret_ref`, `secret` refusé, `filter`),
+pas de prochain passage ; HMAC contre la RFC 4231 ; validation de `[webhooks]` et refus
+de `telegram.mode = "webhook"`. Ce qui marchait déjà et continue : les cinq autres
+déclencheurs et leurs tests, la signature SigV4 (vecteurs d'AWS inchangés), le retour
+OAuth sur `mcp.callback_port`, la suppression d'une planification sans webhook. Closes
+#294.
 
 ### 1.0.34
 
