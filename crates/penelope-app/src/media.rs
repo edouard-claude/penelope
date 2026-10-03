@@ -115,6 +115,12 @@ pub fn save_photo(s: &Services, bytes: &[u8]) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Médias rendus par les outils MCP hors workflow, un dossier par session (issue #304) :
+/// l'exécuteur les y pose, la rétention les en retire.
+pub fn mcp_root(data: &Path) -> PathBuf {
+    data.join("media").join("mcp")
+}
+
 /// Relit une image enregistrée et la rend en URI `data:` pour le modèle.
 pub fn data_url(path: &Path) -> Result<String, String> {
     let bytes =

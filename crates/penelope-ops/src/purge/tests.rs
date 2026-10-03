@@ -588,3 +588,32 @@ fn media_paths_are_read_out_of_a_message() {
     );
     assert!(media_paths(r#"{"text":"rien"}"#, root).is_empty());
 }
+
+/// #304 : la rétention retire les médias MCP plus vieux que `retention.days`, et les
+/// dossiers de session vidés ; un média récent reste.
+#[tokio::test]
+async fn retention_removes_old_mcp_media_only() {
+    let (_dir, s, clock) = services().await;
+    clock.advance_ms(91 * 86_400_000);
+    let root = penelope_app::media::mcp_root(&s.platform.dirs.data());
+    let (old_dir, recent_dir) = (root.join("s_vieille"), root.join("s_recente"));
+    for d in [&old_dir, &recent_dir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let old = old_dir.join("a.png");
+    std::fs::write(&old, b"x").unwrap();
+    // Datée d'avant le 1er janvier 2026, où démarre l'horloge de test.
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_760_000_000))
+        .unwrap();
+    let recent = recent_dir.join("b.png");
+    std::fs::write(&recent, b"y").unwrap();
+
+    let report = retention(&s).await.unwrap();
+    assert_eq!(report["mcp_media"], 1, "{report}");
+    assert!(!old.exists() && !old_dir.exists());
+    assert!(recent.exists());
+}

@@ -21,6 +21,7 @@ mod policy;
 mod run_loop;
 mod samples;
 mod steering;
+mod tool_images;
 mod turn_bounds;
 
 struct CountingExecutor {

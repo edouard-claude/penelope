@@ -292,6 +292,18 @@ unknown = "ask"
 Un résultat d'outil qui contient `isError: true` est transmis tel quel au modèle : c'est
 une réponse, pas une panne du harnais, et le modèle doit pouvoir la corriger seul.
 
+Un bloc **`image`** ou **`audio`** d'un résultat (issue #304) est posé sur disque, jamais
+dans le transcript en base64 : dans `mcp-media/` du répertoire du run pour une étape de
+workflow, sinon dans `{data}/media/mcp/<session>/`, sous un nom tiré de son contenu (la
+même capture rendue deux fois est le même fichier), 10 Mo au plus (au-delà, rien n'est
+écrit et le résultat le dit). Le résultat garde une mention courte avec le chemin, que
+`image_inspect`, les outils de fichiers ou une étape suivante relisent. Si le modèle du tour
+lit les images (d'après le catalogue), la capture lui est aussi montrée, réduite comme une
+photo reçue, à l'appel qui suit le résultat seulement et comme contenu observé. La purge
+d'une session emporte les fichiers que cite son historique ; la rétention quotidienne
+retire ceux de `{data}/media/mcp` plus vieux que `retention.days`, et ceux d'un run partent
+avec son répertoire.
+
 Les **descriptions** et les schémas des outils viennent eux aussi du serveur, et le modèle
 les lit comme des consignes (« tool poisoning »). `tool_search` et `tool_describe` les
 rendent encadrés comme contenu non fiable, avec l'alerte du détecteur local s'il y voit une
