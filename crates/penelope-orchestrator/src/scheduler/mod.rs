@@ -16,7 +16,9 @@
 //!
 //! Un schedule `once` (rappel daté) passe en `done` après son tir. Un tir manqué pendant
 //! un arrêt ou une veille part une fois au redémarrage ou au réveil, jamais en rafale, et
-//! dit l'heure à laquelle il était prévu (`wake.rs`, #228).
+//! dit l'heure à laquelle il était prévu (`wake.rs`, #228). Pendant les heures calmes du
+//! propriétaire, une planification sans `urgent` reste due et part à la fin de la plage,
+//! par le même chemin, groupée avec les autres (`quiet.rs`, #296).
 
 use crate::workflow::Context;
 use penelope_app::bus::ChannelDelivery;
@@ -51,6 +53,9 @@ pub struct TickReport {
     pub fired: Vec<String>,
     pub errors: Vec<(String, String)>,
     pub intents_expired: usize,
+    /// Planifications dues que les heures calmes retiennent (#296).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<String>,
 }
 
 /// Boucle de l'ordonnanceur, jusqu'à l'arrêt du daemon.
@@ -110,17 +115,42 @@ pub async fn tick_after(
         ..Default::default()
     };
 
-    let tz = s.config.config().owner.timezone.clone();
+    let cfg = s.config.config();
+    let tz = cfg.owner.timezone.clone();
+    let quiet_range = cfg.quiet_range();
+    drop(cfg);
+    let mut batch = Batch::default();
     for sched in s.schedules.due().await? {
+        // Heures calmes (#296) : un créneau sans `urgent` reste dû et partira au premier
+        // passage après la plage, une fois, par le chemin des créneaux manqués.
+        if quiet::holds(s, &sched) {
+            quiet::mark_held(d, &sched).await?;
+            report.held.push(sched.id.clone());
+            continue;
+        }
         // Les créneaux manqués ne partent qu'une fois : le suivant se compte depuis
         // maintenant. Le tir le dit, avec l'heure prévue (#228).
         let mut vars = BTreeMap::new();
-        if let Some(late) = late_of(&sched, s.clock.now_ms(), &tz, wake) {
+        let range = quiet_range.as_ref().filter(|_| !sched.is_urgent());
+        if let Some(mut late) = late_of(&sched, s.clock.now_ms(), &tz, wake, range) {
+            if late.quiet {
+                // Un sondage ne manque pas de créneaux : il rattrape tout d'un coup.
+                if sched.kind == TriggerKind::McpPoll {
+                    late.missed = 1;
+                }
+                vars.insert(
+                    quiet::HELD.to_string(),
+                    held_text(&late, s.clock.now_ms(), &tz),
+                );
+                quiet::clear_held(s, &sched.id).await;
+            }
             vars.insert(LATE.to_string(), late_text(&late, s.clock.now_ms(), &tz));
         }
         let result = match sched.kind {
-            TriggerKind::McpPoll => poll(d, ports, &sched).await,
-            _ => fire(d, ports, &sched, &[], &vars).await.map(|_| true),
+            TriggerKind::McpPoll => poll(d, ports, &sched, &vars, Some(&mut batch)).await,
+            _ => fire(d, ports, &sched, &[], &vars, Some(&mut batch))
+                .await
+                .map(|_| true),
         };
         finish(d, ports, &sched, result, &mut report).await?;
     }
@@ -134,13 +164,50 @@ pub async fn tick_after(
     } else {
         Vec::new()
     };
+    // Déclencheurs poussés retenus par les heures calmes (#296) : le curseur du journal
+    // d'avant leur attente est gardé, et ils relisent tout depuis là à la fin de la plage.
+    let pushed_from = s
+        .kv_get(quiet::PUSHED_FROM)
+        .await?
+        .and_then(|v| v.parse::<i64>().ok());
+    let mut catch_up: Option<Vec<penelope_kernel::event::Event>> = None;
+    let mut still_held = false;
     for sched in s.schedules.list().await? {
-        if sched.state != "active" {
+        if sched.state != "active"
+            || !matches!(sched.kind, TriggerKind::WatchFile | TriggerKind::Event)
+        {
             continue;
         }
+        if quiet::holds(s, &sched) {
+            if pushed_from.is_none() && !still_held {
+                s.kv_set(quiet::PUSHED_FROM, &from.to_string()).await?;
+            }
+            still_held = true;
+            if sched.kind == TriggerKind::WatchFile {
+                watch_file_seed(d, &sched).await?;
+            }
+            continue;
+        }
+        let held = pushed_from.is_some() && !sched.is_urgent();
+        let vars = if held {
+            quiet::pushed_vars(s)
+        } else {
+            BTreeMap::new()
+        };
         let result = match sched.kind {
-            TriggerKind::WatchFile => watch_file(d, ports, &sched).await,
-            TriggerKind::Event => event(d, ports, &sched, &events).await,
+            TriggerKind::WatchFile => watch_file(d, ports, &sched, &vars, Some(&mut batch)).await,
+            TriggerKind::Event => {
+                let window = match pushed_from {
+                    Some(start) if held && start < from => {
+                        if catch_up.is_none() {
+                            catch_up = Some(events_between(d, start, to).await?);
+                        }
+                        catch_up.as_deref().unwrap_or_default()
+                    }
+                    _ => &events,
+                };
+                event(d, ports, &sched, window, &vars, Some(&mut batch)).await
+            }
             _ => continue,
         };
         match result {
@@ -148,8 +215,12 @@ pub async fn tick_after(
             other => finish(d, ports, &sched, other, &mut report).await?,
         }
     }
+    if pushed_from.is_some() && !still_held {
+        s.kv_delete(quiet::PUSHED_FROM).await?;
+    }
     s.kv_set("scheduler.event_cursor", &to.to_string()).await?;
     cancelled_triggers(d, ports).await?;
+    quiet::flush(d, ports, batch, &mut report).await?;
     Ok(report)
 }
 
@@ -170,8 +241,10 @@ pub async fn run_now(d: &Context, ports: &Ports, id: &str) -> anyhow::Result<Val
     .into_iter()
     .collect();
     let result = match sched.kind {
-        TriggerKind::McpPoll => poll(d, ports, &sched).await,
-        _ => fire(d, ports, &sched, &[], &manual).await.map(|_| true),
+        TriggerKind::McpPoll => poll(d, ports, &sched, &manual, None).await,
+        _ => fire(d, ports, &sched, &[], &manual, None)
+            .await
+            .map(|_| true),
     };
     let mut report = TickReport::default();
     finish(d, ports, &sched, result, &mut report).await?;
@@ -238,6 +311,7 @@ mod digest;
 mod fire;
 mod origin;
 mod outcome;
+mod quiet;
 mod templating;
 mod triggers;
 mod wake;
@@ -248,10 +322,13 @@ use origin::target_origin;
 pub use origin::{destination, due_today, listing, place_name, retarget};
 use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
+use quiet::Batch;
 use templating::{items_lines, substitute, template_params, tool_payload};
-use triggers::{event, event_cursor, events_between, last_event_id, poll, watch_file};
+use triggers::{
+    event, event_cursor, events_between, last_event_id, poll, watch_file, watch_file_seed,
+};
 use wake::LATE;
-pub use wake::{Late, Wake, WakeWatch, health, late_of, late_text, wake_check};
+pub use wake::{Late, Wake, WakeWatch, health, held_text, late_of, late_text, wake_check};
 
 #[cfg(test)]
 mod tests;

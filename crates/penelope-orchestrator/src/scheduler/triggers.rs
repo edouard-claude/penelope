@@ -4,8 +4,15 @@ use super::*;
 
 /// `mcp_poll` : appelle un outil MCP en lecture, extrait les éléments, déclenche la cible
 /// pour les nouveaux (ou modifiés). Le premier passage amorce sans déclencher, sauf
-/// `backfill`.
-pub(super) async fn poll(d: &Context, ports: &Ports, sched: &Schedule) -> anyhow::Result<bool> {
+/// `backfill`. `vars` : valeurs du passage (retard, heures calmes), reprises par chaque
+/// tir ; `batch` : la fournée des heures calmes (#296).
+pub(super) async fn poll(
+    d: &Context,
+    ports: &Ports,
+    sched: &Schedule,
+    vars: &BTreeMap<String, String>,
+    mut batch: Option<&mut Batch>,
+) -> anyhow::Result<bool> {
     let s = &d.services;
     let spec = &sched.spec;
     let server = spec["server"].as_str().unwrap_or_default();
@@ -62,17 +69,13 @@ pub(super) async fn poll(d: &Context, ports: &Ports, sched: &Schedule) -> anyhow
         .await?;
     let groups = s.schedules.coalesce(sched, &fresh);
     for group in &groups {
-        fire(d, ports, sched, group, &BTreeMap::new()).await?;
+        fire(d, ports, sched, group, vars, batch.as_deref_mut()).await?;
     }
     Ok(!groups.is_empty())
 }
 
-/// `watch_file` : empreinte (date de modification, taille) comparée au passage précédent.
-pub(super) async fn watch_file(
-    d: &Context,
-    ports: &Ports,
-    sched: &Schedule,
-) -> anyhow::Result<bool> {
+/// Empreinte d'un fichier surveillé (date de modification, taille), ou `absent`.
+fn file_fingerprint(d: &Context, sched: &Schedule) -> (std::path::PathBuf, String) {
     let raw = sched.spec["path"].as_str().unwrap_or_default();
     let path = d.services.platform.dirs.expand(raw);
     let fingerprint = std::fs::metadata(&path)
@@ -86,7 +89,35 @@ pub(super) async fn watch_file(
             format!("{mtime}:{}", m.len())
         })
         .unwrap_or_else(|_| "absent".into());
-    let key = format!("scheduler.watch.{}", sched.id);
+    (path, fingerprint)
+}
+
+fn watch_key(sched: &Schedule) -> String {
+    format!("scheduler.watch.{}", sched.id)
+}
+
+/// `watch_file` retenu par les heures calmes (#296) : la première observation est prise
+/// quand même, sans déclencher, pour qu'un changement de la nuit se voie à la fin de la
+/// plage ; une empreinte déjà connue n'est pas touchée.
+pub(super) async fn watch_file_seed(d: &Context, sched: &Schedule) -> anyhow::Result<()> {
+    let key = watch_key(sched);
+    if d.services.kv_get(&key).await?.is_none() {
+        let (_, fingerprint) = file_fingerprint(d, sched);
+        d.services.kv_set(&key, &fingerprint).await?;
+    }
+    Ok(())
+}
+
+/// `watch_file` : empreinte (date de modification, taille) comparée au passage précédent.
+pub(super) async fn watch_file(
+    d: &Context,
+    ports: &Ports,
+    sched: &Schedule,
+    base: &BTreeMap<String, String>,
+    batch: Option<&mut Batch>,
+) -> anyhow::Result<bool> {
+    let (path, fingerprint) = file_fingerprint(d, sched);
+    let key = watch_key(sched);
     let previous = d.services.kv_get(&key).await?;
     if previous.as_deref() == Some(fingerprint.as_str()) {
         return Ok(false);
@@ -96,7 +127,7 @@ pub(super) async fn watch_file(
     if previous.is_none() {
         return Ok(false);
     }
-    let mut vars = BTreeMap::new();
+    let mut vars = base.clone();
     vars.insert("path".to_string(), path.display().to_string());
     vars.insert(
         "state".to_string(),
@@ -106,7 +137,7 @@ pub(super) async fn watch_file(
             "modifié".into()
         },
     );
-    fire(d, ports, sched, &[], &vars).await?;
+    fire(d, ports, sched, &[], &vars, batch).await?;
     Ok(true)
 }
 
@@ -116,17 +147,19 @@ pub(super) async fn event(
     ports: &Ports,
     sched: &Schedule,
     events: &[penelope_kernel::event::Event],
+    base: &BTreeMap<String, String>,
+    mut batch: Option<&mut Batch>,
 ) -> anyhow::Result<bool> {
     let wanted = sched.spec["event"].as_str().unwrap_or_default();
     let mut fired = false;
     for ev in events.iter().filter(|e| e.kind == wanted) {
-        let mut vars = BTreeMap::new();
+        let mut vars = base.clone();
         vars.insert("event".to_string(), ev.kind.clone());
         vars.insert("payload".to_string(), ev.payload.to_string());
         if let Some(sid) = &ev.session_id {
             vars.insert("session".to_string(), sid.clone());
         }
-        fire(d, ports, sched, &[], &vars).await?;
+        fire(d, ports, sched, &[], &vars, batch.as_deref_mut()).await?;
         fired = true;
     }
     Ok(fired)

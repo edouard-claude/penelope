@@ -258,8 +258,10 @@ nommément : rôle ou palier de routage vers un alias absent, repli vers soi-mê
 `tools.http_block_private_ips` la bloque. Un réglage qui en rend un autre inutile passe
 avec un avertissement : plafond de session au-delà du plafond du jour, alias vers un
 provider désactivé, action destructive moins protégée qu'une écriture, déclencheur
-planifié pendant `telegram.quiet_hours`. `penelope config validate` et `penelope doctor`
-listent ces contradictions, et le daemon les signale au démarrage.
+planifié sans `urgent` pendant `telegram.quiet_hours` (il sera retenu jusqu'à la fin de la
+plage, voir [Rappels et tâches planifiées](#rappels-et-tâches-planifiées)). `penelope
+config validate` et `penelope doctor` listent ces contradictions, et le daemon les signale
+au démarrage.
 
 ```bash
 penelope config set context.compaction_threshold 0.66
@@ -295,7 +297,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi). |
 | `telegram.topics` | `true` | Sujets de forum Telegram. Sans effet dans cette version. |
 | `telegram.rich_messages` | `false` | Rendu riche natif de la Bot API plutôt que HTML. |
-| `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la plage. |
+| `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM`, à l'heure du propriétaire : les livraisons proactives (planifications sans `urgent`, alertes MCP, relances d'approbation) attendent la fin de la plage, puis partent groupées sous « Pendant les heures calmes » ; une réponse à un message du propriétaire et le digest partent toujours (#296). Vide : jamais d'attente. |
 | `telegram.api_base` | `"https://api.telegram.org"` | Adresse de la Bot API. |
 | `telegram.poll_timeout_s` | `50` | Attente d'un appel `getUpdates` en long polling, en secondes. |
 | `telegram.rate_per_chat_per_s` | `1.0` | Messages envoyés au plus par seconde, par chat. |
@@ -1930,6 +1932,29 @@ partent, une fois chacun : un créneau parti plus de cinq minutes après son heu
 en tête de la notification ou dans le prompt, « ⏰ Exécution en retard : prévue à 8h30,
 lancée à 10h02 après une veille de 3 h 32. » ; plusieurs créneaux manqués d'une même
 planification sont comptés et partent en un seul run.
+
+**Heures calmes** (1.0.35, #296). Pendant `telegram.quiet_hours` (`22:00-07:00` par
+défaut, à l'heure du propriétaire, réglable par `/quiet`), une planification qui tombe
+dans la plage n'est pas tirée : elle reste due et part au premier passage après la plage,
+par le même chemin que le rattrapage après veille, donc **une fois**, créneaux manqués
+comptés. Les tirs retenus d'un même passage, et les alertes du superviseur MCP retenues
+entre-temps (file dans la base, qui survit à un redémarrage), partent en **un seul
+message par conversation**, sous l'en-tête « 🌙 Pendant les heures calmes : », chaque
+notification suivie de son heure prévue ; un prompt y est annoncé (« elle part maintenant,
+sa réponse suivra ») et son texte commence par la mention. Les relances d'approbation
+(T+1 h, T+6 h) échues pendant la plage partent de même, en une seule relance groupée qui
+nomme les demandes, puis leurs cartes ; jamais une rafale. Un déclencheur `event` ou
+`watch_file` retenu rattrape à la sortie ce que la nuit a produit (journal relu depuis le
+curseur d'avant, empreinte du fichier comparée à celle d'avant). Exceptions : une réponse
+à un message du propriétaire, le digest du matin (son propre cron), et toute
+planification dont la spécification porte `"urgent": true` (un réveil, un train à 6 h 30) ;
+la création d'une planification dont le premier passage tombe dans la plage le dit dans
+sa réponse (`heures_calmes`) et propose `urgent`. Le lien d'autorisation OAuth d'un
+serveur MCP, qui expire, n'est pas mis en file : il est produit et envoyé au premier
+passage après la plage. `penelope doctor` nomme les déclencheurs non urgents qui tombent
+dans la plage et, pendant la plage, ce qui attend (« heures calmes jusqu'à 07:00 : 2
+retenue(s), 1 livraison(s) en file ») ; le journal porte `schedule.held` (une fois par
+créneau retenu) et `quiet.delivered`.
 
 **Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
 son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :

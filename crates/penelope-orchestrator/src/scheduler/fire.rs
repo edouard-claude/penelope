@@ -3,13 +3,15 @@
 use super::*;
 
 /// Déclenche la cible d'un schedule. `items` : éléments d'un `mcp_poll` ; `vars` :
-/// valeurs propres au déclencheur (chemin, événement).
+/// valeurs propres au déclencheur (chemin, événement) ; `batch` : la fournée des heures
+/// calmes du passage, où un tir retenu (#296) dépose sa mention au lieu d'écrire seul.
 pub(super) async fn fire(
     d: &Context,
     ports: &Ports,
     sched: &Schedule,
     items: &[PolledItem],
     vars: &BTreeMap<String, String>,
+    mut batch: Option<&mut Batch>,
 ) -> anyhow::Result<()> {
     let s = &d.services;
     let mut vars = vars.clone();
@@ -30,19 +32,34 @@ pub(super) async fn fire(
     }
     let origin = target_origin(&d.services, sched);
     // Créneau en retard (#228) : la notification le dit en tête ; un prompt ou un workflow,
-    // dont la réponse viendra plus tard, le disent d'abord au propriétaire.
+    // dont la réponse viendra plus tard, le disent d'abord au propriétaire. Retenu par les
+    // heures calmes (#296) : la mention courte rejoint la fournée du passage, un seul
+    // message par conversation sous l'en-tête, au lieu d'un message par planification.
     let late = vars.get(LATE).cloned();
+    let held = vars.get(quiet::HELD).filter(|_| batch.is_some()).cloned();
     if let Some(note) = &late
         && sched.target_kind() != Some(TargetKind::Notify)
     {
-        match ports.messenger.get() {
-            Some(m) => {
-                let text = format!("{note} ({})", label(&d.services, sched).await);
+        let name = label(&d.services, sched).await;
+        match (&held, batch.as_deref_mut(), ports.messenger.get()) {
+            (Some(short), Some(batch), _) => {
+                let follow = match sched.target_kind() {
+                    Some(TargetKind::Workflow) => "le workflow démarre maintenant",
+                    _ => "elle part maintenant, sa réponse suivra",
+                };
+                batch.push(
+                    origin.clone(),
+                    format!("{name} ({short}) : {follow}."),
+                    None,
+                );
+            }
+            (_, _, Some(m)) => {
+                let text = format!("{note} ({name})");
                 if let Err(e) = m.send_text(&origin, &text).await {
                     tracing::warn!(schedule = %sched.id, error = %e, "retard non annoncé");
                 }
             }
-            None => tracing::warn!(schedule = %sched.id, "{note}"),
+            (_, _, None) => tracing::warn!(schedule = %sched.id, "{note}"),
         }
     }
 
@@ -53,22 +70,30 @@ pub(super) async fn fire(
                 Some(t) => substitute(&t.body, &vars),
                 None => substitute(template, &vars),
             };
-            if let Some(note) = &late {
-                body = format!("{note}\n\n{body}");
+            if let (Some(short), Some(batch)) = (&held, batch) {
+                batch.push(
+                    origin.clone(),
+                    format!("{body}\n({short})"),
+                    Some((sched.id.clone(), items.len())),
+                );
+            } else {
+                if let Some(note) = &late {
+                    body = format!("{note}\n\n{body}");
+                }
+                let messenger = ports.messenger.get().ok_or_else(|| {
+                    anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
+                })?;
+                messenger
+                    .send_text(&origin, &body)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                s.events
+                    .append(penelope_kernel::event::EventDraft::new(
+                        "schedule.notified",
+                        json!({"schedule": sched.id, "items": items.len()}),
+                    ))
+                    .await?;
             }
-            let messenger = ports.messenger.get().ok_or_else(|| {
-                anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
-            })?;
-            messenger
-                .send_text(&origin, &body)
-                .await
-                .map_err(anyhow::Error::msg)?;
-            s.events
-                .append(penelope_kernel::event::EventDraft::new(
-                    "schedule.notified",
-                    json!({"schedule": sched.id, "items": items.len()}),
-                ))
-                .await?;
         }
         Some(TargetKind::Prompt) => {
             let mut text = substitute(sched.target["prompt"].as_str().unwrap_or_default(), &vars);
@@ -149,6 +174,9 @@ pub(super) async fn fire(
         fired["planned"] = json!(sched.next_run);
         fired["late"] = json!(note);
     }
+    if held.is_some() {
+        fired["quiet"] = json!(true);
+    }
     s.events
         .append(penelope_kernel::event::EventDraft::new(
             "schedule.fired",
@@ -174,6 +202,11 @@ pub async fn create(
         .map_err(|e| e.to_string())?;
     let sched = s.schedules.create(kind, spec, target, dedup).await?;
     let mut v = serde_json::to_value(&sched).map_err(|e| e.to_string())?;
+    // Heures calmes (#296) : si le premier passage y tombe, le dire et proposer `urgent`
+    // (un rappel pour un train de 6 h 30 doit sonner à 6 h 30, pas à 7 h).
+    if let Some(note) = quiet_hours_note(s, &sched) {
+        v["heures_calmes"] = json!(note);
+    }
     if !twins.is_empty() {
         let ids: Vec<&str> = twins.iter().map(|t| t.id.as_str()).collect();
         v["doublons"] = json!(ids);
@@ -184,6 +217,33 @@ pub async fn create(
         ));
     }
     Ok(v)
+}
+
+/// Ce que la création dit quand le premier passage tombe dans les heures calmes et que la
+/// planification n'est pas `urgent` (#296) ; `None` sinon.
+pub fn quiet_hours_note(s: &Services, sched: &Schedule) -> Option<String> {
+    if sched.is_urgent() {
+        return None;
+    }
+    let cfg = s.config.config();
+    let range = cfg.quiet_range()?;
+    let next = chrono::DateTime::parse_from_rfc3339(sched.next_run.as_deref()?)
+        .ok()?
+        .timestamp_millis();
+    if !range.contains_at(next, &cfg.owner.timezone) {
+        return None;
+    }
+    let minute = penelope_kernel::config::minute_of_day(next, &cfg.owner.timezone);
+    Some(format!(
+        "cette planification part à {:02}:{:02}, pendant les heures calmes ({}) : elle sera \
+         retenue jusqu'à {}, puis livrée sous « Pendant les heures calmes ». Si elle doit \
+         partir à l'heure (réveil, train), la supprimer (`schedule_delete`) et la recréer \
+         avec `\"urgent\": true` dans `spec` ; le proposer au propriétaire.",
+        minute / 60,
+        minute % 60,
+        range.text(),
+        range.end_text()
+    ))
 }
 
 /// Nom lisible d'une planification : son libellé, sinon le titre de la conversation où

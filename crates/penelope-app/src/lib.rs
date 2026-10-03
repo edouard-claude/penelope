@@ -25,6 +25,7 @@ pub mod media;
 pub mod model_judge;
 pub mod outcome;
 pub mod ports;
+pub mod quiet;
 pub mod services;
 pub mod steering;
 pub mod tasks;

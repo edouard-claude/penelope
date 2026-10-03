@@ -166,3 +166,17 @@ CREATE INDEX approval_samples_created ON approval_samples(created_at);
 CREATE INDEX approval_samples_approval ON approval_samples(approval_id)
   WHERE approval_id IS NOT NULL;
 "#;
+
+/// File des heures calmes (#296) : une livraison proactive (alerte MCP, lien
+/// d'autorisation) née pendant `quiet_hours` attend ici la fin de la plage, puis part
+/// groupée et disparaît. Dans la base, pas en mémoire : un redémarrage ne la perd pas.
+/// `origin` est la conversation de destination, en JSON (`Origin`).
+pub(super) const SQL_0025: &str = r#"
+CREATE TABLE quiet_queue (
+  id           INTEGER PRIMARY KEY,
+  created_at   TEXT NOT NULL,
+  kind         TEXT NOT NULL,               -- mcp_notice | mcp_auth | …
+  origin       TEXT NOT NULL,
+  text         TEXT NOT NULL
+);
+"#;

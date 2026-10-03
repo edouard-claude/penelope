@@ -360,13 +360,47 @@ pub async fn schedules_check(s: &Services) -> DoctorCheck {
             })
         })
         .collect();
+    // Heures calmes en cours (#296) : ce qui attend la fin de la plage, planifications
+    // dues sans `urgent` et livraisons en file, pour que le doctor dise ce qui se passe.
+    let mut quiet = String::new();
+    if penelope_app::quiet::is_quiet(s) {
+        let held = s
+            .schedules
+            .due()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|x| !x.is_urgent())
+            .count();
+        let queued = penelope_app::quiet::held_count(s).await.unwrap_or(0);
+        let until = s
+            .config
+            .config()
+            .quiet_range()
+            .map(|r| r.end_text())
+            .unwrap_or_default();
+        if held > 0 || queued > 0 {
+            quiet = format!(
+                " ; heures calmes jusqu'à {until} : {held} retenue(s), {queued} livraison(s) \
+                 en file"
+            );
+        }
+    }
     if failing.is_empty() {
-        DoctorCheck::ok(ID, LABEL, format!("{active} active(s), aucune en échec"))
+        DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{active} active(s), aucune en échec{quiet}"),
+        )
     } else {
         DoctorCheck::fail(
             ID,
             LABEL,
-            format!("{} en échec : {}", failing.len(), failing.join(" ; ")),
+            format!(
+                "{} en échec : {}{quiet}",
+                failing.len(),
+                failing.join(" ; ")
+            ),
             Some("/schedules".into()),
         )
     }

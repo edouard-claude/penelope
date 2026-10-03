@@ -60,6 +60,12 @@ après quelques essais de la sonde du canal) et `mcp_restarted` (les serveurs d�
 échec ou en attente de reprise, relancés avec leur nouvel état). Les créneaux en retard
 partent après cette passe, une fois chacun (#228).
 
+`schedule.held` dit qu'un créneau dû attend la fin des heures calmes (#296) : `schedule`,
+`planned` (le créneau) et `until` (la fin de la plage, « 07:00 ») ; une fois par créneau
+retenu, pas à chaque passage. À la sortie, `schedule.fired` et `schedule.notified`
+portent `quiet: true` pour ce qui a attendu, et `quiet.delivered` compte les éléments du
+message groupé (`items`) dont ceux venus de la file persistée (`queued`).
+
 `tool.job.started` et `tool.job.completed` encadrent un appel d'outil sorti de son tour
 (un `shell_exec` ou un `sub_agent_spawn` lancé avec `background: true`). Le premier porte
 `job`, `tool` et `effect` — l'identifiant de l'effet du ledger, resté `dispatching` tant

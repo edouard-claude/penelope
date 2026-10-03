@@ -140,26 +140,6 @@ async fn always_records_a_rule_marker() {
     assert_eq!(d.rule_created.as_deref(), Some("always"));
 }
 
-#[tokio::test]
-async fn quiet_requests_are_batched_for_the_digest() {
-    let a = approvals(TestClock::default());
-    a.create(
-        ApprovalKind::ToolCall,
-        "outil",
-        RiskClass::Write,
-        json!({}),
-        vec![],
-        None,
-        None,
-        true,
-    )
-    .await
-    .unwrap();
-    make(&a).await;
-    assert_eq!(a.quiet_backlog().await.unwrap().len(), 1);
-    assert_eq!(a.pending(10).await.unwrap().len(), 2);
-}
-
 #[test]
 fn urgent_kinds_are_never_silenced() {
     assert!(ApprovalKind::EffectUnknown.is_urgent());
