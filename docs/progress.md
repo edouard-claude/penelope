@@ -205,6 +205,69 @@ false`, le pipeline d'origine octet pour octet (synthèse, `wav_to_ogg_opus`, `s
 usage `tts`) ; texte trop long renvoyé au modèle ; synthèse impossible, réponse en texte
 avec la raison. Closes #299.
 
+**Heures calmes : `telegram.quiet_hours` retient enfin les livraisons proactives, qui
+partent groupées à la fin de la plage, une fois (#296).** Constat : la plage était validée,
+réglable par `/quiet`, affichée, et le doctor affirmait « sa notification attendra » ;
+aucun code de l'ordonnanceur ni de la livraison ne la consultait. Une planification de
+23 h partait à 23 h ; `quiet_backlog` (HITL) n'était appelé nulle part.
+
+Correctif. **Planifications** : dans `tick_after`, un créneau dû sans `spec.urgent` pendant
+la plage n'est pas tiré ; il reste dû (dans la base : un redémarrage n'y change rien), un
+événement `schedule.held` le note une fois par créneau, et il part au premier passage après
+la plage par le chemin du rattrapage après veille (#228) : `late_of` reçoit la plage et
+marque `Late.quiet` quand le créneau y tombait et que le tir n'y est plus, toujours annoncé
+(même deux minutes après) ; créneaux manqués comptés, un seul run. Les tirs retenus d'un
+passage forment une fournée (`scheduler/quiet.rs`) : un message par conversation sous
+« 🌙 Pendant les heures calmes : », chaque `notify` suivi de « (prévue à 23h00 ; les N
+créneaux manqués partent en une seule livraison) », un `prompt` ou `workflow` annoncé
+(« elle part maintenant, sa réponse suivra »), le texte du prompt précédé de la mention ;
+`schedule.notified` n'est écrit qu'à l'envoi, un envoi raté est un échec de la
+planification. `mcp_poll` retenu rattrape tout d'un coup ; `event` et `watch_file` sans
+`urgent` sont passés la nuit et relisent à la sortie le journal depuis le curseur gardé
+(`scheduler.quiet.pushed_from`) ou comparent l'empreinte à celle d'avant (la première
+observation est prise quand même) ; `urgent` passe partout. **File persistée** : nouvelle
+table `quiet_queue` (migration `0025`) et module `penelope_app::quiet` (`is_quiet`, `hold`,
+`deliver_or_hold`, `held`, `forget`) ; les avis du superviseur MCP (règles révoquées) y
+attendent et partent avec la fournée, horodatés (« reçu à 3h12 »). Le lien OAuth, qui
+expire, n'est pas produit pendant la plage : il part frais au premier passage après.
+**Relances d'approbation** : rien n'est envoyé ni marqué pendant la plage ; à la sortie,
+une seule relance par conversation nomme toutes les demandes retenues sous l'en-tête, puis
+leurs cartes ; une demande du jour garde « Rappel 1/2 ». **Création** : la réponse de
+`schedule_create` porte `heures_calmes` quand le premier passage tombe dans la plage
+(heure, plage, fin, et comment recréer avec `"urgent": true`), `urgent` est validé
+booléen, `/schedules` marque 🔔. **Doctor** : la cohérence ignore les planifications
+urgentes et dit « retenu jusqu'à 07:00 … `"urgent": true` pour qu'il parte à l'heure » ;
+`schedules` dit pendant la plage ce qui attend (retenues, livraisons en file).
+`quiet_backlog` est supprimé avec son test (la colonne `quiet` de `approval_requests` et
+son paramètre restent écrits, jamais lus). La clé reste `telegram.quiet_hours` (configuration
+installée, `/quiet`) ; le cœur ne lit que `Config::quiet_range` et `quiet_at`, et
+`TimeRange` gagne `contains_at`, `text`, `end_text`. Exceptions assumées : réponses au
+propriétaire, digest (son cron), `urgent`. Doc : install-headless.md (« Heures calmes »),
+telegram.md, runtime-events.md, référence des clés et des outils régénérée.
+
+Tests : la plage à l'heure du propriétaire (`contains_at`, `quiet_at`, UTC par défaut) ;
+la file dans la base (retenu la nuit, parti le jour, oublié une fois parti) ; l'ordonnanceur
+: trois planifications de nuit (récurrente, rappel daté, prompt) retenues sans rien
+envoyer, créneau inchangé, `schedule.held` une fois chacune, une urgente qui part à
+l'heure, puis à 7 h un seul message groupé octet pour octet, le tour du prompt avec sa
+mention, le rappel `done`, rien au passage suivant et le créneau suivant compté depuis 7 h
+30 ; un avis MCP seul en file part sous l'en-tête avec son heure ; `event` et `watch_file`
+retenus rattrapent deux événements et un fichier sans perte, l'`event` urgent parle la nuit,
+le curseur gardé s'efface ; la création dit `heures_calmes` et propose `urgent`, se tait
+avec `urgent` ou de jour, refuse un `urgent` non booléen, le doctor dit la même chose ;
+`late_of` : deux minutes retenues sont annoncées, un tir encore dans la plage ne l'est pas,
+textes avec veille et au lendemain. Relances (`penelope_app::quiet::remind_approvals`) :
+deux demandes retenues dans une conversation et une dans un sujet donnent une relance
+groupée par conversation sous l'en-tête puis les trois cartes, une demande du jour garde
+« Rappel 1/2 », deux du jour sont groupées sans en-tête ; la passe de maintenance du daemon
+n'envoie ni ne marque rien pendant la plage. Les harnais dont l'horloge est à 4 h du matin
+éteignent la plage explicitement ; les tests du superviseur passent dans
+`supervisor/tests.rs` (plafond de taille).
+Ce qui marchait déjà et continue : le rattrapage après veille et au redémarrage (#228),
+`run_now` qui ne retient jamais, les alertes d'échec et le retour au succès (#229), les
+relances à T+1 h et T+6 h de jour (#97), la carte de rappel d'une commande `go-template`.
+Closes #296.
+
 ### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les

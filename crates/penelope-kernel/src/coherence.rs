@@ -16,7 +16,7 @@
 //! | `runners.heartbeat` / `runners.lease_ttl` | bail expiré avant deux battements : tour repris en double | refus |
 //! | `tools.http_allowlist` / `tools.http_block_private_ips` | adresse privée autorisée mais toujours bloquée | refus |
 //! | `mcp.policy.*` | action destructive ou inconnue moins protégée qu'une écriture | avertissement |
-//! | `telegram.quiet_hours` / déclencheurs planifiés | déclencheur dans les heures calmes (vérifié par le daemon) | avertissement |
+//! | `telegram.quiet_hours` / déclencheurs planifiés | déclencheur sans `urgent` dans les heures calmes : il attendra la fin de la plage (vérifié par le daemon, #296) | avertissement |
 
 use crate::config::Config;
 use crate::risk::PolicyDecision;

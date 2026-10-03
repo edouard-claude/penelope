@@ -621,24 +621,6 @@ impl ApprovalStore {
             })
             .await?)
     }
-
-    /// Demandes groupées pour le digest du matin (mode silencieux, §9.2).
-    pub async fn quiet_backlog(&self) -> Result<Vec<ApprovalRequest>> {
-        Ok(self
-            .store
-            .read(|c| {
-                let mut st = c.prepare(&format!(
-                    "{SELECT} WHERE state='pending' AND quiet=1 ORDER BY created_at"
-                ))?;
-                let rows = st.query_map([], row_to_request)?;
-                let mut v = Vec::new();
-                for r in rows {
-                    v.push(r?);
-                }
-                Ok(v)
-            })
-            .await?)
-    }
 }
 
 const SELECT: &str = "SELECT id, kind, subject, risk, payload, choices, session_id, run_id,

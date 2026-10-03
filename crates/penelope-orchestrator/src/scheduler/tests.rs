@@ -10,13 +10,22 @@ async fn harness() -> (Harness, Arc<TestClock>, Arc<RecordingMessenger>) {
     d.services
         .publish_config("test", |c| {
             c.owner.telegram_user_id = 42;
-            Ok(vec!["owner.telegram_user_id".into()])
+            // L'horloge de test est à 4 h du matin chez le propriétaire : sans cela, tout
+            // tir de ces tests attendrait 7 h (#296). Les tests des heures calmes
+            // (`tests/quiet.rs`) règlent la plage eux-mêmes.
+            c.telegram.quiet_hours.clear();
+            Ok(vec![
+                "owner.telegram_user_id".into(),
+                "telegram.quiet_hours".into(),
+            ])
         })
         .unwrap();
     let rec = RecordingMessenger::new();
     d.set_messenger(rec.clone());
     (d, clock, rec)
 }
+
+mod quiet;
 
 #[tokio::test]
 async fn a_dated_reminder_fires_once_then_is_done() {
@@ -1074,8 +1083,8 @@ fn only_a_real_delay_is_announced() {
     };
     let tz = "Indian/Reunion";
     let planned = 1_767_241_800_000; // 2026-01-01T04:30:00Z = 8h30 à La Réunion
-    assert_eq!(late_of(&sched, planned + 30_000, tz, None), None);
-    let late = late_of(&sched, planned + 26 * 3_600_000, tz, None).unwrap();
+    assert_eq!(late_of(&sched, planned + 30_000, tz, None, None), None);
+    let late = late_of(&sched, planned + 26 * 3_600_000, tz, None, None).unwrap();
     assert_eq!(late.missed, 2, "le créneau du lendemain est fusionné");
     assert_eq!(
         late_text(&late, planned + 26 * 3_600_000, tz),

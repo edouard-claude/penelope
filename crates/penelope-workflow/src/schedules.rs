@@ -112,6 +112,12 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    /// `spec.urgent` (#296) : la planification part même pendant les heures calmes du
+    /// propriétaire. Faux par défaut.
+    pub fn is_urgent(&self) -> bool {
+        self.spec.get("urgent").and_then(|u| u.as_bool()) == Some(true)
+    }
+
     pub fn target_kind(&self) -> Option<TargetKind> {
         self.target
             .get("type")
@@ -128,6 +134,13 @@ impl Schedule {
 
     /// Validation d'une spécification avant activation (§12.9, aperçu puis HITL).
     pub fn validate(&self, tz: &str) -> Result<(), String> {
+        if let Some(urgent) = self.spec.get("urgent")
+            && !urgent.is_boolean()
+        {
+            return Err(
+                "`urgent` est un booléen (vrai : part même pendant les heures calmes)".into(),
+            );
+        }
         match self.kind {
             TriggerKind::Cron => {
                 let expr = self

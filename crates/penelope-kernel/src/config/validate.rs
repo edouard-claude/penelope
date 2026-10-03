@@ -493,8 +493,17 @@ impl Config {
             .copied()
     }
 
+    /// Heures calmes du propriétaire ; `None` : désactivées. La clé reste sous `[telegram]`
+    /// (configuration installée), la notion appartient au propriétaire : le cœur passe
+    /// par ici, jamais par la section (#296).
     pub fn quiet_range(&self) -> Option<TimeRange> {
         TimeRange::parse(&self.telegram.quiet_hours).ok()
+    }
+
+    /// Vrai si `now_ms` tombe dans les heures calmes, à l'heure du propriétaire.
+    pub fn quiet_at(&self, now_ms: i64) -> bool {
+        self.quiet_range()
+            .is_some_and(|r| r.contains_at(now_ms, &self.owner.timezone))
     }
 
     /// Configuration minimale valide, utilisée par les tests et `penelope init`.

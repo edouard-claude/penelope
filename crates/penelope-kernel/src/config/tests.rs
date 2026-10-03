@@ -371,6 +371,31 @@ fn quiet_hours_cross_midnight() {
     assert!(!r.contains(20 * 60));
 }
 
+/// #296 : la plage se lit à l'heure du propriétaire, se réécrit telle quelle, et la
+/// configuration dit si un instant tombe dedans.
+#[test]
+fn quiet_hours_are_read_at_the_owner_s_local_time() {
+    let r = TimeRange::parse("22:00-07:00").unwrap();
+    assert_eq!(r.text(), "22:00-07:00");
+    assert_eq!(r.end_text(), "07:00");
+    // 2026-01-01T19:00Z = 23:00 à La Réunion (UTC+4), 19:00 à Londres.
+    let at = 1_767_294_000_000;
+    assert!(r.contains_at(at, "Indian/Reunion"));
+    assert!(!r.contains_at(at, "Europe/London"));
+    assert!(!r.contains_at(at, "fuseau/inconnu"), "UTC par défaut");
+
+    let mut c = cfg();
+    c.owner.timezone = "Indian/Reunion".into();
+    c.telegram.quiet_hours = "22:00-07:00".into();
+    assert!(c.quiet_at(at));
+    assert!(
+        !c.quiet_at(at + 8 * 3_600_000),
+        "07:00 : la plage est finie"
+    );
+    c.telegram.quiet_hours.clear();
+    assert!(!c.quiet_at(at), "sans plage, jamais calme");
+}
+
 #[test]
 fn model_threshold_override() {
     let mut c = cfg();

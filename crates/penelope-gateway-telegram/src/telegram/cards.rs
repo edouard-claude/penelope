@@ -313,10 +313,16 @@ pub(super) fn schedules_text(v: &Value) -> String {
         let spec = &sc["spec"];
         let when = match sc["kind"].as_str().unwrap_or("?") {
             "cron" => format!(
-                "cron `{}`{}",
+                "cron `{}`{}{}",
                 spec["expr"].as_str().unwrap_or("?"),
                 if spec["once"].as_bool() == Some(true) {
                     " (une fois)"
+                } else {
+                    ""
+                },
+                // Part même pendant les heures calmes (#296).
+                if spec["urgent"].as_bool() == Some(true) {
+                    " 🔔"
                 } else {
                     ""
                 }

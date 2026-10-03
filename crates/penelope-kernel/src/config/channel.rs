@@ -36,8 +36,11 @@ pub struct Telegram {
     pub topics: bool,
     /// Rendu riche natif de la Bot API plutôt que HTML.
     pub rich_messages: bool,
-    /// Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la
-    /// plage.
+    /// Heures calmes `HH:MM-HH:MM`, à l'heure du propriétaire : les livraisons proactives
+    /// (planifications sans `urgent`, alertes MCP, relances d'approbation) attendent la
+    /// fin de la plage, puis partent groupées sous « Pendant les heures calmes » ; une
+    /// réponse à un message du propriétaire et le digest partent toujours (#296). Vide :
+    /// jamais d'attente.
     pub quiet_hours: String,
     /// Adresse de la Bot API.
     pub api_base: String,
