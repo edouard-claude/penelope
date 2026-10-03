@@ -109,7 +109,8 @@ Le résumé suit un gabarit de neuf sections : objectif, contraintes et préfér
 en cours, bloqué, décisions clés, fichiers et ressources, prochaines étapes, contexte
 critique ; 4 000 caractères au plus par section, sortie structurée stricte quand le modèle
 la sait. S'y ajoutent mécaniquement les ancres (identifiants, chemins, tickets, SHA, URLs,
-120 au plus, recopiés du texte complet) et les derniers messages du propriétaire cités tels
+120 au plus, recopiés du texte complet, et la première ligne de chaque commande `shell_exec`
+du lot, type `commande`) et les derniers messages du propriétaire cités tels
 quels, dans un huitième du budget de la queue. Le résumeur voit les longs messages
 échantillonnés (12 000 caractères, 4 000 pour un résultat d'outil, début et fin), pas les
 ancres, qui viennent du texte entier.
@@ -122,7 +123,12 @@ reprises sur toute la couverture. Une conversation longue ne porte donc qu'un r�
 la taille reste bornée par le gabarit. Si le retard est grand, le travail est découpé en
 lots qui tiennent dans la fenêtre du résumeur, douze au plus par passe ; la passe suivante
 reprend le reste. Rien n'est effacé : `history_grep`, `history_expand` et
-`history_describe` relisent les échanges résumés.
+`history_describe` relisent les échanges résumés, appels d'outils compris : l'index plein
+texte porte, pour chaque message, son texte et ses appels (nom de l'outil et arguments
+textuels, 2 000 caractères par appel, corps des `fs_write` et requêtes des recherches
+d'historique exclus, secrets masqués), et
+`history_expand` rend chaque appel avec ses arguments (`appels`). Une commande lancée avant
+un résumé se retrouve donc par un mot de ses arguments (#300).
 
 **Reprise d'une session froide et fork.** Une session reprise après une pause plus
 longue que le cache, ou le premier tour d'un fork, dont le dernier prompt dépasse le seuil

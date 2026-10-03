@@ -361,7 +361,10 @@ impl ContextEngine {
         let source_text: String = rendered[..chunk_len].concat();
         let texts: Vec<String> = chunk.iter().rev().map(|e| e.message.text()).collect();
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-        let chunk_anchors = crate::anchors::extract_many(&refs, MAX_ANCHORS);
+        let text_anchors = crate::anchors::extract_many(&refs, MAX_ANCHORS);
+        // Les commandes du lot d'abord : rares, et ce sont elles qu'on redemande (#300).
+        let commands = crate::anchors::commands_of(chunk.iter().rev().map(|e| &e.message));
+        let chunk_anchors = crate::anchors::merge(&commands, &text_anchors, MAX_ANCHORS);
         let anchors = match &previous {
             Some(p) => crate::anchors::merge(&chunk_anchors, &p.anchors, MAX_ANCHORS),
             None => chunk_anchors,

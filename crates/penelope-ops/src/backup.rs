@@ -223,6 +223,10 @@ pub async fn rebuild_if_pending(s: &Services) -> anyhow::Result<Option<Value>> {
     let memory = s.memory.rebuild_fts().await?;
     let tools = s.mcp_tools.rebuild_fts().await?;
     s.kv_delete(REBUILD_PENDING_KEY).await?;
+    // L'index des messages vient d'être refait en entier : la réindexation partielle
+    // demandée par une migration (#300) n'a plus lieu d'être.
+    s.kv_delete(crate::session_ops::FTS_REINDEX_PENDING_KEY)
+        .await?;
     let report = json!({
         "backup_created_at": created_at,
         "messages_fts": messages,

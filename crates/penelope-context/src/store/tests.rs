@@ -1,3 +1,4 @@
+use super::search::TOOL_CALL_INDEX_CHARS;
 use super::*;
 use penelope_kernel::clock::TestClock;
 use std::sync::Arc;
@@ -126,6 +127,191 @@ async fn fts_finds_messages_without_accents() {
     let hits = h.grep("deploiement", Some("s1"), 10).await.unwrap();
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].source, "raw");
+}
+
+fn shell(id: &str, command: &str) -> ChatMessage {
+    ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+        id: id.into(),
+        name: "shell_exec".into(),
+        arguments: json!({"command": command, "cwd": "/w"}),
+    }])
+}
+
+/// Les entrées plein texte d'une session, par numéro de message.
+async fn fts_rows(h: &HistoryStore, sid: &str) -> Vec<(i64, String)> {
+    let sid = sid.to_string();
+    h.store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT m.seq, f.content FROM messages_fts f
+                 JOIN messages m ON m.id = f.msg_id WHERE m.session_id = ?1 ORDER BY m.seq",
+            )?;
+            let rows = st.query_map([&sid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .await
+        .unwrap()
+}
+
+/// #300 : un message assistant qui n'est qu'un appel d'outil s'indexait vide ; la commande
+/// se retrouve maintenant par un mot de ses arguments, avec le nom de l'outil dans
+/// l'extrait, et le résultat de l'outil reste indexé à part.
+#[tokio::test]
+async fn fts_finds_a_tool_call_by_a_word_of_its_arguments() {
+    let h = hs().await;
+    h.append(
+        "s1",
+        &shell(
+            "c1",
+            "ffmpeg -i in.wav -af acompressor=threshold=-18dB,loudnorm=I=-16 out.wav",
+        ),
+        20,
+        0,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    h.append(
+        "s1",
+        &ChatMessage::tool_result("c1", "shell_exec", "rendu écrit"),
+        5,
+        0,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
+    let hits = h.grep("acompressor", Some("s1"), 10).await.unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!((hits[0].seq, hits[0].role.as_str()), (1, "assistant"));
+    assert!(
+        hits[0].excerpt.contains("acompressor"),
+        "{}",
+        hits[0].excerpt
+    );
+    let rows = fts_rows(&h, "s1").await;
+    assert!(
+        rows[0]
+            .1
+            .starts_with("shell_exec command: ffmpeg -i in.wav"),
+        "{}",
+        rows[0].1
+    );
+    assert!(rows[0].1.ends_with("out.wav cwd: /w"), "{}", rows[0].1);
+    let loud = h.grep("loudnorm=I", Some("s1"), 10).await.unwrap();
+    assert_eq!(loud.len(), 1, "{loud:?}");
+    assert_eq!(h.grep("rendu", Some("s1"), 10).await.unwrap()[0].seq, 2);
+}
+
+/// Le corps d'un `fs_write` n'entre pas dans l'index (son chemin si), un jeton dans une
+/// commande est masqué, et un appel démesuré est coupé à son plafond.
+#[tokio::test]
+async fn tool_call_index_skips_file_bodies_masks_secrets_and_caps() {
+    let h = hs().await;
+    let write = ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+        id: "c1".into(),
+        name: "fs_write".into(),
+        arguments: json!({"path": "notes/plan.md", "content": "framboise ".repeat(50)}),
+    }]);
+    h.append("s1", &write, 20, 0, false, None).await.unwrap();
+    h.append(
+        "s1",
+        &shell(
+            "c2",
+            "curl -H 'Authorization: Bearer ghp_0123456789abcdefghijABCDEFGHIJ012345' https://x.example",
+        ),
+        20,
+        0,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    let huge = ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+        id: "c3".into(),
+        name: "fs_search".into(),
+        arguments: json!({"pattern": "x".repeat(5_000)}),
+    }]);
+    h.append("s1", &huge, 20, 0, false, None).await.unwrap();
+
+    assert!(
+        h.grep("framboise", Some("s1"), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(h.grep("plan.md", Some("s1"), 10).await.unwrap().len(), 1);
+    assert!(
+        h.grep("ghp_0123456789abcdefghijABCDEFGHIJ012345", Some("s1"), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(h.grep("curl", Some("s1"), 10).await.unwrap().len(), 1);
+    let rows = fts_rows(&h, "s1").await;
+    assert!(!rows[1].1.contains("ghp_0123"), "{}", rows[1].1);
+    assert_eq!(
+        rows[2].1.chars().count(),
+        TOOL_CALL_INDEX_CHARS + 1,
+        "coupé, puis « … »"
+    );
+}
+
+/// `rebuild_fts` redonne les mêmes entrées que la double écriture, appels compris et texte
+/// d'origine d'un corps externalisé compris : c'est lui que la marque de la migration 0025
+/// fait tourner sur les lignes d'avant #300.
+#[tokio::test]
+async fn rebuild_fts_gives_the_same_entries_as_the_direct_write() {
+    let h = hs().await;
+    h.append("s1", &ChatMessage::user("fais le rendu"), 5, 0, false, None)
+        .await
+        .unwrap();
+    h.append(
+        "s1",
+        &shell(
+            "c1",
+            "ffmpeg -i in.wav -af acompressor=threshold=-18dB out.wav",
+        ),
+        20,
+        0,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    let body = "ligne du rendu\n".repeat(200);
+    let seq = h
+        .append(
+            "s1",
+            &ChatMessage::tool_result("c1", "shell_exec", &body),
+            800,
+            0,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    let artifact = h
+        .put_artifact(Some("s1"), None, "text", None, &body)
+        .await
+        .unwrap();
+    h.externalise_as("s1", seq, "[externalisé]", &artifact, 5, 800)
+        .await
+        .unwrap();
+    let before = fts_rows(&h, "s1").await;
+    assert!(before[1].1.contains("acompressor"), "{}", before[1].1);
+    assert!(before[2].1.contains("ligne du rendu"), "{}", before[2].1);
+
+    h.store
+        .write(|tx| {
+            tx.execute("UPDATE messages_fts SET content = 'périmé'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(h.rebuild_fts().await.unwrap(), 3);
+    assert_eq!(fts_rows(&h, "s1").await, before);
 }
 
 #[tokio::test]
@@ -288,4 +474,24 @@ async fn a_system_message_is_refused_by_the_history() {
         e.to_string().contains("n'entre pas dans l'historique"),
         "{e}"
     );
+}
+
+/// La requête d'une recherche dans l'historique n'entre pas dans l'index : sinon chaque
+/// `history_grep` se retrouvait lui-même, en tête des résultats.
+#[tokio::test]
+async fn a_history_search_does_not_index_its_own_query() {
+    let h = hs().await;
+    let search = ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+        id: "c1".into(),
+        name: "history_grep".into(),
+        arguments: json!({"query": "acompressor", "scope": "all"}),
+    }]);
+    h.append("s1", &search, 10, 0, false, None).await.unwrap();
+    assert!(
+        h.grep("acompressor", Some("s1"), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fts_rows(&h, "s1").await[0].1, "history_grep scope: all");
 }

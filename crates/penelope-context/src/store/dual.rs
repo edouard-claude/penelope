@@ -47,7 +47,7 @@ impl Row {
             sid: session_id.to_string(),
             role: message.role.as_str().to_string(),
             content: serialise_content(message)?,
-            searchable: message.text(),
+            searchable: searchable_text(message),
             tool_call_id: message.tool_call_id.clone(),
             tool_name: message.name.clone(),
             tokens,

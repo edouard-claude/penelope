@@ -26,8 +26,8 @@
 //! - un texte qui répond à un motif `masks` du scénario (mémoire du processus, contrôles
 //!   propres à l'hôte) devient `{{masked}}` ;
 //! - une estimation de jetons (`tokens_est`) devient `{{tokens}}` quand l'objet qui la
-//!   porte cite la racine temporaire ou la version : leur longueur change d'une machine
-//!   ou d'un bump à l'autre.
+//!   porte cite la racine temporaire, la version ou une durée mesurée : leur longueur
+//!   change d'une machine, d'un bump ou d'un rejeu à l'autre.
 
 use regex::Regex;
 use serde_json::Value;
@@ -162,7 +162,9 @@ impl Normaliser {
             Value::String(s) => Value::String(self.text(&s)),
             Value::Array(items) => Value::Array(items.into_iter().map(|x| self.value(x)).collect()),
             Value::Object(map) => {
-                let mentions_home = self.mentions_home(&map) || self.mentions_version(&map);
+                let unstable_size = self.mentions_home(&map)
+                    || self.mentions_version(&map)
+                    || self.mentions_duration(&map);
                 let definition = DEFINITION_KEYS.iter().any(|k| map.contains_key(*k));
                 let mut out = serde_json::Map::new();
                 for (k, v) in map {
@@ -172,7 +174,7 @@ impl Normaliser {
                         Value::String("{{action}}".into())
                     } else if DURATION_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{ms}}".into())
-                    } else if mentions_home && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
+                    } else if unstable_size && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{tokens}}".into())
                     } else if !definition
                         && VERSION_KEYS.contains(&k.as_str())
@@ -203,6 +205,14 @@ impl Normaliser {
     /// estimation de jetons voisine change avec sa longueur à chaque bump.
     fn mentions_version(&self, map: &serde_json::Map<String, Value>) -> bool {
         self.version
+            .is_match(&Value::Object(map.clone()).to_string())
+    }
+
+    /// Vrai si l'objet cite une durée mesurée, jusque dans un texte : la sortie d'un
+    /// `shell_exec` recopiée par `history_expand` (#300) passe de `9` à `10` ms d'un rejeu
+    /// à l'autre, et l'estimation de jetons voisine avec elle.
+    fn mentions_duration(&self, map: &serde_json::Map<String, Value>) -> bool {
+        self.duration
             .is_match(&Value::Object(map.clone()).to_string())
     }
 
@@ -446,6 +456,15 @@ mod tests {
         let mut n = Normaliser::new(START, Path::new("/tmp/racine-w"));
         let near = n.value(json!({"text": "/tmp/racine-w/a.txt", "tokens_est": 93}));
         let far = n.value(json!({"text": "rien", "tokens_est": 12}));
+        assert_eq!(near["tokens_est"], "{{tokens}}");
+        assert_eq!(far["tokens_est"], 12);
+    }
+
+    #[test]
+    fn a_token_estimate_is_masked_next_to_a_measured_duration() {
+        let mut n = Normaliser::new(START, Path::new("/tmp/racine-w"));
+        let near = n.value(json!({"text": "{\"durationMs\": 9}", "tokens_est": 290}));
+        let far = n.value(json!({"text": "rendu terminé", "tokens_est": 12}));
         assert_eq!(near["tokens_est"], "{{tokens}}");
         assert_eq!(far["tokens_est"], 12);
     }
