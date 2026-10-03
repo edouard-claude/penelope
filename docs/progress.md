@@ -156,6 +156,55 @@ déclencheurs et leurs tests, la signature SigV4 (vecteurs d'AWS inchangés), le
 OAuth sur `mcp.callback_port`, la suppression d'une planification sans webhook. Closes
 #294.
 
+**Réponses vocales : un post-traitement local, optionnel et configurable, entre le WAV de
+Voxtral et l'OGG envoyé (#299).** Constat : un essai à la main sur l'instance (Voxtral
+`fr_female` → Resemble Enhance complet → finition studio douce FFmpeg → OGG/Opus) a donné
+le rendu de référence, mais `send_voice` ne connaissait que `tts_voice`, `max_chars` et
+`reply_in_kind` : la chaîne se rejouait à la main, et Resemble Enhance ne vivait que dans
+le cache éphémère de `uvx`.
+
+Correctif. Section `[voice.postprocess]`, éteinte par défaut (`enabled`, `engine` :
+`resemble_enhance` ou `none`, `timeout` 180 s, `ffmpeg_bin`, `ffmpeg_filters`,
+`ffmpeg_output_args`, `opus_bitrate`, `resemble_bin`, `resemble_run_dir`,
+`resemble_device` `cpu` ou `mps`), validée au chargement même éteinte (moteur et
+périphérique connus, délai non nul). Allumée, après l'assemblage du WAV : le moteur, puis
+`ffmpeg -af` avec le preset « studio doux » retrouvé dans la base de l'instance (passe-haut
+70 Hz, passe-bas 16 kHz, égaliseurs doux à 180 Hz et 3,2 kHz, compression douce, `loudnorm`
+à −16 LUFS, sortie mono 24 kHz ; constantes `VOICE_STUDIO_SOFT_*` du noyau, reprises comme
+défauts des clés), puis `wav_to_ogg_opus_with` : Opus à 48 kb/s pour le vocal fini, 32 kb/s
+inchangé pour un vocal brut. Le moteur est derrière un trait
+(`Enhancer`) ; `ResembleEnhance` lance `resemble-enhance <in> <out> --device … --run_dir …`
+hors ligne (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, et `PYTORCH_ENABLE_MPS_FALLBACK` en
+`mps`), sur des poids préparés à l'installation (`uv tool install --python 3.11
+resemble-enhance`, dépôt Hugging Face cloné avec Git LFS sous
+`<données>/models/resemble-enhance`) : poids absents ou pointeur Git LFS à leur place, le
+moteur est écarté avant tout lancement. Binaire absent, poids manquants, erreur ou délai
+dépassé (processus tué) : avertissement journalisé, le WAV brut part converti ; `ffmpeg`
+désigné par la configuration sert aussi à la conversion finale
+(`audio::wav_to_ogg_opus_with`). Les temporaires (`<id>.wav`, `<id>.work/`) disparaissent
+sur succès comme sur échec. `voice.sent` et le résultat de l'outil portent `postprocess`
+(`status` `disabled`, `applied`, `skipped`, `failed`, `timed_out` ; `engine` ; `seconds` ;
+`reason`). `doctor` : le contrôle `voice` cherche `ffmpeg` dans le PATH étendu (Homebrew,
+`~/.local/bin`) ou au chemin configuré ; un contrôle `voice.postprocess` apparaît quand la
+section est allumée et nomme ce qui manque avec la commande qui l'installe, sans rien
+lancer. Inventaire `install` : `postprocess`, `postprocess_engine`. Doc : section « Post-
+traitement du vocal » d'install-headless.md (installation durable, poids, CPU contre MPS,
+exemple), référence des clés, fixture 0.17 et golden `config.get` régénérés. Pas de
+commande `penelope voice install` : la préparation est documentée et `doctor` la vérifie.
+
+Tests (faux `resemble-enhance` et `ffmpeg` dans un répertoire temporaire, jamais les vrais) :
+section éteinte par défaut, relue depuis TOML, clé inconnue refusée, moteur, délai et
+périphérique validés ; la chaîne complète dans l'ordre (moteur avec `--device cpu
+--run_dir`, puis `-af` du preset) ; `none` seul et filtres vides ; rien lancé si le
+binaire, les poids ou `ffmpeg` manquent, `~` développé dans `resemble_run_dir`, pointeur
+Git LFS nommé ; moteur en erreur ou muet ; délai dépassé ; `doctor` ok et en échec ;
+`send` de bout en bout avec les services de test : OGG envoyé et seul fichier restant dans
+les trois cas (appliqué, échec, éteint), `voice.sent` avec les trois statuts et la durée,
+aucun repli en texte. Ce qui marchait déjà et continue : section absente ou `enabled =
+false`, le pipeline d'origine octet pour octet (synthèse, `wav_to_ogg_opus`, `sendVoice`,
+usage `tts`) ; texte trop long renvoyé au modèle ; synthèse impossible, réponse en texte
+avec la raison. Closes #299.
+
 ### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les

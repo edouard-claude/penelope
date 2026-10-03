@@ -594,6 +594,16 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
 | `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
 | `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
+| `voice.postprocess.enabled` | `false` | Appliquer le post-traitement à chaque `send_voice`. Éteint : comportement d'origine. |
+| `voice.postprocess.engine` | `"resemble_enhance"` | Moteur de restauration : `resemble_enhance` (Resemble Enhance, local), ou `none` (filtres FFmpeg seuls). |
+| `voice.postprocess.timeout` | `"180s"` | Délai maximal du post-traitement complet (moteur puis filtres) ; au-delà, le vocal brut part. |
+| `voice.postprocess.ffmpeg_bin` | `""` | Chemin de `ffmpeg` ; vide : trouvé dans le PATH et les emplacements Homebrew. |
+| `voice.postprocess.ffmpeg_filters` | `"highpass=f=70,lowpass=f=16000,equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,loudnorm=I=-16:LRA=7:TP=-1.5"` | Chaîne de filtres FFmpeg (`-af`) appliquée après le moteur ; défaut : preset « studio doux » ; vide : pas de filtres. |
+| `voice.postprocess.ffmpeg_output_args` | `"-ac 1 -ar 24000"` | Options FFmpeg de sortie du preset, avant le fichier (`-ac 1 -ar 24000` : mono à 24 kHz) ; vide : format d'entrée conservé. |
+| `voice.postprocess.opus_bitrate` | `"48k"` | Débit Opus du vocal post-traité (`48k`) ; un vocal brut garde le débit d'origine (32k). |
+| `voice.postprocess.resemble_bin` | `""` | Chemin de `resemble-enhance` ; vide : trouvé dans le PATH (`uv tool install` le pose dans `~/.local/bin`). |
+| `voice.postprocess.resemble_run_dir` | `""` | Répertoire des poids de Resemble Enhance (`hparams.yaml`, `ds/G/…`), préparé à l'installation et vérifié par `doctor`, jamais téléchargé pendant un envoi ; vide : `<données>/models/resemble-enhance/enhancer_stage2`. |
+| `voice.postprocess.resemble_device` | `"cpu"` | Périphérique de calcul de Resemble Enhance : `cpu` (sûr sur Apple Silicon) ou `mps` (avec repli des opérations non portées vers le CPU). |
 
 **[retention]**
 
@@ -1507,6 +1517,81 @@ penelope model set tts openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit
 
 `penelope doctor` vérifie `ffmpeg` et lit une phrase d'essai ; `self_status` (inventaire
 `install`) dit si la réponse vocale est disponible et avec quelle voix.
+
+### Post-traitement du vocal
+
+Le WAV de Voxtral peut passer par une finition locale avant l'encodage OGG/Opus (#299) :
+Resemble Enhance (restauration de la voix), puis le preset FFmpeg « studio doux » validé sur
+l'instance (passe-haut à 70 Hz, passe-bas à 16 kHz, deux égaliseurs doux à 180 Hz et
+3,2 kHz, compression douce, normalisation à −16 LUFS ; sortie mono à 24 kHz, encodée en
+Opus à 48 kb/s). Éteint par défaut. Allumé, il s'applique à chaque `send_voice` ; tout ce qui l'empêche de tourner
+(binaire absent, poids manquants, erreur, délai dépassé) est un avertissement dans le
+journal, et le vocal brut part quand même. Rien n'est téléchargé pendant un envoi : les
+poids sont en place ou le moteur est écarté avant de lancer quoi que ce soit.
+
+Installation durable, une fois (Python 3.11 et Git LFS ; `uvx` ne suffit pas, son cache
+est éphémère) :
+
+```bash
+brew install uv git-lfs ffmpeg
+```
+
+```bash
+uv tool install --python 3.11 resemble-enhance    # pose `resemble-enhance` dans ~/.local/bin
+```
+
+Les poids (`enhancer_stage2`, de l'ordre du gigaoctet) vont sous le répertoire de données,
+là où Pénélope les cherche par défaut (`penelope paths` donne le chemin) :
+
+```bash
+git lfs install
+```
+
+```bash
+git clone https://huggingface.co/ResembleAI/resemble-enhance "$HOME/Library/Application Support/Penelope/models/resemble-enhance"
+```
+
+Un clone sans Git LFS laisse des pointeurs de 130 octets à la place des poids : `doctor` le
+dit en clair (« pointeur Git LFS »), et `git lfs pull` dans ce dépôt répare. Puis :
+
+```bash
+penelope config set voice.postprocess.enabled true
+```
+
+```bash
+penelope doctor    # `voice.postprocess` : binaire, poids, ffmpeg, délai ; `voice` : la synthèse
+```
+
+Sur Apple Silicon, le calcul se fait sur CPU (`voice.postprocess.resemble_device = "cpu"`) :
+MPS échoue sur `aten::_weight_norm_interface`. `mps` est accepté, avec repli automatique
+des opérations non portées vers le CPU (`PYTORCH_ENABLE_MPS_FALLBACK=1`). Compter de
+l'ordre de la minute pour un vocal de trente secondes sur un M1 Pro ;
+`voice.postprocess.timeout` (180 s par défaut) borne la chaîne complète, moteur et filtres,
+et au-delà le vocal brut part.
+
+Réglages : `engine` (`resemble_enhance`, ou `none` pour les filtres FFmpeg seuls),
+`ffmpeg_filters` (la chaîne `-af`, remplaçable ; vide : pas de filtres),
+`ffmpeg_output_args` (options de sortie du preset, `-ac 1 -ar 24000`), `opus_bitrate`
+(débit du vocal fini, `48k` ; un vocal brut garde 32k), `ffmpeg_bin` et `resemble_bin`
+(chemins, sinon le PATH étendu aux emplacements Homebrew et `~/.local/bin`),
+`resemble_run_dir` (poids rangés ailleurs), `resemble_device`. Exemple :
+
+```toml
+[voice.postprocess]
+enabled = true
+engine = "resemble_enhance"
+timeout = "180s"
+resemble_device = "cpu"
+# Le preset livré ; à retoucher ici, pas ailleurs.
+ffmpeg_filters = "highpass=f=70,lowpass=f=16000,equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,loudnorm=I=-16:LRA=7:TP=-1.5"
+ffmpeg_output_args = "-ac 1 -ar 24000"
+opus_bitrate = "48k"
+```
+
+L'événement `voice.sent` et le résultat de l'outil portent `postprocess` : `status`
+(`disabled`, `applied`, `skipped`, `failed`, `timed_out`), `engine`, `seconds` (durée du
+traitement) et `reason` quand il y en a une. Les fichiers temporaires (`<id>.wav`,
+`<id>.work/`) disparaissent dans tous les cas ; seul l'OGG envoyé reste dans `media/voice`.
 
 ### Ce que Pénélope sait d'elle-même
 

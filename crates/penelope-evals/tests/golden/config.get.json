@@ -293,7 +293,19 @@
       "voice": {
         "tts_voice": "string",
         "max_chars": "integer",
-        "reply_in_kind": "bool"
+        "reply_in_kind": "bool",
+        "postprocess": {
+          "enabled": "bool",
+          "engine": "string",
+          "timeout": "string",
+          "ffmpeg_bin": "string",
+          "ffmpeg_filters": "string",
+          "ffmpeg_output_args": "string",
+          "opus_bitrate": "string",
+          "resemble_bin": "string",
+          "resemble_run_dir": "string",
+          "resemble_device": "string"
+        }
       },
       "retention": {
         "days": "integer",

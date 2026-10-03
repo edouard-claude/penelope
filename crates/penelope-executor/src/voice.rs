@@ -4,16 +4,21 @@
 //! ```text
 //!  texte ─► lisible (sans Markdown, code, liens, emojis ; « 8,5 % » → « 8,5 pour cent »)
 //!        ─► phrases par tranches ─► /audio/speech (voix `voice.tts_voice`) ─► WAV assemblés
+//!        ─► post-traitement local, s'il est allumé (`postprocess`, #299)
 //!        ─► ffmpeg → OGG/Opus ─► sendVoice
 //!  échec ─► la réponse part en texte, avec « vocal indisponible : <raison> »
 //! ```
+
+pub mod postprocess;
 
 use crate::executor::Messenger;
 use penelope_app::bus::Origin;
 use penelope_app::ports::ProviderSource;
 use penelope_app::services::Services;
+use penelope_kernel::config::VoicePostprocess;
 use regex::Regex;
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -256,6 +261,39 @@ pub async fn synthesize(
     Wav::concat(parts)
 }
 
+/// Post-traitement (#299) : le WAV fini si la chaîne aboutit, le brut sinon, avec l'issue.
+/// Tout ce qui empêche la chaîne de tourner est un avertissement, jamais une erreur : le
+/// vocal part quand même.
+async fn postprocess_wav(
+    cfg: &VoicePostprocess,
+    data_dir: &Path,
+    wav: &Path,
+    work: &Path,
+) -> (postprocess::Outcome, PathBuf) {
+    if !cfg.enabled {
+        return (
+            postprocess::Outcome::disabled(&cfg.engine),
+            wav.to_path_buf(),
+        );
+    }
+    let outcome = match postprocess::Pipeline::from_config(cfg, data_dir) {
+        Ok(pipeline) => {
+            let (outcome, finished) = pipeline.process(wav, work).await;
+            if let Some(finished) = finished {
+                return (outcome, finished);
+            }
+            outcome
+        }
+        Err(reason) => postprocess::Outcome::skipped(&cfg.engine, reason),
+    };
+    tracing::warn!(
+        status = ?outcome.status,
+        reason = outcome.reason.as_deref().unwrap_or_default(),
+        "post-traitement du vocal indisponible : vocal brut envoyé"
+    );
+    (outcome, wav.to_path_buf())
+}
+
 /// Lit `text` en vocal dans la conversation `session_id`. Rend la durée et le fichier.
 #[allow(clippy::too_many_arguments)]
 pub async fn send(
@@ -276,19 +314,35 @@ pub async fn send(
         .to_string();
     let wav = synthesize(s, providers, &spoken, &voice).await?;
     let seconds = wav.seconds();
-    let dir = s.platform.dirs.data().join("media").join("voice");
+    let data_dir = s.platform.dirs.data();
+    let dir = data_dir.join("media").join("voice");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let id = penelope_kernel::ids::Ulid::new().to_string();
     let (wav_path, ogg_path) = (dir.join(format!("{id}.wav")), dir.join(format!("{id}.ogg")));
+    // Répertoire de travail du post-traitement, effacé quoi qu'il arrive.
+    let work = dir.join(format!("{id}.work"));
+    let cleanup = || {
+        let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_dir_all(&work);
+    };
     std::fs::write(&wav_path, wav.to_bytes()).map_err(|e| e.to_string())?;
-    let (w, o) = (wav_path.clone(), ogg_path.clone());
+    let (post, source) = postprocess_wav(&cfg.voice.postprocess, &data_dir, &wav_path, &work).await;
+    let bitrate = postprocess::opus_bitrate(&cfg.voice.postprocess, &post);
+    let Some(ffmpeg) = postprocess::ffmpeg_path(&cfg.voice.postprocess) else {
+        cleanup();
+        return Err("ffmpeg (brew install ffmpeg) : conversion en vocal impossible".into());
+    };
+    let o = ogg_path.clone();
     let converted = tokio::task::spawn_blocking(move || {
-        penelope_platform::audio::wav_to_ogg_opus(&w, &o).map_err(|e| e.to_string())
+        penelope_platform::audio::wav_to_ogg_opus_with(&ffmpeg, &source, &o, &bitrate)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&wav_path);
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    cleanup();
     converted?;
+    let post = serde_json::to_value(&post).unwrap_or(Value::Null);
     let messenger = messenger.ok_or("aucun canal de message disponible")?;
     messenger
         .send_session_voice(
@@ -315,7 +369,12 @@ pub async fn send(
         .append(
             penelope_kernel::event::EventDraft::new(
                 "voice.sent",
-                json!({"seconds": (seconds * 10.0).round() / 10.0, "chars": spoken.chars().count(), "voice": voice}),
+                json!({
+                    "seconds": (seconds * 10.0).round() / 10.0,
+                    "chars": spoken.chars().count(),
+                    "voice": voice,
+                    "postprocess": post,
+                }),
             )
             .session(session_id),
         )
@@ -325,12 +384,61 @@ pub async fn send(
         "seconds": (seconds * 10.0).round() / 10.0,
         "chars": spoken.chars().count(),
         "voice": voice,
+        "postprocess": post,
     }))
+}
+
+/// Contrôles `doctor` : la synthèse (issue #41) et, s'il est allumé, le post-traitement
+/// (#299) : binaires et poids présents, sans rien lancer ni télécharger.
+pub async fn doctor_checks(
+    s: &Services,
+    providers: &dyn ProviderSource,
+) -> Vec<penelope_kernel::api::DoctorCheck> {
+    let cfg = s.config.config();
+    let mut checks = vec![synthesis_check(s, providers).await];
+    if cfg.voice.postprocess.enabled {
+        checks.push(postprocess_check(
+            &cfg.voice.postprocess,
+            &s.platform.dirs.data(),
+        ));
+    }
+    checks
+}
+
+/// `voice.postprocess` : ce qui manque est nommé avec la commande qui l'installe ; rien
+/// n'est exécuté, un essai réel prendrait des minutes sur CPU.
+pub fn postprocess_check(
+    cfg: &VoicePostprocess,
+    data_dir: &Path,
+) -> penelope_kernel::api::DoctorCheck {
+    use penelope_kernel::api::DoctorCheck;
+    const ID: &str = "voice.postprocess";
+    const LABEL: &str = "Post-traitement vocal";
+    match postprocess::Pipeline::from_config(cfg, data_dir) {
+        Err(reason) => DoctorCheck::fail(ID, LABEL, reason, Some("brew install ffmpeg".into())),
+        Ok(pipeline) => match pipeline.readiness() {
+            Ok(detail) => DoctorCheck::ok(
+                ID,
+                LABEL,
+                format!(
+                    "`{}` : {detail} ; délai {} s",
+                    pipeline.engine(),
+                    pipeline.timeout().as_secs()
+                ),
+            ),
+            Err(reason) => DoctorCheck::fail(
+                ID,
+                LABEL,
+                format!("{reason} ; en attendant, chaque vocal part brut"),
+                Some("docs/install-headless.md, « Post-traitement du vocal »".into()),
+            ),
+        },
+    }
 }
 
 /// Contrôle `doctor` (issue #41) : `ffmpeg` présent et synthèse joignable, en lisant une
 /// phrase d'une seconde.
-pub async fn doctor_check(
+async fn synthesis_check(
     s: &Services,
     providers: &dyn ProviderSource,
 ) -> penelope_kernel::api::DoctorCheck {
@@ -339,7 +447,7 @@ pub async fn doctor_check(
     const LABEL: &str = "Réponses vocales";
     let cfg = s.config.config();
     let model = tts_model(&cfg);
-    if penelope_platform::audio::ffmpeg().is_none() {
+    if postprocess::ffmpeg_path(&cfg.voice.postprocess).is_none() {
         return DoctorCheck::fail(
             ID,
             LABEL,

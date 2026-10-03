@@ -12,6 +12,9 @@ pub fn ffmpeg() -> Option<PathBuf> {
     crate::which("ffmpeg")
 }
 
+/// Débit Opus des vocaux bruts (issue #41).
+pub const OPUS_BITRATE: &str = "32k";
+
 /// Convertit un WAV en OGG/Opus, le format des messages vocaux Telegram.
 pub fn wav_to_ogg_opus(wav: &Path, ogg: &Path) -> Result<()> {
     let bin = ffmpeg().ok_or_else(|| {
@@ -19,10 +22,15 @@ pub fn wav_to_ogg_opus(wav: &Path, ogg: &Path) -> Result<()> {
             "ffmpeg (brew install ffmpeg) : conversion en vocal impossible".into(),
         )
     })?;
+    wav_to_ogg_opus_with(&bin, wav, ogg, OPUS_BITRATE)
+}
+
+/// [`wav_to_ogg_opus`] avec un `ffmpeg` désigné et un débit (`voice.postprocess`, #299).
+pub fn wav_to_ogg_opus_with(bin: &Path, wav: &Path, ogg: &Path, bitrate: &str) -> Result<()> {
     let out = std::process::Command::new(bin)
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(wav)
-        .args(["-c:a", "libopus", "-b:a", "32k"])
+        .args(["-c:a", "libopus", "-b:a", bitrate])
         .arg(ogg)
         .output()
         .map_err(|e| PlatformError::Process(format!("ffmpeg : {e}")))?;
