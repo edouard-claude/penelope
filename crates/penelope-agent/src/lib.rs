@@ -43,6 +43,7 @@ mod ports;
 mod rules;
 mod spec;
 mod steering;
+mod tool_images;
 mod turn;
 mod turn_log;
 
@@ -82,6 +83,7 @@ pub use steering::{
     Checkpoint, INTERRUPTED_NOTE, Inbox, Injection, MERGE_NOTE, NOT_RUN_NEW_MESSAGE,
     NOT_RUN_STOPPED, Steer, interruption_note,
 };
+use tool_images::ToolImages;
 pub use turn_log::{TurnMeta, close_interrupted_turns, close_unopened};
 
 #[cfg(test)]

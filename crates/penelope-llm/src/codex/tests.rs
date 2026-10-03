@@ -565,3 +565,48 @@ fn the_developer_note_is_the_last_input_item() {
     // Le prompt système, lui, ne bouge pas : le cache de préfixe reste chaud.
     assert_eq!(with["instructions"], without["instructions"]);
 }
+
+/// #304 : l'image d'un outil, montrée par la boucle en un message utilisateur après le
+/// résultat, part au backend en `input_image` après le `function_call_output`.
+#[test]
+fn a_tool_image_shown_after_the_result_goes_as_input_image() {
+    let assistant = ChatMessage {
+        tool_calls: vec![ToolCall {
+            id: "call_9".into(),
+            name: "mcp__tickets__attachment".into(),
+            arguments: json!({"id": 1}),
+        }],
+        content: vec![],
+        ..ChatMessage::assistant("")
+    };
+    let shown = ChatMessage {
+        content: vec![
+            Content::text("(Images rendues par les outils ci-dessus…)"),
+            Content::ImageUrl {
+                url: "data:image/png;base64,iVBORw0KGgo=".into(),
+                detail: None,
+            },
+        ],
+        ..ChatMessage::user("")
+    };
+    let req = ChatRequest {
+        model: "codex:gpt-6-astra".into(),
+        messages: vec![
+            ChatMessage::user("regarde la capture"),
+            assistant,
+            ChatMessage::tool_result("call_9", "mcp__tickets__attachment", "[image …]"),
+            shown,
+        ],
+        ..Default::default()
+    };
+    let b = to_responses_body(&req, &opts());
+    let input = b["input"].as_array().expect("liste");
+    assert_eq!(input[2]["type"], "function_call_output");
+    assert_eq!(input[3]["role"], "user");
+    assert_eq!(input[3]["content"][0]["type"], "input_text");
+    assert_eq!(input[3]["content"][1]["type"], "input_image");
+    assert_eq!(
+        input[3]["content"][1]["image_url"],
+        "data:image/png;base64,iVBORw0KGgo="
+    );
+}

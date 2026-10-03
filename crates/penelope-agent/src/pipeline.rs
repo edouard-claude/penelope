@@ -110,6 +110,7 @@ pub(super) enum Pending {
 
 impl AgentLoop {
     /// Résout les appels d'outils sans résultat à la fin du transcript.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn resolve_pending(
         &self,
         spec: &TurnSpec,
@@ -118,6 +119,7 @@ impl AgentLoop {
         sink: &dyn TurnSink,
         detector: &mut LoopDetector,
         steering: &Steering<'_>,
+        shown: &ToolImages,
     ) -> anyhow::Result<Pending> {
         let s = &self.services;
         let tail = conv.tail().await?;
@@ -225,7 +227,9 @@ impl AgentLoop {
                         outcomes.extend(futures::future::join_all(running).await);
                     }
                     for ((call, info, id), outcome) in batch.iter().zip(outcomes) {
-                        self.finish_call(spec, conv, sink, call, info, id, outcome?, &mut nudge)
+                        let outcome = outcome?;
+                        shown.note(execute, &outcome.value);
+                        self.finish_call(spec, conv, sink, call, info, id, outcome, &mut nudge)
                             .await?;
                         recorded += 1;
                     }
@@ -236,6 +240,7 @@ impl AgentLoop {
                         args: penelope_observe::redact_json(&call.arguments),
                     });
                     let outcome = self.run_effect(spec, execute, &call, &info, &id).await?;
+                    shown.note(execute, &outcome.value);
                     self.finish_call(spec, conv, sink, &call, &info, &id, outcome, &mut nudge)
                         .await?;
                     recorded += 1;

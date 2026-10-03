@@ -10,6 +10,7 @@
 pub mod executor;
 pub mod images;
 pub mod jobs;
+pub mod mcp_media;
 pub mod selfdocs;
 pub mod selfknow;
 pub mod tools_on_demand;

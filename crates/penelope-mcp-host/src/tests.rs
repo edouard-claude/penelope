@@ -466,7 +466,7 @@ fn the_supervisor_is_both_gateway_and_admin() {
 }
 
 #[test]
-fn binary_content_never_enters_the_transcript() {
+fn binary_content_is_only_mentioned_in_text() {
     let r = ToolResult {
         content: vec![
             ContentBlock::Text { text: "ok".into() },
@@ -487,6 +487,9 @@ fn binary_content_never_enters_the_transcript() {
     assert_eq!(v["content"][0]["text"], "ok");
     let img = v["content"][1]["text"].as_str().unwrap();
     assert!(img.contains("image/png") && !img.contains("QUJD"), "{img}");
+    // #304 : la donnée reste pour l'exécuteur, qui la pose sur disque.
+    assert_eq!(v["content"][1]["type"], "image");
+    assert_eq!(v["content"][1]["data"], "QUJD".repeat(1000));
     assert_eq!(v["content"][2]["text"], "# titre");
 }
 

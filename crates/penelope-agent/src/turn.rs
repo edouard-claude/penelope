@@ -33,6 +33,8 @@ impl AgentLoop {
         };
         // Messages du propriétaire arrivés pendant le tour (§3.4).
         let steering = Steering::new(self.inbox.as_deref());
+        // Images rendues par les outils, vues à l'appel suivant seulement (#304).
+        let shown = ToolImages::default();
 
         for iteration in 0..self.max_iterations {
             if spec.cancel.is_cancelled() {
@@ -46,7 +48,7 @@ impl AgentLoop {
 
             // 1. Appels en attente : premier passage ou reprise, même chemin.
             match self
-                .resolve_pending(spec, conv, execute, sink, &mut detector, &steering)
+                .resolve_pending(spec, conv, execute, sink, &mut detector, &steering, &shown)
                 .await?
             {
                 Pending::Stop(outcome) => return Ok(outcome),
@@ -107,6 +109,9 @@ impl AgentLoop {
             // réponse vide, pas dans l'historique ; le pliage l'ajoute de la même façon.
             if let Some(prompt) = attempts.retry_prompt() {
                 messages.push(ChatMessage::user(prompt));
+            }
+            if let Some(images) = shown.message(s, spec, execute).await {
+                messages.push(images);
             }
             // Les images déjà refusées ne repartent pas, dans ce tour ni les suivants (#231).
             let sent_images = recovery.rejected.prepare(&mut messages);

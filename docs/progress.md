@@ -93,6 +93,53 @@ qui l'exerce.
 
 Closes #305.
 
+**MCP : une image ou un son rendu par un outil n'est plus perdu (#304).** Constat (run de
+plan vu dans #302) : une étape de workflow téléchargeait les captures d'écran d'un ticket
+par l'outil de pièces jointes du serveur de tickets ; le modèle recevait `[image
+image/png, N octets en base64, non transmise]` et rien n'apparaissait dans le répertoire
+du run. Cause : `result_json` (`penelope-mcp-host`) remplaçait tout bloc `image`/`audio`
+par ce texte, sans le poser nulle part ni le montrer au modèle. Le `save_path` de l'outil
+est une affaire du serveur, qui écrit chez lui.
+
+Correctif. `result_json` garde la donnée du bloc à côté de sa mention (le port
+`McpGateway` le dit) ; qui ne lit que le texte (relève `mcp_poll`, agenda du digest) voit
+la même mention qu'avant. L'exécuteur (`penelope-executor`, module `mcp_media`) pose le
+bloc sur disque avant tout transcript : `mcp-media/` du répertoire du run pour une étape
+de workflow, sinon `{data}/media/mcp/<session>/` ; nom tiré du contenu (16 caractères de
+SHA-256, extension d'après le type), donc la même capture rendue deux fois est le même
+fichier ; plafond de 10 Mo décodés, celui d'une photo reçue, jugé avant de décoder. Le
+résultat garde `[image image/png, 12 Ko, enregistrée : <chemin>]` ; au-delà du plafond ou
+en base64 illisible, rien n'est écrit et la mention le dit. Aucun base64 ne reste dans la
+valeur, le texte, le ledger ni l'historique. Si le modèle du tour lit les images (d'après
+le catalogue, comme une photo Telegram), la boucle les lui montre à l'appel qui suit le
+résultat, dans la copie envoyée seulement, en un message final marqué contenu observé :
+l'historique et le préfixe ne bougent pas, et une image refusée par le fournisseur suit
+le chemin de #231. Codex, modèle principal de l'instance, la reçoit comme les autres :
+son catalogue annonce les images et le message part en `input_image` après le
+`function_call_output` (testé sur le corps Responses et dans la boucle). L'URI passe par `model_data_url`, la réduction des photos reçues
+(#242), via deux méthodes du port `ToolExecutor` (`shown_images`, `model_images`) : la
+boucle ne connaît ni le disque ni MCP. Seul l'exécuteur écrit le champ `saved` ; celui
+qu'un serveur glisserait est retiré, et un chemin hors des dossiers de médias n'est jamais
+montré. `image_inspect` lit aussi `{data}/media/mcp`. Rétention : la purge d'une session
+emporte les fichiers que cite son historique (chemin sous `{data}/media`, déjà en place) ;
+la passe quotidienne retire ceux de `{data}/media/mcp` plus vieux que `retention.days`
+(`mcp_media` dans son rapport) ; ceux d'un run partent avec son répertoire. Le daemon ne
+change pas. Doc : mcp.md (« Risque et approbation »).
+
+Tests : bloc image écrit, nom stable, mention avec chemin et sans base64 ; bloc audio écrit
+mais jamais montré ; plafond dépassé et base64 illisible sans fichier ; `saved` forgé par un
+serveur retiré et chemin hors racine refusé ; appel MCP de bout en bout hors workflow
+(dossier de la session, URI pour le modèle, racine d'`image_inspect`) et dans un run
+(`mcp-media/` du répertoire du run) ; boucle : un modèle qui voit reçoit la capture à
+l'appel suivant et une seule fois, l'historique n'en garde que le chemin, un modèle sans
+vision n'a que le chemin ; rétention des vieux médias seulement. Ce qui marchait déjà et
+continue : les photos Telegram et `image_inspect`, les blocs texte et ressource, la relève
+`mcp_poll` et l'agenda du digest. Assumé : un audio n'est jamais transmis au modèle, seul son
+chemin l'est (un outil de transcription le relit). Reste ouvert : les blocs binaires d'une ressource
+(`mcp_resource_read`) restent une mention.
+
+Closes #304.
+
 ### 1.0.37
 
 **Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les

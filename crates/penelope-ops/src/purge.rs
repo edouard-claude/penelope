@@ -23,7 +23,9 @@
 //!     payloads des `conv.attempt` (texte partiel), hash gardé dans event_purges (T17) ;
 //!     pré-images de la mémoire au-delà de `retention.memory_history_days` ;
 //!     échantillons du jeu de décisions au-delà de `observability.dataset.retention_days`,
-//!     et d'elle seule : `retention.days` ne les touche pas (#233).
+//!     et d'elle seule : `retention.days` ne les touche pas (#233) ;
+//!     médias rendus par les outils MCP hors workflow (`{data}/media/mcp`), au-delà de
+//!     `retention.days` d'après leur date de fichier (#304).
 //! ```
 //!
 //! Un effet vidé garde sa ligne, son état et sa clé d'idempotence : un rejeu reste
@@ -610,6 +612,13 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
         })
         .await?;
 
+    let mut report = report;
+    if days > 0 {
+        let root = penelope_app::media::mcp_root(&s.platform.dirs.data());
+        let before = std::time::UNIX_EPOCH
+            + std::time::Duration::from_millis((now - days as i64 * 86_400_000).max(0) as u64);
+        report["mcp_media"] = json!(remove_older(&root, before));
+    }
     let total: i64 = report
         .as_object()
         .map(|o| o.values().filter_map(|v| v.as_i64()).sum())
@@ -625,6 +634,32 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
             .await;
     }
     Ok(report)
+}
+
+/// Efface les fichiers de `root` (un niveau de dossiers sous lui) modifiés avant
+/// `before`, puis les dossiers vidés. Renvoie le nombre de fichiers effacés.
+fn remove_older(root: &std::path::Path, before: std::time::SystemTime) -> usize {
+    let mut removed = 0;
+    let Ok(dirs) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    for dir in dirs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let old = f
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|m| m < before);
+            if old && f.path().is_file() && std::fs::remove_file(f.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        // Échoue sans bruit tant que le dossier n'est pas vide.
+        let _ = std::fs::remove_dir(&dir);
+    }
+    removed
 }
 
 /// Une passe de rétention par jour, appelée par le superviseur.
