@@ -86,6 +86,12 @@ impl NativeToolExecutor {
                 penelope_tools::git::normalize_clone_url(&str_arg(&inner, "url")?)?;
                 Ok(())
             }
+            "workflow_start" => {
+                penelope_tools::validate_args(&target, &inner)?;
+                // Depuis un canal, le refus tombe ici, avant toute carte (#302) : le
+                // propriétaire n'approuve plus un appel voué à l'échec.
+                self.channel_start_gate().await
+            }
             t if penelope_tools::tool_spec(t).is_some() => penelope_tools::validate_args(t, &inner),
             t if t.starts_with("mcp__") || name == "tool_call" => self
                 .services

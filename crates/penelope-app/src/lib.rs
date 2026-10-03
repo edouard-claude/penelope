@@ -23,6 +23,7 @@ pub mod judge;
 pub mod machine;
 pub mod media;
 pub mod model_judge;
+pub mod notices;
 pub mod outcome;
 pub mod ports;
 pub mod quiet;

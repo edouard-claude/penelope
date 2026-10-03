@@ -125,6 +125,9 @@ scenario_cases! {
     // Lecture d'une ressource MCP par le modèle (#293), le geste d'un tour réveillé par un
     // `mcp_subscribe`.
     outils_ressource_mcp => "outils-ressource-mcp",
+    // Le gate « vas-y » vu depuis la conversation (#302) : clic, « vas-y » tapé, refus
+    // de `workflow_start` avant toute carte, arrêt du tour au deuxième.
+    plan_clic_puis_vas_y_tape => "plan-clic-puis-vas-y-tape",
 }
 
 #[test]

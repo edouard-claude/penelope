@@ -74,7 +74,17 @@ pub(crate) enum Terminal {
         tool: String,
         message: String,
     },
+    /// Refus répété de l'exécuteur (#302) : `result` revient à l'appel, `answer` au
+    /// propriétaire.
+    Halt {
+        call: ToolCall,
+        result: String,
+        answer: String,
+    },
 }
+
+/// Ce que reçoivent les appels qui suivaient un refus répété (#302).
+const NOT_RUN_HALTED: &str = "Non exécuté : tour arrêté sur un refus répété de l'exécuteur.";
 
 /// Ce que la décision d'un appel ajoute à la liste.
 pub(crate) enum Decided {
@@ -91,6 +101,10 @@ pub(super) enum Pending {
         report: String,
         tool: String,
         last_result: Option<String>,
+    },
+    /// Refus répété de l'exécuteur (#302) : la réponse est déjà écrite.
+    Halt {
+        answer: String,
     },
 }
 
@@ -277,6 +291,33 @@ impl AgentLoop {
                     last_result: last,
                 });
             }
+            Some(Terminal::Halt {
+                call,
+                result,
+                answer,
+            }) => {
+                // Refus répété de l'exécuteur (#302) : le résultat de l'appel entre dans
+                // la conversation, les appels qui suivaient sont fermés, et la réponse au
+                // propriétaire est l'état connu, sans autre appel au modèle.
+                s.events
+                    .append(
+                        TurnEventKind::Halted
+                            .draft(json!({"tool": call.name, "answer": answer}))
+                            .session(&spec.session_id),
+                    )
+                    .await?;
+                tracing::warn!(session = %spec.session_id, tool = %call.name, "tour arrêté sur un refus répété");
+                self.record_result(conv, sink, &call, false, result, false)
+                    .await?;
+                self.close_pending(conv, sink, NOT_RUN_HALTED).await?;
+                let prov = Provenance {
+                    turn: spec.turn_id.clone(),
+                    ..Default::default()
+                };
+                conv.record_as(&ChatMessage::assistant(&answer), true, &prov)
+                    .await?;
+                return Ok(Pending::Halt { answer });
+            }
         }
         conv.admit_tool_results(recorded).await?;
         Ok(Pending::Resolved)
@@ -311,6 +352,13 @@ impl AgentLoop {
                     tool: described.info.effective_name.clone(),
                     call: described.call,
                     message,
+                }));
+            }
+            Some(GuardStop::Halt { result, answer }) => {
+                return Ok(Decided::Stop(Terminal::Halt {
+                    call: described.call,
+                    result,
+                    answer,
                 }));
             }
             Some(GuardStop::Approved) => {
