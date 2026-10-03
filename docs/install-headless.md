@@ -1449,7 +1449,11 @@ active, combien d'échantillons sont gardés, depuis quand, et la répartition d
 
 Un vocal (ou un fichier audio) envoyé sur Telegram est téléchargé, transcrit par le modèle
 du rôle `stt`, montré en citation, puis traité comme un message tapé. Le coût de la
-transcription est compté avec le rôle `stt`. Deux façons de transcrire.
+transcription est compté avec le rôle `stt`. L'original est conservé tel quel sous
+`{data}/media/voice` (`tg_<chat>_<message>.ogg` pour un vocal) et son chemin suit le
+transcript, comme celui d'une photo : l'agent peut le transmettre à un outil (un
+échantillon de voix, par exemple). Il part avec la purge de sa session ; si l'écriture
+échoue, la transcription part quand même, sans chemin. Deux façons de transcrire.
 
 Par OpenRouter, sans rien installer :
 
