@@ -620,6 +620,14 @@ pub struct DreamReport {
     /// Durée de la passe, en millisecondes.
     #[serde(default)]
     pub duration_ms: u64,
+    /// Entrées rétrogradées du Cœur en note curée, Cœur plein (issue #298) : une par
+    /// nuit au plus, jamais une entrée du propriétaire ; texte, importance, rappels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub demoted: Vec<String>,
+    /// Nouveautés rangées en note curée plutôt qu'au Cœur, faute de place pour y être
+    /// servies (issue #298).
+    #[serde(default)]
+    pub core_full: u32,
 }
 
 impl DreamReport {
@@ -667,13 +675,22 @@ impl DreamReport {
                 self.questions.len()
             ));
         }
-        // Un seul avertissement peut demander une action du propriétaire : le Cœur au-delà
-        // de son budget, et il porte alors la commande. Les autres (relances, lots coupés)
-        // vont au journal du vault et à `penelope doctor`.
+        // Un seul avertissement concerne le propriétaire : le Cœur au-delà de son budget.
+        // Il dit l'état, puis ce que la nuit a fait (issue #298) : plus d'injonction à
+        // alléger `memoire.md` ni de commande à taper, le digest du 19/09 au 01/10 l'a
+        // répétée douze nuits sans effet. Les autres avertissements (relances, lots
+        // coupés) vont au journal du vault et à `penelope doctor`.
         for w in self.warnings.iter().filter(|w| w.contains("Cœur")) {
+            s.push_str(&format!("\n⚠️ {w}"));
+        }
+        if self.core_full > 0 {
             s.push_str(&format!(
-                "\n⚠️ {w} — `penelope config set memory.core_budget_tokens <n>`"
+                "\nCœur plein : {} nouveauté(s) rangée(s) en notes, rappelées à la demande.",
+                self.core_full
             ));
+        }
+        for d in &self.demoted {
+            s.push_str(&format!("\nRétrogradée du Cœur en notes : {d}"));
         }
         // Nettoyage proposé, jamais lancé tout seul : la commande est dans la ligne.
         if !self.cleanup.is_empty() {
@@ -719,6 +736,15 @@ impl DreamReport {
         }
         for w in &self.warnings {
             s.push_str(&format!("\nAttention : {w}"));
+        }
+        if self.core_full > 0 {
+            s.push_str(&format!(
+                "\nCœur plein : {} nouveauté(s) rangée(s) en notes.",
+                self.core_full
+            ));
+        }
+        for d in &self.demoted {
+            s.push_str(&format!("\nRétrogradée du Cœur en notes : {d}"));
         }
         if self.calls > 0 {
             s.push_str(&format!(

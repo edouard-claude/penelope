@@ -387,9 +387,14 @@ pub(super) fn sort_and_plan(
                     journal_text.entry(n).or_insert_with(|| text.clone());
                 }
             }
-            Some(Placement::Ignored(_)) => report
-                .rejected
-                .push(format!("{} : candidat {n} écarté par la grille", op.kind())),
+            // Le candidat est déjà compté écarté, au verdict : l'opération que le modèle
+            // propose malgré tout ne va qu'au journal du tri. La pousser dans `rejected`
+            // comptait le candidat deux fois (205 écartés pour 189 examinés) et faisait
+            // de son numéro un « motif » du digest (issue #297).
+            Some(Placement::Ignored(_)) => report.sorted.push(format!(
+                "⏭ {} non appliquée : candidat {n} écarté par la grille",
+                op.kind()
+            )),
             None => {}
         }
     }

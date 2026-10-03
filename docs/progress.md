@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 30 septembre 2026.
+Dernière mise à jour : 3 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,65 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.35
+
+**Mémoire : le digest compte chaque candidat écarté une fois (#297), et la nuit tient le
+budget du Cœur au lieu de demander au propriétaire de l'alléger (#298).**
+
+Constat #297, digest du 02/10 : « 189 candidat(s) examiné(s) : 20 promu(s), 185
+écarté(s) », soit 205 pour 189, et deux « motifs d'écart » qui étaient des numéros de
+candidat (« candidat 16 écarté par la grille : 4 »), « autres motifs : 62 ». Cause :
+`sort_and_plan` poussait un candidat écarté par la grille une seconde fois dans
+`report.rejected`, pour chaque opération que le modèle proposait quand même dessus ; comme
+`rejection_family` lit ce qui suit « : », chaque numéro devenait une famille. Les
+justifications libres du modèle n'y sont pour rien : le motif d'un écart est l'étiquette
+fixe de la grille, et ce sont ces numéros qui fragmentaient les familles. Correctif : une
+opération sur un candidat écarté ne va plus qu'au journal du tri de `DREAMS.md` (« ⏭
+add_entry non appliquée : candidat 16 écarté par la grille »). Le tri en base était juste
+(un seul `rejected` par candidat), seul le rapport mentait.
+
+Constat #298 : le Cœur dépasse `memory.core_budget_tokens` (1 200) chaque nuit depuis le
+19/09, jusqu'à ~5 576 jetons et 111 entrées hors du bloc le 22/09 ; la nuit continuait d'y
+promouvoir sans regarder la place, et le bloc servi d'office triait à importance égale par
+uid **croissant** : ce que la nuit venait d'apprendre tombait le premier. L'avertissement
+« alléger memoire.md ou relever core_budget_tokens » était répété douze matins sans effet.
+Correctif, en trois points. **Le bloc** (`Snapshots::build_block_with_uids`) sert, à
+importance égale, la plus récente d'abord (uid décroissant : les uid sont des ULID) ;
+ordre total, mêmes entrées, même bloc. **La nuit** (`dream/core_budget.rs`) décide la
+place de chaque `add_entry` vers `memoire.md` après la validation : la place reste, il
+s'écrit ; Cœur plein, la nouveauté que le bloc ne servirait pas va en fiche curée
+(`notes.md`, rappelée à la demande), celle qui s'y classe s'écrit au Cœur et, une fois par
+nuit au plus, la moins utile des entrées **hors du bloc** (importance la plus basse, puis
+la moins souvent utile, la moins rappelée, la plus ancienne) descend en `notes.md`, section
+« Descendues du Cœur », ligne et uid conservés (signaux d'usage et provenance suivent),
+index mis à jour, deux pré-images `demote_entry` dans `mem_history`. Jamais une entrée de
+provenance `owner` (écrite par le propriétaire), jamais une qui reprend sa phrase (#245,
+`CandidateStore::owner_quoted_texts`), jamais ce qui a été écrit la nuit même. Ce qui
+descend est hors du bloc servi : le préfixe stable (T2) ne change que par ce que la nuit
+ajoute, et seulement la nuit. **Le digest** garde le constat (« niveau Cœur à ~N jetons
+pour un budget de B : K entrée(s) hors du bloc servi d'office, trouvables par le rappel »)
+et dit ce que la nuit a fait (« Cœur plein : N nouveauté(s) rangée(s) en notes »,
+« Rétrogradée du Cœur en notes : « … » (importance i, r rappel(s)) ») ; plus d'injonction ni
+de commande. `doctor` (`memory.size`) garde le constat et donne le réglage. Rapport :
+`DreamReport.demoted`, `DreamReport.core_full` ; `DREAMS.md` trace « ↓ rangée en notes »
+et « ↓ descendue en notes ». Pas de clé nouvelle. Doc : install-headless.md (forme du
+digest, « Le Cœur a un budget, la nuit le tient »).
+
+Tests : trois candidats dont deux écartés par la grille avec deux opérations proposées sur
+chacun, « 3 examinés : 1 promu, 2 écartés », une seule famille « retrouvable ailleurs »,
+quatre lignes « non appliquée » au tri, `promoted + rejected == candidates_seen` ; le bloc
+à importance égale sert la plus récente, déterministe, l'importance prime ; une première
+nuit écrit quatre faits au Cœur (dont un qui reprend la phrase du propriétaire, à côté
+d'une ligne manuscrite), la seconde, budget réduit à trois entrées, range la nouveauté
+d'importance 1 en notes, écrit les deux d'importance 9 au Cœur et fait descendre la seule
+entrée non protégée hors du bloc (importance 4, un rappel), une fois, pas deux : même uid
+dans `notes.md`, index en `cure`, rappels conservés, deux pré-images, bloc T2 changé par la
+nuit et stable ensuite, digest sans « config set » ni « alléger » ; quand seules des
+entrées protégées sont hors du bloc, rien ne descend. Ce qui marchait déjà et continue :
+le tri de la grille, la validation et l'écriture lot par lot, le rapport complet de
+`DREAMS.md`, les entrées hors du bloc trouvables par le rappel (#62), le digest en une
+bulle (#145). Closes #297. Closes #298.
 
 ### 1.0.34
 

@@ -479,6 +479,24 @@ impl CandidateStore {
             .await
     }
 
+    /// Textes normalisés ([`crate::grid::normalized`]) des candidats dont la phrase du
+    /// propriétaire a été retrouvée (#245), quel que soit leur état : une entrée du Cœur
+    /// qui les reprend est sa parole, la nuit ne la rétrograde pas (issue #298).
+    pub async fn owner_quoted_texts(&self) -> penelope_store::Result<BTreeSet<String>> {
+        self.store
+            .read(|c| {
+                let mut st =
+                    c.prepare("SELECT text FROM mem_candidates WHERE owner_quote IS NOT NULL")?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                let mut v = BTreeSet::new();
+                for r in rows {
+                    v.insert(crate::grid::normalized(&r?));
+                }
+                Ok(v)
+            })
+            .await
+    }
+
     /// Remet à consolider les règles rejetées pour leur seule origine (issue #24) : elles
     /// seront demandées au propriétaire.
     pub async fn retry_origin_rejections(&self) -> penelope_store::Result<usize> {

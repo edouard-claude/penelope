@@ -152,6 +152,90 @@ async fn a_failed_night_keeps_what_it_wrote_and_is_said_once() {
     );
 }
 
+/// #297 : un candidat écarté par la grille compte une fois, quoi que le modèle propose
+/// dessus ; son numéro n'est pas un motif. Le digest du 02/10 disait 20 promus et 185
+/// écartés pour 189 examinés, avec « candidat 16 écarté par la grille : 4 » en motif.
+#[tokio::test]
+async fn a_candidate_rejected_by_the_grid_is_counted_once_whatever_the_model_proposes() {
+    let (_dir, d, p) = daemon().await;
+    let s = &d.services;
+    let kept = "Le serveur de production Atlas tourne sous Debian 12 chez OVH.";
+    let elsewhere = [
+        "Le ticket 4821 du tracker concerne la facture du client Martin.",
+        "La branche feature-paiement du dépôt Atlas attend sa relecture.",
+    ];
+    for text in [kept, elsewhere[0], elsewhere[1]] {
+        note(&d, CandidateType::Fait, text, Origin::Owner, "s1", 6).await;
+    }
+    let (k, e1, e2) = (
+        number(s, kept).await,
+        number(s, elsewhere[0]).await,
+        number(s, elsewhere[1]).await,
+    );
+    let verdict = |n: usize, introuvable: bool| {
+        format!(
+            r#"{{"candidat": {n}, "durable": true, "utile": true, "precis": true,
+                 "introuvable": {introuvable}, "endosse": true, "justification": "j"}}"#
+        )
+    };
+    let add = |n: usize, text: &str| {
+        format!(
+            r#"{{"op": "add_entry", "candidat": {n}, "file": "memoire.md", "text": "{text}",
+                 "importance": 6}}"#
+        )
+    };
+    // Le modèle écarte deux candidats et propose quand même deux opérations sur chacun.
+    p.reply(&format!(
+        r#"{{"tri": [{}, {}, {}], "operations": [{}, {}, {}, {}, {}]}}"#,
+        verdict(k, true),
+        verdict(e1, false),
+        verdict(e2, false),
+        add(k, kept),
+        add(e1, elsewhere[0]),
+        add(e1, "Le client Martin a une facture ouverte au ticket 4821."),
+        add(e2, elsewhere[1]),
+        add(
+            e2,
+            "La relecture de la branche feature-paiement est attendue."
+        ),
+    ));
+    let o = run(&d, &d.hooks.messenger, false).await.unwrap();
+    let r = &o.report;
+    assert_eq!(r.candidates_seen, 3);
+    assert_eq!(r.promoted, 1, "{r:?}");
+    assert_eq!(r.rejected.len(), 2, "{:?}", r.rejected);
+    assert_eq!(
+        r.promoted as usize + r.rejected.len(),
+        r.candidates_seen as usize
+    );
+    assert!(s.candidates.pending(None).await.unwrap().is_empty());
+    let families = rejection_families(&r.rejected);
+    assert_eq!(
+        families,
+        vec![("retrouvable ailleurs".to_string(), 2)],
+        "{families:?}"
+    );
+    assert_eq!(
+        r.sorted
+            .iter()
+            .filter(|l| l.contains("non appliquée : candidat"))
+            .count(),
+        4,
+        "les opérations sur un écarté vont au journal du tri : {:?}",
+        r.sorted
+    );
+    let t = night_summary(&o.run_id, r, &[]);
+    assert!(
+        t.contains("3 candidat(s) examiné(s) : 1 promu(s), 2 écarté(s)"),
+        "{t}"
+    );
+    assert!(t.contains("- retrouvable ailleurs : 2"), "{t}");
+    assert!(
+        !t.contains("candidat ") && !t.contains("autres motifs"),
+        "{t}"
+    );
+}
+
 /// #109 : une nuit de 24 candidats sans rien promouvoir se lit en trois chiffres et
 /// en motifs groupés par famille, jamais en liste intégrale.
 #[test]
@@ -279,6 +363,10 @@ fn the_morning_digest_is_short_and_readable() {
     report.cleanup = (0..6)
         .map(|i| format!("PROJET N°{i} … (3 188 caractères) — `penelope mem split 01M2Y1QK{i}`"))
         .collect();
+    // Ce que la nuit a fait du Cœur plein (#298) : dit, sans commande à taper.
+    report.core_full = 2;
+    report.demoted =
+        vec!["« Le client Martin règle à trente jours » (importance 3, 0 rappel(s))".into()];
 
     let digest = report.render_digest();
     assert!(
@@ -301,8 +389,15 @@ fn the_morning_digest_is_short_and_readable() {
         digest.contains("2 question(s)"),
         "le compte, pas les questions"
     );
-    // Le seul avertissement qui demande une action du propriétaire reste.
-    assert!(digest.contains("Cœur"), "{digest}");
+    // Le constat sur le Cœur reste, suivi de ce que la nuit a fait, jamais d'une
+    // injonction ni d'une commande (#298).
+    assert!(digest.contains("niveau Cœur à ~3021 jetons"), "{digest}");
+    assert!(digest.contains("Cœur plein : 2 nouveauté(s)"), "{digest}");
+    assert!(
+        digest.contains("Rétrogradée du Cœur en notes : « Le client Martin"),
+        "{digest}"
+    );
+    assert!(!digest.contains("config set"), "{digest}");
     // Ce qui a été appris se lit, et le nettoyage est proposé, jamais lancé.
     assert!(
         digest.contains("Yobbu ouvre son catalogue le 0"),

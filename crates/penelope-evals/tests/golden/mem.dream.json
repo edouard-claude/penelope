@@ -23,7 +23,8 @@
         "calls": "integer",
         "wasted_calls": "integer",
         "lots": "integer",
-        "duration_ms": "integer"
+        "duration_ms": "integer",
+        "core_full": "integer"
       },
       "text": "string"
     }

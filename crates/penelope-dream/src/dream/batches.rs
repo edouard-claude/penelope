@@ -149,6 +149,11 @@ impl OutputBudget {
     }
 }
 
+/// Opération prête à écrire : ses candidats, l'opération telle qu'elle s'écrit (fichier
+/// décidé par la place au Cœur, issue #298) et, s'il y a lieu, l'entrée du Cœur qui
+/// descend en notes une fois celle-ci écrite, avec la ligne du rapport qui le dit.
+type Placed = (Vec<String>, Operation, Option<(IndexedEntry, String)>);
+
 /// Un lot jugé, rendu durable : opérations validées puis écrites, candidats marqués,
 /// contradictions posées. Rien n'attend la fin de la passe (issue #152) — avant, une
 /// coupure au 8ᵉ lot rendait les sept premiers à l'état d'avant, 126 candidats jetés.
@@ -160,6 +165,7 @@ pub(super) async fn write_batch(
     day: &str,
     gates: &PromotionGates,
     snap: &VaultSnapshot,
+    core: &mut CoreBudget,
     slice: &[Item<'_>],
     ops: Vec<(Vec<String>, Operation)>,
     updates: Vec<(Vec<String>, &'static str, Option<String>)>,
@@ -225,25 +231,61 @@ pub(super) async fn write_batch(
         state_updates.push((ids, "deferred", Some("aucune opération proposée".into())));
     }
 
-    let applied: Vec<Operation> = validation.applied;
+    // Place au Cœur (issue #298), décidée après la validation (qui peut avoir changé le
+    // fichier ou découpé le texte) et avant l'écriture : une nouveauté que le bloc ne
+    // servirait pas va en note curée ; une qui y entre peut faire descendre, une fois
+    // par nuit, la moins utile des entrées hors du bloc.
+    let mut placed: Vec<Placed> = Vec::new();
+    for op in validation.applied {
+        let ids = ids_of(&op);
+        let text = op.text().map(short).unwrap_or_default();
+        match core.place(s, &op, snap, day).await {
+            None | Some(CorePlacement::Core) => placed.push((ids, op, None)),
+            Some(CorePlacement::Notes) => {
+                report.core_full += 1;
+                report.sorted.push(format!(
+                    "↓ rangée en notes « {text} » : Cœur plein, son importance ne la \
+                     classerait pas dans le bloc servi"
+                ));
+                placed.push((ids, to_notes(&op), None));
+            }
+            Some(CorePlacement::CoreAfterDemotion { entry, recalls }) => {
+                let what = format!(
+                    "« {} » (importance {}, {recalls} rappel(s))",
+                    short(&entry.text),
+                    entry.importance.unwrap_or(5)
+                );
+                report.sorted.push(format!(
+                    "↓ descendue en notes {what} : Cœur plein, la moins utile hors du bloc, \
+                     pour « {text} »"
+                ));
+                placed.push((ids, op, Some((*entry, what))));
+            }
+        }
+    }
     if dry_run {
         // Rien n'est écrit : le rapport dit ce qui l'aurait été.
-        report.promoted += applied.len() as u32;
-        for op in &applied {
-            let file = target_file(s, op);
+        report.promoted += placed.len() as u32;
+        for (_, op, demotion) in placed {
+            let file = target_file(s, &op);
             if !report.files_touched.contains(&file) {
                 report.files_touched.push(file);
+            }
+            if let Some((_, what)) = demotion {
+                report.demoted.push(what);
+                if !report.files_touched.iter().any(|f| f == "notes.md") {
+                    report.files_touched.push("notes.md".into());
+                }
             }
         }
         return Ok(());
     }
 
-    for op in &applied {
-        let ids = ids_of(op);
-        match apply(d, vault, op, run_id).await {
+    for (ids, op, demotion) in placed {
+        match apply(d, vault, &op, run_id).await {
             Ok(file) => {
                 report.promoted += 1;
-                if is_journal(op) {
+                if is_journal(&op) {
                     report.journal += 1;
                 }
                 if !report.files_touched.contains(&file) {
@@ -254,10 +296,27 @@ pub(super) async fn write_batch(
                 if !ids.is_empty() {
                     s.candidates.set_state(&ids, "promoted", None).await?;
                 }
+                // La nouveauté est au Cœur : l'entrée désignée descend, après elle.
+                if let Some((entry, what)) = demotion {
+                    match demote(d, vault, run_id, day, &entry).await {
+                        Ok(()) => {
+                            report.demoted.push(what);
+                            for f in ["memoire.md", "notes.md"] {
+                                if !report.files_touched.iter().any(|x| x == f) {
+                                    report.files_touched.push(f.into());
+                                }
+                            }
+                        }
+                        Err(e) => report
+                            .warnings
+                            .push(format!("« {} » reste au Cœur : {e}", short(&entry.text))),
+                    }
+                }
             }
             Err(e) => {
+                // L'écriture a échoué : le candidat sera rejoué la nuit prochaine, et une
+                // descente prévue pour lui n'a pas lieu.
                 report.rejected.push(format!("{} : {e}", op.kind()));
-                // L'écriture a échoué : le candidat sera rejoué la nuit prochaine.
                 if !ids.is_empty() {
                     state_updates.push((ids, "deferred", Some(e.to_string())));
                 }
