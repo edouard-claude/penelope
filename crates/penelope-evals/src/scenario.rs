@@ -61,6 +61,9 @@ pub struct Spec {
     /// Outils d'un serveur MCP simulé, exposés au modèle et inscrits au registre.
     #[serde(default)]
     pub mcp_tools: Vec<McpTool>,
+    /// Ressources d'un serveur MCP simulé, servies à `mcp_resource_read` (#293).
+    #[serde(default)]
+    pub mcp_resources: Vec<McpResource>,
     /// Motifs (expressions régulières) des textes propres à la machine, remplacés par
     /// `{{masked}}` dans les attendus : mémoire du processus, contrôles de l'hôte.
     #[serde(default)]
@@ -167,6 +170,22 @@ pub struct McpTool {
     pub params: Vec<String>,
     /// Texte rendu par le serveur simulé.
     pub result: String,
+}
+
+/// Une ressource d'un serveur MCP simulé : ce que `resources/read` rend pour son URI.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpResource {
+    pub server: String,
+    pub uri: String,
+    /// Contenu texte (du JSON, le plus souvent).
+    pub text: String,
+    #[serde(default = "default_resource_mime")]
+    pub mime_type: String,
+}
+
+fn default_resource_mime() -> String {
+    "application/json".into()
 }
 
 /// Une entrée du scénario, dans l'ordre.

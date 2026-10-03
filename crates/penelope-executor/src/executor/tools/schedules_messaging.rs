@@ -90,6 +90,23 @@ impl NativeToolExecutor {
             .ok_or_else(|| ToolError::Other("planificateur indisponible ici".into()))
     }
 
+    /// `mcp_resource_read` (#293) : la ressource qui a réveillé un `mcp_subscribe`, ou
+    /// celle qu'un résultat d'outil pointe. Contenu écrit par le serveur : encadré comme
+    /// tout contenu observé.
+    pub(super) async fn mcp_resource_read(&self, args: &Value) -> ToolResult<ToolOutcome> {
+        let server = str_arg(args, "server")?;
+        let uri = str_arg(args, "uri")?;
+        let gw = self
+            .mcp
+            .as_ref()
+            .ok_or_else(|| ToolError::Other("aucun serveur MCP n'est démarré".into()))?;
+        let v = gw
+            .read_resource(&server, &uri)
+            .await
+            .map_err(ToolError::Other)?;
+        Ok(untrusted_listing(&format!("mcp {server} {uri}"), v))
+    }
+
     /// Messages.
     pub(super) async fn message_tools(
         &self,

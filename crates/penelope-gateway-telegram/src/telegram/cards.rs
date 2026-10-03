@@ -327,6 +327,11 @@ pub(super) fn schedules_text(v: &Value) -> String {
                 spec["every_ms"].as_u64().unwrap_or(0) / 60_000
             ),
             "watch_file" => format!("fichier `{}`", spec["path"].as_str().unwrap_or("?")),
+            "mcp_subscribe" => format!(
+                "abonnement `{}` {}",
+                spec["server"].as_str().unwrap_or("?"),
+                spec["uri"].as_str().unwrap_or("?")
+            ),
             other => format!("{other} `{}`", spec["event"].as_str().unwrap_or("?")),
         };
         let target = &sc["target"];

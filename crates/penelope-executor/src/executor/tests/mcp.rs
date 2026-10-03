@@ -23,6 +23,50 @@ impl McpGateway for RecordingGateway {
     async fn server_lines(&self) -> Vec<String> {
         Vec::new()
     }
+    async fn read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((format!("resource {server}"), json!(uri)));
+        Ok(
+            json!({"contents": [{"uri": uri, "mimeType": "application/json",
+                                "text": "{\"id\": 7653, \"sujet\": \"TVA incorrecte\"}"}]}),
+        )
+    }
+}
+
+/// #293 : `mcp_resource_read` lit la ressource par la passerelle, en lecture seule, et
+/// rend son contenu encadré comme tout contenu observé.
+#[tokio::test]
+async fn mcp_resource_read_goes_through_the_gateway_as_untrusted_content() {
+    let (_d, mut x) = executor().await;
+    let gw = with_redmine(&mut x).await;
+    let args = json!({"server": "redmine", "uri": "tracker://ticket/7653"});
+    assert_eq!(
+        x.describe_call("mcp_resource_read", &args).await.risk,
+        penelope_kernel::risk::RiskClass::Read
+    );
+    let out = x.execute("mcp_resource_read", &args).await.unwrap();
+    assert!(!out.is_error);
+    assert_eq!(out.value["contents"][0]["uri"], "tracker://ticket/7653");
+    assert!(out.text.contains("TVA incorrecte"), "{}", out.text);
+    assert!(
+        out.text.contains("mcp redmine tracker://ticket/7653"),
+        "la source de ce qui est observé est nommée : {}",
+        out.text
+    );
+    assert_eq!(
+        gw.calls.lock().unwrap().as_slice(),
+        &[(
+            "resource redmine".to_string(),
+            json!("tracker://ticket/7653")
+        )]
+    );
+    let e = x
+        .execute("mcp_resource_read", &json!({"server": "redmine"}))
+        .await
+        .unwrap_err();
+    assert!(e.for_model().contains("uri"), "{}", e.for_model());
 }
 
 async fn with_redmine(x: &mut NativeToolExecutor) -> Arc<RecordingGateway> {

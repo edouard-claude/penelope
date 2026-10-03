@@ -6,6 +6,21 @@ use super::*;
 pub(super) fn skills_mcp() -> Vec<ToolSpec> {
     vec![
         spec(
+            "mcp_resource_read",
+            RiskClass::Read,
+            "Lit une ressource d'un serveur MCP (`resources/read`) : son texte, ou son JSON \
+             décodé. Sert à relire la ressource qui a réveillé un déclencheur \
+             `mcp_subscribe` (son `server` et son `uri` sont dans le message), ou une \
+             ressource pointée par un résultat d'outil (`resource_link`).",
+            obj(
+                json!({"server": {"type":"string"}, "uri": {"type":"string"}}),
+                &["server", "uri"],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "skill_search",
             RiskClass::Read,
             "Cherche une skill par mots-clés.",

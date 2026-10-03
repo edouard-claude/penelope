@@ -121,6 +121,18 @@ pub trait ChannelDelivery: Send + Sync {
     ) -> Result<(), String> {
         Err("canal sans alerte de planification".into())
     }
+
+    /// Carte d'une notification planifiée rendue d'un gabarit du catalogue
+    /// (`ticket_detected`…), avec les boutons de sa planification (#293). `Err` : le canal
+    /// n'en a pas, le texte part tel quel.
+    async fn schedule_card(
+        &self,
+        _origin: &Origin,
+        _schedule_id: &str,
+        _markdown: &str,
+    ) -> Result<(), String> {
+        Err("canal sans carte de planification".into())
+    }
 }
 
 /// Seuils d'une rafale : au-delà de `messages` messages ou de `chars` caractères

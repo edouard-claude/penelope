@@ -49,20 +49,29 @@ pub(super) async fn fire(
     match sched.target_kind() {
         Some(TargetKind::Notify) => {
             let template = sched.target["template"].as_str().unwrap_or_default();
-            let mut body = match s.channel.template(template) {
+            let card = s.channel.template(template);
+            let mut body = match &card {
                 Some(t) => substitute(&t.body, &vars),
                 None => substitute(template, &vars),
             };
             if let Some(note) = &late {
                 body = format!("{note}\n\n{body}");
             }
-            let messenger = ports.messenger.get().ok_or_else(|| {
-                anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
-            })?;
-            messenger
-                .send_text(&origin, &body)
-                .await
-                .map_err(anyhow::Error::msg)?;
+            // Un gabarit du catalogue (`ticket_detected`…) part en carte avec les boutons
+            // de sa planification quand le canal sait la rendre (#293) ; sinon en texte.
+            let as_card = match (&card, ports.delivery.get()) {
+                (Some(_), Some(tg)) => tg.schedule_card(&origin, &sched.id, &body).await.is_ok(),
+                _ => false,
+            };
+            if !as_card {
+                let messenger = ports.messenger.get().ok_or_else(|| {
+                    anyhow::anyhow!("aucun canal de message : canal du propriétaire non configuré")
+                })?;
+                messenger
+                    .send_text(&origin, &body)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
             s.events
                 .append(penelope_kernel::event::EventDraft::new(
                     "schedule.notified",

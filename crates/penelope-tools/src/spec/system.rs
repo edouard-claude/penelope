@@ -251,7 +251,11 @@ pub(super) fn time() -> Vec<ToolSpec> {
              `{\"type\": \"prompt\", \"prompt\": \"…\"}` pour travailler à l'heure dite. \
              Autres kinds : `interval` (`every_ms`), `mcp_poll` (`server`, `tool` en lecture, \
              `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
-             (`path`), `event` (`event`). Le retour arrive dans ce chat, chaque exécution \
+             (`path`), `event` (`event`), `mcp_subscribe` (`server`, `uri` d'une ressource \
+             MCP suivie par abonnement, relue à chaque notification ; `item_path`, \
+             `id_path`, `filter` comme `mcp_poll`, `window_ms` de regroupement, \
+             `max_per_hour` ; sondage de repli `every_ms` si le serveur ne sait pas \
+             s'abonner). Le retour arrive dans ce chat, chaque exécution \
              d'un prompt dans sa propre session (`label` dans target pour la nommer) ; une \
              planification identique déjà active est signalée (`doublons`). Un prompt peut \
              déclarer dans target son `livrable` (`message`, `fichier:<chemin>`, `run`) : sans \
@@ -259,7 +263,7 @@ pub(super) fn time() -> Vec<ToolSpec> {
              vu »), remis tel qu'avant si rien n'est livré.",
             obj(
                 json!({
-                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},
+                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event","mcp_subscribe"]},
                     "spec": {"type":"object"},
                     "target": {"type":"object"},
                     "dedup": {"type":"object"}

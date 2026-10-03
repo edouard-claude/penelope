@@ -1,0 +1,19 @@
+name = "outils-ressource-mcp"
+description = """Lecture d'une ressource MCP par le modèle (`mcp_resource_read`, #293) : l'outil est
+à la demande, donc appelé par `tool_call` ; la passerelle simulée sert la ressource
+déclarée (`[[mcp_resources]]`), son JSON revient encadré comme contenu observé, nommé par
+son serveur et son URI, et le modèle en fait un résumé. C'est le geste d'un tour réveillé
+par un `mcp_subscribe` qui relit la ressource qui l'a réveillé."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[[mcp_resources]]
+server = "pont"
+uri = "mail://inbox/42"
+text = '{"id":42,"de":"ACME","sujet":"Facture 2026-09 en double","corps":"Nous avons reçu deux fois la facture 2026-09, merci de supprimer la seconde."}'
+
+[[steps]]
+kind = "message"
+text = "le pont signale le message mail://inbox/42 : lis-le et dis-moi ce qu'ACME demande"

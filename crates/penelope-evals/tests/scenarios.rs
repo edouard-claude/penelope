@@ -120,6 +120,9 @@ scenario_cases! {
     // Expérience persévérance (#291) : l'indice `developer` est dans la surface, pas dans
     // le monde.
     indice_perseverance_codex => "indice-perseverance-codex",
+    // Lecture d'une ressource MCP par le modèle (#293), le geste d'un tour réveillé par un
+    // `mcp_subscribe`.
+    outils_ressource_mcp => "outils-ressource-mcp",
 }
 
 #[test]

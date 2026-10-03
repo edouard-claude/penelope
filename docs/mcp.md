@@ -470,6 +470,49 @@ L'élicitation n'est **annoncée** que si Telegram est configuré, et le samplin
 refusé, ne l'est jamais : un serveur qui sait se passer de confirmation garde ses
 replis.
 
+## Abonnements aux ressources
+
+Un serveur qui déclare `resources.subscribe` peut prévenir Pénélope qu'une ressource a
+changé (`notifications/resources/updated`) au lieu d'être sondé. C'est le déclencheur
+`mcp_subscribe` (1.0.35, #293) :
+
+```bash
+penelope schedule add mcp_subscribe \
+  --spec '{"server":"pont","uri":"mail://inbox","id_path":"id"}' \
+  --target '{"type":"prompt","prompt":"Trie le message {{id}}","label":"Courrier"}'
+```
+
+```text
+ordonnanceur (10 s) ─► resources/subscribe posé au démarrage du serveur, reposé après
+                        chaque reconnexion ; le serveur abonné n'est jamais arrêté pour
+                        inactivité, sa santé est sondée
+serveur ────────────► notifications/resources/updated ─► journal (`mcp.resource_updated`)
+ordonnanceur ───────► fenêtre de 30 s (`window_ms`) ─► resources/read ─► éléments nouveaux
+                        ou modifiés (empreinte, comme mcp_poll) ─► cible
+```
+
+- `server`, `uri` : la ressource. `item_path`, `id_path`, `filter` : comme `mcp_poll` ;
+  sans `id_path`, la ressource entière est l'élément et chaque changement déclenche.
+- `max_per_hour` (20) : un `prompt` ou un `workflow` ne part pas plus souvent ; le surplus
+  est notifié sans modèle, avec la liste des éléments (`schedule.capped`).
+- Repli : un serveur sans `resources.subscribe` (ou qui répond « méthode inconnue ») est
+  sondé toutes les `every_ms` (60 s au moins), sans que l'utilisateur ait à choisir.
+  `/schedules` et `penelope schedule list` montrent « abonnement `pont` mail://inbox ».
+- Abonnement perdu : serveur arrêté, en panne ou en attente de reprise, le déclencheur
+  n'exécute rien et n'alerte pas à chaque passage ; au-delà d'une heure, le digest du
+  matin le dit (« abonnement MCP perdu depuis 2 h »). Au retour du serveur, l'abonnement
+  est reposé et la ressource relue : ce qui a bougé pendant la coupure déclenche
+  (`schedule.subscription_lost`, `schedule.subscription_restored`).
+- Cible `notify` avec un gabarit du catalogue (`ticket_detected` : titre, projet,
+  priorité, échéance, lien, remplis par les champs de l'élément) : la notification arrive
+  en carte, avec « ⚡ Relire maintenant » et « 📅 Voir la planification ».
+- Le modèle réveillé relit la ressource avec l'outil à la demande `mcp_resource_read`
+  (`server`, `uri`) ; il lit aussi une ressource pointée par un `resource_link`.
+
+La notification passe par le journal et par le passage suivant de l'ordonnanceur : la
+cible part entre 30 et 40 s après le premier changement, puis groupe ce qui arrive dans
+la fenêtre. Un serveur 2026-07-28 reçoit d'abord `subscriptions/listen`.
+
 ## Limites actuelles
 
 - Les requêtes `sampling/createMessage` d'un serveur sont refusées (et la capacité n'est

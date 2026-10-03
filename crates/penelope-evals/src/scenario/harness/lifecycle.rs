@@ -280,7 +280,7 @@ impl Harness<'_> {
                 super::rpc::install_supervisor(daemon, services, &self.spec.mcp_servers).await;
             return Ok((None, Some(sup)));
         }
-        if self.spec.mcp_tools.is_empty() {
+        if self.spec.mcp_tools.is_empty() && self.spec.mcp_resources.is_empty() {
             return Ok((None, None));
         }
         let now = services.clock.now_rfc3339();
@@ -300,6 +300,7 @@ impl Harness<'_> {
         }
         let gateway = Arc::new(Gateway {
             tools: self.spec.mcp_tools.clone(),
+            resources: self.spec.mcp_resources.clone(),
             block: AtomicBool::new(false),
             called: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),

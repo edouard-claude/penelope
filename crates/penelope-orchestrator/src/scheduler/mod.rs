@@ -6,7 +6,8 @@
 //!   ├─ schedules dus (cron, interval) ─► cible
 //!   ├─ mcp_poll dus ──► outil MCP en lecture ─► éléments nouveaux ou modifiés ─► cible
 //!   ├─ watch_file ────► fichier modifié ────────────────────────────────────────► cible
-//!   └─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
+//!   ├─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
+//!   └─ mcp_subscribe ─► ressource MCP abonnée, relue sur notification (fenêtre) ─► cible
 //!
 //! cible  prompt  ─► tour « déclencheur » dans une session neuve à chaque exécution, réponse
 //!                   dans le chat (ou le sujet) d'origine ; échec ou annulation : alerte
@@ -141,6 +142,7 @@ pub async fn tick_after(
         let result = match sched.kind {
             TriggerKind::WatchFile => watch_file(d, ports, &sched).await,
             TriggerKind::Event => event(d, ports, &sched, &events).await,
+            TriggerKind::McpSubscribe => subscribe(d, ports, &sched, &events, false).await,
             _ => continue,
         };
         match result {
@@ -171,6 +173,9 @@ pub async fn run_now(d: &Context, ports: &Ports, id: &str) -> anyhow::Result<Val
     .collect();
     let result = match sched.kind {
         TriggerKind::McpPoll => poll(d, ports, &sched).await,
+        // « Relire maintenant » : la ressource est relue sans attendre une notification ;
+        // seuls ses éléments nouveaux tirent.
+        TriggerKind::McpSubscribe => subscribe(d, ports, &sched, &[], true).await,
         _ => fire(d, ports, &sched, &[], &manual).await.map(|_| true),
     };
     let mut report = TickReport::default();
@@ -249,7 +254,8 @@ pub use origin::{destination, due_today, listing, place_name, retarget};
 use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
 use templating::{items_lines, substitute, template_params, tool_payload};
-use triggers::{event, event_cursor, events_between, last_event_id, poll, watch_file};
+pub use triggers::mcp_subscribe::{SubscribeState, resource_payload, subscription_state};
+use triggers::{event, event_cursor, events_between, last_event_id, poll, subscribe, watch_file};
 use wake::LATE;
 pub use wake::{Late, Wake, WakeWatch, health, late_of, late_text, wake_check};
 

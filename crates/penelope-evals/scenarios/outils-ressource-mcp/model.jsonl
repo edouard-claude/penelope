@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "tool_call", "arguments": {"name": "mcp_resource_read", "args": {"server": "pont", "uri": "mail://inbox/42"}}}]}}
+{"text": "ACME signale avoir reçu deux fois la facture 2026-09 et demande d'annuler la seconde."}

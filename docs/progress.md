@@ -12,6 +12,52 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.35
+
+**MCP : réagir aux notifications `resources/updated` d'un serveur, par abonnement, au lieu
+de sonder (#293).** Constat : Pénélope ne savait que sonder un serveur MCP (`mcp_poll`,
+60 s au mieux). Un serveur qui déclare `resources.subscribe` (un pont de messagerie
+installé sur l'instance) pouvait la prévenir à l'instant, mais le superviseur jetait la
+notification (`lifecycle.rs`, `_ => {}`) ; le client savait `subscribe_resource` et
+`read_resource` sans qu'aucun chemin de production ne les appelle, et le modèle n'avait
+aucun outil pour lire une ressource.
+
+Correctif. Un kind `mcp_subscribe` (`server`, `uri` ; `item_path`, `id_path`, `filter`
+comme `mcp_poll` ; sans `id_path`, la ressource entière est l'élément et chaque changement
+déclenche) pour les trois cibles. L'ordonnanceur demande l'abonnement à chaque passage par
+le port `McpGateway::subscribe_resource` : le superviseur le pose une fois par connexion
+(`Live.subscriptions`), donc le **repose après chaque reconnexion**, et un serveur abonné
+n'est plus arrêté pour inactivité (sa santé est sondée). La notification devient un
+événement du journal (`mcp.resource_updated`) ; le passage suivant ouvre une fenêtre de
+regroupement (`window_ms`, 30 s), puis relit la ressource (`read_resource`), dédoublonne
+par empreinte (`seen_items`) et tire. Plafond `max_per_hour` (20) pour `prompt` et
+`workflow` : le surplus est notifié sans modèle (`schedule.capped`). Repli automatique :
+serveur sans `resources.subscribe` (ou « méthode inconnue ») sondé toutes les `every_ms`
+(60 s au moins). Abonnement perdu : aucun échec compté ni alerte à chaque passage, mais
+`schedule.subscription_lost` une fois, une ligne dans le digest du matin au-delà d'une
+heure, puis `schedule.subscription_restored` et une relecture de rattrapage au retour.
+Outil à la demande `mcp_resource_read` (`server`, `uri`, lecture, contenu encadré comme
+observé). Cible `notify` avec un gabarit du catalogue (`ticket_detected`, jamais émis
+jusqu'ici) : nouveau port `ChannelDelivery::schedule_card`, la passerelle Telegram rend la
+carte avec « ⚡ Relire maintenant » et « 📅 Voir la planification » ; sans canal qui sait
+la rendre, le texte part comme avant. `/schedules`, `penelope schedule list` et
+`schedule_create` connaissent le kind (« abonnement `pont` mail://inbox »). Doc :
+install-headless.md (déclencheurs), mcp.md (« Abonnements aux ressources »),
+runtime-events.md, telegram.md ; référence des outils régénérée.
+
+Tests : validation et non-programmation du kind (`penelope-workflow`) ; superviseur :
+abonnement posé une fois, reposé après une connexion perdue, notification au journal,
+lecture, serveur sans capacité (`Ok(false)`), serveur abonné jamais arrêté pour
+inactivité ; ordonnanceur, avec le vrai superviseur et un faux pont qui pousse des
+notifications : amorçage sans tir, fenêtre de 30 s puis tir, dédoublonnage, perte
+constatée par la sonde de santé puis digest à une heure puis reprise avec rattrapage,
+repli en sondage, plafond horaire et surplus notifié, carte du catalogue par le port ;
+conformité MCP : la notification poussée après `resources/subscribe` arrive au client
+(2024-11-05 et 2026-07-28) ; exécuteur : `mcp_resource_read` par la passerelle, en
+lecture, encadré. Ce qui marchait déjà et continue : `mcp_poll` inchangé (mêmes
+`seen_items`), les quatre autres kinds, les alertes de planification, les notifications
+en texte libre. Closes #293.
+
 ### 1.0.34
 
 **Expérience persévérance : un indice de contexte en fin de requête et le rappel de

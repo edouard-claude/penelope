@@ -1202,3 +1202,5 @@ async fn a_failing_schedule_alerts_on_first_failure_new_reason_and_steps_only() 
         "chaque échec reste dans le journal, alerté ou non"
     );
 }
+
+mod mcp_subscribe;
