@@ -444,6 +444,8 @@ pub const CHANNEL_AGNOSTIC_CRATES: &[&str] = &[
     "penelope-ops",
     "penelope-conversation",
     "penelope-orchestrator",
+    // Le serveur d'agenda (#295) : un outil derrière MCP, qui ne connaît aucun canal.
+    "penelope-agenda-mcp",
 ];
 
 /// Crates qui ont le droit de nommer un canal : la passerelle, ce qui est au-dessus

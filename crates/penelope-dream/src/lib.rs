@@ -37,8 +37,12 @@ pub struct DigestInputs {
     pub failing_schedules: Vec<String>,
     /// Sessions dont le résumé échoue : (titre, échecs en 24 h, coût par tour).
     pub struggling_sessions: Vec<(String, u32, Option<f64>)>,
-    /// Ce qui part aujourd'hui, une ligne chacun.
+    /// Ce qui part aujourd'hui, une ligne chacun : planifications et, quand `digest.agenda`
+    /// est posé, rendez-vous de l'agenda, rangés par heure (#295).
     pub due_today: Vec<String>,
+    /// Pourquoi l'agenda n'a pas été lu alors que `digest.agenda` le demande ; `None`
+    /// quand il l'a été, ou qu'il n'est pas configuré.
+    pub agenda_error: Option<String>,
 }
 
 /// Qui fournit au digest ses entrées d'au-dessus du rêve, au moment de l'écrire : les

@@ -319,3 +319,32 @@ fn the_morning_digest_is_short_and_readable() {
     assert!(full.contains("[[memoire#^01M2Y1QK0]]"));
     assert!(full.contains("Transient"));
 }
+
+/// #295 : quand `digest.agenda` est posé mais que l'agenda n'a pas pu être lu, le digest
+/// le dit en une ligne, après l'« Aujourd'hui », et tronque une raison trop longue.
+#[tokio::test]
+async fn an_unread_agenda_is_said_in_one_line() {
+    let (_dir, d, _p) = daemon().await;
+    let inputs = DigestInputs {
+        due_today: vec!["- 09:00 Veille → conv 42".into()],
+        agenda_error: Some(format!("identifiants refusés {}", "x".repeat(300))),
+        ..Default::default()
+    };
+    let digest = super::super::digest_text(&d, inputs, None).await.unwrap();
+    let today = digest
+        .find("🗓 Aujourd'hui :\n- 09:00 Veille")
+        .expect(&digest);
+    let unread = digest
+        .find("🗓 Agenda non lu : identifiants refusés")
+        .expect(&digest);
+    assert!(today < unread, "{digest}");
+    let line = digest
+        .lines()
+        .find(|l| l.starts_with("🗓 Agenda non lu"))
+        .unwrap();
+    assert!(line.chars().count() < 230, "{line}");
+    let silent = super::super::digest_text(&d, DigestInputs::default(), None)
+        .await
+        .unwrap();
+    assert!(!silent.contains("Agenda"), "{silent}");
+}

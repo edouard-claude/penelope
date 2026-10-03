@@ -202,6 +202,9 @@
         "prune_episodic_days": "integer",
         "expire_ecart_days": "integer"
       },
+      "digest": {
+        "agenda": "string"
+      },
       "mcp": {
         "registry_mode": "string",
         "max_processes": "integer",

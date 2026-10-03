@@ -1269,6 +1269,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "penelope-agenda-mcp"
+version = "1.0.34"
+dependencies = [
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "penelope-mcp",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "penelope-agent"
 version = "1.0.34"
 dependencies = [
@@ -1338,6 +1356,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "penelope-agenda-mcp",
  "penelope-agent",
  "penelope-app",
  "penelope-daemon",
@@ -2236,6 +2255,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rusqlite"

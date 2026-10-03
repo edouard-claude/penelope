@@ -208,6 +208,9 @@ fire_budget = 3
 expiry = "90d"
 max_per_turn = 3
 
+[digest]
+agenda = ""
+
 [mcp]
 registry_mode = "lazy"
 max_processes = 24

@@ -316,6 +316,26 @@ impl Default for Intents {
     }
 }
 
+/// Ce que le digest du matin lit au-dehors de Pénélope (#295). Son heure reste
+/// `memory.digest_cron`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Digest {
+    /// Outil MCP qui rend les rendez-vous du jour, par son nom qualifié
+    /// `mcp__<serveur>__<outil>` (`mcp__agenda__events_today` avec le serveur livré) ;
+    /// vide : l'« Aujourd'hui » du digest ne liste que les planifications. L'outil doit être
+    /// en lecture ; il est appelé avec `{"timezone": owner.timezone}` et doit rendre
+    /// `events[]` avec `summary`, `start`, `end`, `all_day`, `calendar` et `location`.
+    pub agenda: String,
+}
+
+/// Forme attendue de `digest.agenda` : `mcp__<serveur>__<outil>`.
+pub fn agenda_tool_is_qualified(name: &str) -> bool {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .is_some_and(|(server, tool)| !server.is_empty() && !tool.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Mcp {

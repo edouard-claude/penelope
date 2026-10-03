@@ -44,6 +44,9 @@ penelope-agent.workspace = true
 # Le jeu de décisions du juge (`penelope dataset export`, #233) : la lecture des
 # échantillons vit à côté de leur écriture, dans le crate des approbations.
 penelope-hitl.workspace = true
+# Le serveur MCP d'agenda CalDAV (#295), servi par `penelope agenda-mcp` : un seul binaire
+# dans la release, la déclaration `mcp.d/agenda.toml` lance `penelope` lui-même.
+penelope-agenda-mcp.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

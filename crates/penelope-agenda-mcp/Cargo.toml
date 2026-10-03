@@ -1,0 +1,42 @@
+[package]
+name = "penelope-agenda-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# L'agenda du propriétaire, en lecture, par CalDAV (#295) : un serveur MCP sur stdio, à
+# part du cœur comme le pont de messagerie. Bibliothèque (`run_stdio`), reprise par la
+# sous-commande `penelope agenda-mcp` pour entrer dans la release sans second binaire à
+# emballer, et binaire `penelope-agenda-mcp` pour qui le veut seul.
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "penelope-agenda-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+# Le client HTTP du workspace, en rustls : PROPFIND et REPORT sont des méthodes
+# étendues, `reqwest` les accepte telles quelles.
+reqwest.workspace = true
+chrono.workspace = true
+# Les TZID des événements (`Europe/Paris`) et le fuseau du propriétaire.
+chrono-tz.workspace = true
+url.workspace = true
+# Lecture des réponses `multistatus` (voir le `Cargo.toml` du workspace).
+roxmltree.workspace = true
+# Enveloppes JSON-RPC, codes d'erreur et versions du protocole : les mêmes types que le
+# client, pour que serveur et client ne divergent pas.
+penelope-mcp.workspace = true
+
+[dev-dependencies]
+# Le faux serveur CalDAV des tests vérifie l'en-tête `Authorization: Basic`.
+base64.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "io-std", "net"] }
