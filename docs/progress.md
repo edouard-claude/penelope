@@ -33,12 +33,21 @@ sien avec `penelope secret set`. **Serveur** (`scheduler/webhook.rs`, listener d
 décision [0018](decisions/0018-webhook-entrant.md)) : `[webhooks] listen =
 "127.0.0.1:7778"` par défaut, vide pour ne rien ouvrir, au redémarrage ; `POST` seulement
 (405 sinon, un `GET` ne déclenche jamais), chemin actif (404 pour inconnu, en pause ou
-supprimé), signature `X-Penelope-Signature: sha256=<HMAC-SHA256 hex du corps>` comparée
-en temps constant (401), corps borné par `webhooks.max_body_bytes` (64 Ko, 413 avant
+supprimé), horodatage `X-Penelope-Timestamp: <secondes Unix>` à ±5 min de l'horloge et
+signature `X-Penelope-Signature: sha256=<HMAC-SHA256 hex de « <horodatage>.<corps> »>`
+comparée en temps constant (401), signature déjà admise dans la fenêtre refusée comme
+rejeu (409), corps borné par `webhooks.max_body_bytes` (64 Ko, 413 avant
 lecture), débit par hook `webhooks.rate_per_minute` (60, 429 avec `Retry-After`), plafond
 `webhooks.prompt_turns_per_hour` de tours `prompt` pour l'ensemble des hooks (20, 429),
 `Expect: 100-continue` honoré, transfert par morceaux refusé (411), connexion coupée à
-20 s. Le corps JSON est l'événement, filtrable par `filter` comme un élément de
+20 s. L'en-tête HTTP est lu par `httparse` (celui de `hyper` et de `tokio-tungstenite`,
+déjà dans le graphe, dépendance directe justifiée dans `Cargo.toml`), et tout ce qu'un
+intermédiaire lirait autrement que nous est refusé en 400 : CR ou LF nus, ligne repliée,
+`Content-Length` répété ou non décimal, `Transfer-Encoding` avec `Content-Length`. Le
+chemin et le secret viennent de l'aléa du système, sans biais de modulo et sans repli
+(`ids::secret_token`) : s'il manque, la création échoue. Ces trois derniers points
+(rejeu, *request smuggling*, secret faible si l'aléa échoue) viennent de la revue de
+sécurité du lot. Le corps JSON est l'événement, filtrable par `filter` comme un élément de
 `mcp_poll` (202 `accepted: false` quand il est écarté), et passe aux mêmes cibles :
 `notify` reçoit `{{payload}}` et les champs de premier niveau, `workflow` le corps en
 `{{item}}`, `prompt` ne le substitue **jamais** dans son texte, il arrive après, encadré
@@ -59,7 +68,15 @@ workspace. Un POST signé déclenche la notification (corps et champs), la réce
 tir sont au journal, le secret n'est ni dans le store ni dans le journal et la création le
 montre une fois avec l'adresse locale ; signature absente, fausse, mal formée, d'un autre
 secret ou d'un autre corps : 401 et rien ne part, chaque refus journalisé, préfixe
-`sha256=` facultatif ; `GET` 405 avec `Allow`, chemin inconnu, hook en pause ou supprimé
+`sha256=` facultatif ; une livraison renvoyée telle quelle : 409 sans tir, la même après
+un 429 repasse, horodatage absent, signé `+`, à 301 s dans le passé ou le futur, ou
+signature du corps seul : 401, la copie passée la fenêtre refusée par son horodatage ; le
+cache anti-rejeu purge les expirées ; l'horodatage fait partie du message signé ;
+dix-sept en-têtes ambigus refusés en 400 (dont `Content-Length` doublé à l'identique,
+`+5`, `5, 5`, ligne repliée, LF nu, CR nu, `Transfer-Encoding` dans les deux ordres),
+`Transfer-Encoding: identity` seul 411, et sur le fil `Transfer-Encoding` avec
+`Content-Length` 400 journalisé ; sans aléa, `prepare` échoue sans rien ranger ;
+`secret_token` sans biais et en erreur sur une source en échec ; `GET` 405 avec `Allow`, chemin inconnu, hook en pause ou supprimé
 404, corps trop grand 413, non JSON 400 ; le filtre écarte sans déclencher ; débit par hook
 et plafond horaire des prompts partagé entre deux hooks, `Retry-After`, fenêtres qui
 glissent à l'horloge de test ; le prompt porte le corps encadré, le motif d'injection

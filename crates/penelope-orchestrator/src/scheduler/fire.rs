@@ -188,7 +188,8 @@ pub async fn create(
         .map_err(|e| e.to_string())?;
     let (spec, secret) = match kind {
         TriggerKind::Webhook => {
-            let (spec, secret) = super::webhook::prepare(s, spec)?;
+            let (spec, secret) =
+                super::webhook::prepare(s, spec, penelope_kernel::ids::secret_token)?;
             (spec, Some(secret))
         }
         _ => (spec, None),
@@ -212,7 +213,11 @@ pub async fn create(
         ));
         v["secret"] = json!(secret);
         v["secret_note"] = json!(
-            "montré une seule fois : à donner au service appelant, qui signe chaque corps              en HMAC-SHA256 (`X-Penelope-Signature: sha256=<hex>`) ; rangé dans le magasin              de secrets sous `secret_ref`, remplaçable par `penelope secret set <secret_ref>`"
+            "montré une seule fois : à donner au service appelant, qui signe chaque \
+             livraison en HMAC-SHA256 de `<horodatage>.<corps>` (`X-Penelope-Timestamp: \
+             <secondes Unix>`, `X-Penelope-Signature: sha256=<hex>`) ; rangé dans le \
+             magasin de secrets sous `secret_ref`, remplaçable par `penelope secret set \
+             <secret_ref>`"
         );
     }
     if !twins.is_empty() {

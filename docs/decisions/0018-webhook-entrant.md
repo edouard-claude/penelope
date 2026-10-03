@@ -27,9 +27,12 @@ Le daemon ouvre déjà deux ports locaux : le retour OAuth des serveurs MCP
    est montré une fois, à une création en ligne de commande ; une création par l'outil
    `schedule_create` ne le montre pas au modèle (la réponse d'un outil entre dans le
    journal de la conversation) : le propriétaire pose le sien avec `penelope secret set`.
-2. **Chaque requête est un `POST` signé** : `X-Penelope-Signature: sha256=<hex>`, HMAC-SHA256
-   du corps brut par le secret, comparé en temps constant. Rien d'autre ne déclenche : un
-   `GET` reçoit 405, un chemin inconnu ou en pause 404, une signature fausse 401. Le corps
+2. **Chaque requête est un `POST` signé et horodaté** : `X-Penelope-Timestamp: <secondes
+   Unix>` et `X-Penelope-Signature: sha256=<hex>`, HMAC-SHA256 par le secret de
+   `<horodatage>.<corps brut>`, comparé en temps constant. Un horodatage à plus de cinq
+   minutes de l'horloge, dans un sens ou dans l'autre, vaut 401 ; une signature déjà admise
+   dans la fenêtre vaut 409 (rejeu). Rien d'autre ne déclenche : un `GET` reçoit 405, un
+   chemin inconnu ou en pause 404, une signature fausse 401. Le corps
    est du JSON ; il devient l'événement, filtrable par `filter` comme un élément de
    `mcp_poll`, et passe aux mêmes cibles (`notify`, `prompt`, `workflow`).
 3. **Un listener dédié**, `webhooks.listen`, `127.0.0.1:7778` par défaut, servi par
@@ -38,9 +41,14 @@ Le daemon ouvre déjà deux ports locaux : le retour OAuth des serveurs MCP
    trame de 8 Ko sans corps, répond à un `GET` de navigateur, et son hôte peut être
    `localhost` ; le webhook lit un corps borné, refuse tout `GET`, et c'est lui, pas le
    retour OAuth, qu'un tunnel exposera. Deux portes aux politiques différentes ne
-   partagent pas un port. Aucune dépendance nouvelle : le strict nécessaire de HTTP/1.1
-   (ligne de requête, en-têtes, `Content-Length`, `Expect: 100-continue`) tient en un
-   module ; le HMAC est celui de la signature SigV4 des sauvegardes (#289), remonté dans
+   partagent pas un port. Pas de serveur HTTP ajouté : le strict nécessaire de HTTP/1.1
+   (`Content-Length`, `Expect: 100-continue`, réponse, fermeture) tient en un module, et
+   l'en-tête est lu par `httparse`, l'analyseur de `hyper` et de `tokio-tungstenite` déjà
+   dans le graphe. Tout ce qu'un intermédiaire pourrait lire autrement (CR ou LF nus,
+   ligne repliée, `Content-Length` répété ou non décimal, `Transfer-Encoding` avec
+   `Content-Length`) est refusé en 400 et la connexion fermée après chaque réponse. Le
+   chemin et le secret sont tirés de l'aléa du système, sans repli : s'il manque, la
+   création échoue. Le HMAC est celui de la signature SigV4 des sauvegardes (#289), remonté dans
    `penelope_kernel::hmac` et partagé.
 4. **L'exposition n'est pas l'affaire de Pénélope.** Le serveur n'écoute que l'adresse
    donnée ; aucun port n'est ouvert, aucun pare-feu touché. La doc dit comment faire par
@@ -83,9 +91,12 @@ le secret ne peut pas dépenser au-delà de vingt tours par heure.
 - **Le débit se compte en mémoire** : un redémarrage remet les fenêtres à zéro. C'est
   borné par le redémarrage lui-même, et un compteur durable aurait coûté une écriture par
   réception.
-- **Pas de rejeu détecté** : un même corps envoyé deux fois déclenche deux fois, dans les
-  plafonds. Un en-tête d'horodatage ou d'identifiant de livraison vérifié viendra si un
-  appelant le demande.
+- **Le rejeu est refusé, en mémoire** : les signatures admises sont retenues par hook
+  jusqu'à la sortie de leur horodatage de la fenêtre de ±5 min. Après un redémarrage,
+  une requête capturée dans les cinq dernières minutes passerait une fois de plus ; un
+  cache durable aurait coûté une écriture par réception. Deux livraisons légitimes du même
+  corps dans la même seconde ont la même signature : la seconde est un 409, l'appelant
+  ré-horodate. Une livraison refusée par le débit n'est pas retenue, elle peut revenir.
 - **La signature passe avant le débit** : un flot non signé n'épuise pas le budget du
   vrai appelant ; en retour, il n'est pas limité, et c'est au tunnel ou au réseau privé
   de le contenir. Un HMAC ne coûte rien, la lecture du secret dans le trousseau coûte

@@ -1,7 +1,13 @@
 //! Le strict nécessaire de HTTP/1.1 pour recevoir un webhook (#294) : une requête lue en
 //! entier dans des bornes, une réponse écrite, la connexion fermée. Le workspace a un
 //! client HTTP (`reqwest`) et aucun serveur ; un POST signé avec un corps borné ne
-//! justifie pas d'en ajouter un.
+//! justifie pas d'en ajouter un. L'en-tête, lui, est lu par `httparse` (celui de `hyper`
+//! et de `tokio-tungstenite`, déjà dans le graphe) : jetons, noms d'en-tête et lignes
+//! repliées sont son affaire. Ici s'ajoute ce qu'il laisse passer et qu'un intermédiaire
+//! pourrait lire autrement que nous (*request smuggling*) : CR ou LF nus, `Content-Length`
+//! répété ou qui n'est pas un nombre décimal, `Transfer-Encoding` avec `Content-Length`.
+//! Tout cas ambigu est refusé en 400 ; la connexion est fermée après chaque réponse, donc
+//! rien de ce qui suit le corps déclaré n'est jamais lu comme une requête.
 
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9,6 +15,8 @@ use tokio::net::TcpStream;
 
 /// Au-delà, la ligne de requête et les en-têtes sont refusés.
 const MAX_HEAD: usize = 8 * 1024;
+/// Au-delà, les en-têtes sont refusés (431).
+const MAX_HEADERS: usize = 64;
 /// Attente maximale pour lire la requête entière.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -87,9 +95,9 @@ pub(super) async fn read_request(
 
 async fn read_request_inner(stream: &mut TcpStream, max_body: usize) -> Result<Request, HttpError> {
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
-    let head_end = loop {
-        if let Some(i) = find_head_end(&buf) {
-            break i;
+    let (head_len, request) = loop {
+        if let Some(parsed) = parse_head(&buf)? {
+            break parsed;
         }
         if buf.len() >= MAX_HEAD {
             return Err(HttpError::HeadTooLarge);
@@ -103,54 +111,18 @@ async fn read_request_inner(stream: &mut TcpStream, max_body: usize) -> Result<R
         }
         buf.extend_from_slice(&chunk[..n]);
     };
-    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
-    let mut lines = head.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or(HttpError::Malformed("ligne de requête absente"))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or(HttpError::Malformed("méthode absente"))?
-        .to_string();
-    let target = parts
-        .next()
-        .ok_or(HttpError::Malformed("cible absente"))?
-        .to_string();
-    if !parts.next().is_some_and(|v| v.starts_with("HTTP/1.")) {
-        return Err(HttpError::Malformed("version HTTP/1.x attendue"));
-    }
-    let mut headers = Vec::new();
-    for line in lines.filter(|l| !l.is_empty()) {
-        let (k, v) = line
-            .split_once(':')
-            .ok_or(HttpError::Malformed("en-tête sans `:`"))?;
-        headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-    }
-    let header = |name: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-    };
-    if header("transfer-encoding").is_some_and(|v| !v.eq_ignore_ascii_case("identity")) {
-        return Err(HttpError::LengthRequired);
-    }
-    let declared = match header("content-length") {
-        Some(v) => v
-            .parse::<usize>()
-            .map_err(|_| HttpError::Malformed("`Content-Length` illisible"))?,
-        None => 0,
-    };
+    let declared = body_length(&request.headers)?;
     if declared > max_body {
         return Err(HttpError::BodyTooLarge {
             declared,
             max: max_body,
         });
     }
-    let mut body = buf[head_end + 4..].to_vec();
+    let mut body = buf[head_len..].to_vec();
     if body.len() < declared
-        && header("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue"))
+        && request
+            .header("expect")
+            .is_some_and(|v| v.eq_ignore_ascii_case("100-continue"))
     {
         stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
     }
@@ -165,16 +137,101 @@ async fn read_request_inner(stream: &mut TcpStream, max_body: usize) -> Result<R
         body.extend_from_slice(&chunk[..n]);
     }
     body.truncate(declared);
-    Ok(Request {
-        method,
-        target,
-        headers,
-        body,
-    })
+    Ok(Request { body, ..request })
 }
 
-fn find_head_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n")
+/// Analyse l'en-tête reçu jusqu'ici : `None` s'il est incomplet, sinon sa longueur (ligne
+/// vide comprise) et la requête sans corps. Les fins de ligne sont vérifiées avant
+/// `httparse`, qui accepte un LF seul là où un intermédiaire peut ne pas le voir.
+pub(super) fn parse_head(buf: &[u8]) -> Result<Option<(usize, Request)>, HttpError> {
+    let head = &buf[..buf.len().min(MAX_HEAD)];
+    let scanned = match head.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(i) => &head[..i + 4],
+        // Un CR en dernier octet attend peut-être son LF.
+        None => head.strip_suffix(b"\r").unwrap_or(head),
+    };
+    bare_line_ends(scanned)?;
+    let mut slots = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut parsed = httparse::Request::new(&mut slots);
+    let head_len = match parsed.parse(head) {
+        Ok(httparse::Status::Complete(n)) => n,
+        Ok(httparse::Status::Partial) => return Ok(None),
+        Err(httparse::Error::TooManyHeaders) => return Err(HttpError::HeadTooLarge),
+        Err(e) => return Err(HttpError::Malformed(malformed(e))),
+    };
+    let headers = parsed
+        .headers
+        .iter()
+        .map(|h| {
+            (
+                h.name.to_ascii_lowercase(),
+                String::from_utf8_lossy(h.value).trim().to_string(),
+            )
+        })
+        .collect();
+    Ok(Some((
+        head_len,
+        Request {
+            method: parsed.method.unwrap_or_default().to_string(),
+            target: parsed.path.unwrap_or_default().to_string(),
+            headers,
+            body: Vec::new(),
+        },
+    )))
+}
+
+/// Un CR qui n'est pas suivi d'un LF, ou un LF qui n'est pas précédé d'un CR.
+fn bare_line_ends(head: &[u8]) -> Result<(), HttpError> {
+    for (i, b) in head.iter().enumerate() {
+        let bare = match b {
+            b'\r' => head.get(i + 1) != Some(&b'\n'),
+            b'\n' => i == 0 || head[i - 1] != b'\r',
+            _ => false,
+        };
+        if bare {
+            return Err(HttpError::Malformed("CR ou LF nu dans l'en-tête"));
+        }
+    }
+    Ok(())
+}
+
+fn malformed(e: httparse::Error) -> &'static str {
+    match e {
+        httparse::Error::HeaderName => "nom d'en-tête invalide (ligne repliée ?)",
+        httparse::Error::HeaderValue => "valeur d'en-tête invalide",
+        httparse::Error::NewLine => "fin de ligne invalide",
+        httparse::Error::Status | httparse::Error::Token => "ligne de requête invalide",
+        httparse::Error::Version => "version HTTP/1.x attendue",
+        httparse::Error::TooManyHeaders => "trop d'en-têtes",
+    }
+}
+
+/// La longueur du corps, sans ambiguïté : `Content-Length` une seule fois, en chiffres
+/// décimaux seulement (ni signe, ni liste) ; `Transfer-Encoding`, quel qu'il soit, n'est
+/// pas servi (411), et refusé en 400 s'il accompagne `Content-Length` : l'un ou l'autre
+/// fait foi selon l'intermédiaire.
+pub(super) fn body_length(headers: &[(String, String)]) -> Result<usize, HttpError> {
+    let lengths: Vec<&str> = headers
+        .iter()
+        .filter(|(k, _)| k == "content-length")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    let chunked = headers.iter().any(|(k, _)| k == "transfer-encoding");
+    match (lengths.as_slice(), chunked) {
+        ([], true) => Err(HttpError::LengthRequired),
+        (_, true) => Err(HttpError::Malformed(
+            "`Transfer-Encoding` et `Content-Length` ensemble",
+        )),
+        ([], false) => Ok(0),
+        ([v], false) => {
+            if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(HttpError::Malformed("`Content-Length` illisible"));
+            }
+            v.parse::<usize>()
+                .map_err(|_| HttpError::Malformed("`Content-Length` illisible"))
+        }
+        (_, false) => Err(HttpError::Malformed("`Content-Length` répété")),
+    }
 }
 
 /// Une réponse : statut, en-têtes propres, corps JSON.
@@ -208,6 +265,7 @@ fn reason(status: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         408 => "Request Timeout",
+        409 => "Conflict",
         411 => "Length Required",
         413 => "Content Too Large",
         429 => "Too Many Requests",

@@ -2,8 +2,9 @@
 //! événement dans Pénélope, ouverte sur `127.0.0.1` seulement par défaut.
 //!
 //! ```text
-//!  POST /hook/<jeton> ──► chemin connu et actif ? (404) ──► signature HMAC-SHA256 du corps
-//!  X-Penelope-Signature                                     (X-Penelope-Signature, 401)
+//!  POST /hook/<jeton> ──► chemin connu et actif ? (404) ──► HMAC-SHA256 de `<ts>.<corps>`
+//!  X-Penelope-Timestamp                                     horodatage à ±5 min (401)
+//!  X-Penelope-Signature                                     signature déjà vue ? (409)
 //!        │
 //!        ├─► débit par hook (429) ─► corps JSON (400) ─► `filter` (202, écarté)
 //!        └─► cible prompt : plafond de tours par heure, tous hooks (429) ─► fire ─► 202
@@ -31,8 +32,14 @@ use tokio::net::{TcpListener, TcpStream};
 mod http;
 use http::{Request, Response, read_request, write_response};
 
-/// En-tête de la signature : `sha256=<hex>` du HMAC-SHA256 du corps brut par le secret.
+/// En-tête de la signature : `sha256=<hex>` du HMAC-SHA256, par le secret, de
+/// l'horodatage, d'un point et du corps brut (`<ts>.<corps>`).
 pub const SIGNATURE_HEADER: &str = "x-penelope-signature";
+/// En-tête de l'horodatage signé, en secondes Unix : sans lui, une requête capturée
+/// resterait rejouable à jamais.
+pub const TIMESTAMP_HEADER: &str = "x-penelope-timestamp";
+/// Écart admis entre l'horodatage signé et l'horloge, dans les deux sens.
+const TOLERANCE_S: i64 = 300;
 /// Variable de tir qui porte le corps reçu, à encadrer comme non fiable dans un prompt.
 pub(super) const UNTRUSTED_BODY: &str = "corps_non_fiable";
 /// Variable de tir : identifiant de la livraison, qui rend chaque réception unique.
@@ -46,8 +53,14 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Création : le chemin et le secret sont attribués ici, jamais choisis par l'appelant ;
 /// le secret est rangé dans le magasin et la spécification n'en garde que le nom. Rend la
-/// spécification complétée et le secret, à montrer une seule fois.
-pub(super) fn prepare(s: &Services, spec: Value) -> Result<(Value, String), String> {
+/// spécification complétée et le secret, à montrer une seule fois. `draw` tire les
+/// jetons (`secret_token` hors tests) : sans aléa du système, pas de webhook, jamais un
+/// secret devinable.
+pub(super) fn prepare(
+    s: &Services,
+    spec: Value,
+    draw: impl Fn(usize) -> Result<String, String>,
+) -> Result<(Value, String), String> {
     let mut spec = match spec {
         Value::Null => json!({}),
         v @ Value::Object(_) => v,
@@ -60,8 +73,9 @@ pub(super) fn prepare(s: &Services, spec: Value) -> Result<(Value, String), Stri
             ));
         }
     }
-    let token = penelope_kernel::ids::short_token(24);
-    let secret = penelope_kernel::ids::short_token(48);
+    let refused = |e: String| format!("webhook non créé, chemin et secret non tirés : {e}");
+    let secret = draw(48).map_err(refused)?;
+    let token = draw(24).map_err(refused)?;
     let secret_ref = format!("{SECRET_PREFIX}{token}");
     s.platform.secrets.set(&secret_ref, &secret).map_err(|e| {
         format!(
@@ -134,6 +148,34 @@ pub fn withhold_secret(v: &mut Value) {
 struct Limits {
     per_hook: Mutex<HashMap<String, VecDeque<i64>>>,
     prompts: Mutex<VecDeque<i64>>,
+    seen: Mutex<Seen>,
+}
+
+/// Les signatures admises, par hook, avec l'instant (ms) où leur horodatage sort de la
+/// fenêtre : au-delà, la signature est refusée par l'horodatage, plus besoin de s'en
+/// souvenir. Seules des signatures valides y entrent, et le débit par hook en borne le
+/// nombre. En mémoire : après un redémarrage, une requête capturée dans les cinq
+/// dernières minutes passerait une fois de plus (dit dans la doc).
+type Seen = HashMap<(String, [u8; 32]), i64>;
+
+impl Limits {
+    /// Retient une signature ; faux si elle l'est déjà (un rejeu). Vérifier et retenir
+    /// sous le même verrou : deux copies simultanées ne passent pas toutes les deux.
+    fn first_sight(&self, key: &(String, [u8; 32]), expires_ms: i64, now_ms: i64) -> bool {
+        let mut seen = lock(&self.seen);
+        seen.retain(|_, until| *until > now_ms);
+        if seen.contains_key(key) {
+            return false;
+        }
+        seen.insert(key.clone(), expires_ms);
+        true
+    }
+
+    /// Oublie une signature dont la livraison a été refusée par le débit : l'appelant qui
+    /// réessaie la même livraison plus tard ne doit pas être pris pour un rejeu.
+    fn forget(&self, key: &(String, [u8; 32])) {
+        lock(&self.seen).remove(key);
+    }
 }
 
 /// Admet un passage dans la fenêtre, ou rend l'attente avant le prochain, en millisecondes.
@@ -388,13 +430,25 @@ impl Server {
                 ));
             }
         };
-        if !signature_ok(req.header(SIGNATURE_HEADER), secret.as_bytes(), &req.body) {
+        let now = s.clock.now_ms();
+        let (mac, ts) = verify(
+            req.header(TIMESTAMP_HEADER),
+            req.header(SIGNATURE_HEADER),
+            secret.as_bytes(),
+            &req.body,
+            now.div_euclid(1000),
+        )
+        .map_err(|why| Refusal::new(401, why))?;
+        let seen = (sched.id.clone(), mac);
+        if !self
+            .limits
+            .first_sight(&seen, (ts + TOLERANCE_S + 1) * 1000, now)
+        {
             return Err(Refusal::new(
-                401,
-                "signature absente ou invalide (X-Penelope-Signature: sha256=<HMAC-SHA256 hexadécimal du corps>)",
+                409,
+                "livraison déjà reçue : même horodatage, même signature (rejeu refusé)",
             ));
         }
-        let now = s.clock.now_ms();
         let (per_minute, per_hour) = {
             let cfg = s.config.config();
             (
@@ -411,6 +465,7 @@ impl Server {
             per_minute,
         );
         if let Err(wait_ms) = rate {
+            self.limits.forget(&seen);
             return Err(Refusal::new(
                 429,
                 format!("plus de {per_minute} réceptions dans la minute pour ce hook"),
@@ -510,17 +565,42 @@ impl Server {
     }
 }
 
-/// `sha256=<hex>` (le préfixe est facultatif) comparé en temps constant au HMAC du corps.
-fn signature_ok(header: Option<&str>, secret: &[u8], body: &[u8]) -> bool {
-    let Some(h) = header else {
-        return false;
-    };
-    let h = h.trim();
-    let hex_sig = h.strip_prefix("sha256=").unwrap_or(h);
-    let Some(given) = decode_hex(hex_sig) else {
-        return false;
-    };
-    constant_time_eq(&given, &hmac_sha256(secret, body))
+/// Vérifie l'horodatage (secondes Unix, chiffres seuls, à ±`TOLERANCE_S` de `now_s`) puis
+/// la signature `sha256=<hex>` (préfixe facultatif), comparée en temps constant au HMAC de
+/// `<ts>.<corps>`. Rend le HMAC, clé de l'anti-rejeu, et l'horodatage ; sinon le motif.
+fn verify(
+    timestamp: Option<&str>,
+    signature: Option<&str>,
+    secret: &[u8],
+    body: &[u8],
+    now_s: i64,
+) -> Result<([u8; 32], i64), String> {
+    let ts = timestamp
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && t.len() <= 12 && t.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|t| t.parse::<i64>().ok())
+        .ok_or("horodatage absent ou illisible (X-Penelope-Timestamp: <secondes Unix>)")?;
+    if (now_s - ts).abs() > TOLERANCE_S {
+        return Err(format!(
+            "horodatage hors de la fenêtre de ±{TOLERANCE_S} s (X-Penelope-Timestamp: {ts}, \
+             horloge : {now_s}) : signer au moment de l'envoi"
+        ));
+    }
+    let malformed = "signature absente ou invalide (X-Penelope-Signature: sha256=<HMAC-SHA256 \
+                     hexadécimal de `<horodatage>.<corps>`>)";
+    let given = signature
+        .map(str::trim)
+        .and_then(|h| decode_hex(h.strip_prefix("sha256=").unwrap_or(h)))
+        .ok_or(malformed)?;
+    let mut message = Vec::with_capacity(body.len() + 13);
+    message.extend_from_slice(ts.to_string().as_bytes());
+    message.push(b'.');
+    message.extend_from_slice(body);
+    let mac = hmac_sha256(secret, &message);
+    if !constant_time_eq(&given, &mac) {
+        return Err(malformed.into());
+    }
+    Ok((mac, ts))
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {

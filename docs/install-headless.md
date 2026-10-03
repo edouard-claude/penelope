@@ -2027,22 +2027,35 @@ vôtre : `penelope secret set webhook_<jeton>`. Demandé à Pénélope dans la c
 pas montré au modèle, dont la réponse entre dans le journal : posez le vôtre avec cette
 commande.
 
-L'appelant envoie un `POST` dont le corps est du JSON, signé en HMAC-SHA256 par le
-secret :
+L'appelant envoie un `POST` dont le corps est du JSON, horodaté et signé : l'en-tête
+`X-Penelope-Timestamp` porte l'instant de l'envoi en secondes Unix, et
+`X-Penelope-Signature` le HMAC-SHA256, par le secret, de l'horodatage, d'un point et du
+corps brut (`<horodatage>.<corps>`) :
 
 ```bash
 body='{"title":"PR #12 ouverte","action":"opened"}'
-sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
 curl -X POST "http://127.0.0.1:7778/hook/<jeton>" \
   -H "Content-Type: application/json" \
+  -H "X-Penelope-Timestamp: $ts" \
   -H "X-Penelope-Signature: sha256=$sig" \
   --data "$body"
 ```
 
+L'horodatage rend une requête capturée inutilisable : à plus de cinq minutes de
+l'horloge de la machine, dans un sens ou dans l'autre, elle est refusée (401) ; et dans
+ces cinq minutes, la même signature n'est admise qu'une fois (409). Un appelant qui
+réessaie signe à nouveau, avec un nouvel horodatage. L'horloge de l'appelant doit donc
+être à l'heure (NTP).
+
 Réponses : `202 {"accepted": true, "delivery": …}` quand la cible a tiré ;
 `202 {"accepted": false, "reason": "filtre"}` quand le `filter` de la spécification
 écarte le corps (`{"filter": {"action": "opened"}}`, même forme que pour `mcp_poll`) ;
-`401` signature absente ou fausse ; `404` chemin inconnu, hook en pause ou supprimé ;
+`401` signature absente ou fausse, horodatage absent ou hors de la fenêtre ; `409` même
+livraison déjà reçue (rejeu) ; `400` requête illisible ou ambiguë (CR ou LF nus, ligne
+repliée, `Content-Length` répété, `Transfer-Encoding` avec `Content-Length`) ; `411`
+transfert par morceaux ; `404` chemin inconnu, hook en pause ou supprimé ;
 `405` toute méthode autre que `POST` (un `GET` ne déclenche jamais) ; `413` corps au-delà
 de `webhooks.max_body_bytes` (64 Ko), refusé avant d'être lu ; `429` avec `Retry-After`
 au-delà de `webhooks.rate_per_minute` réceptions par hook (60) ou de
@@ -2068,9 +2081,12 @@ l'adresse de ce réseau. Dans les deux cas la signature reste obligatoire : l'ad
 n'est pas un secret, le secret l'est. `webhooks.listen = ""` n'ouvre rien ; la clé
 demande un redémarrage, et `penelope logs` dit « webhooks entrants à l'écoute ».
 
-Les compteurs de débit sont en mémoire : un redémarrage les remet à zéro. Un même corps
-envoyé deux fois déclenche deux fois (pas de rejeu détecté) : un appelant qui réessaie sur
-un `5xx` peut doubler une notification, jamais au-delà des plafonds.
+Les compteurs de débit et les signatures déjà vues sont en mémoire : un redémarrage les
+remet à zéro, et une requête capturée dans les cinq minutes qui le précèdent passerait
+alors une fois de plus. Un même corps envoyé deux fois avec deux horodatages déclenche
+deux fois : un appelant qui réessaie sur un `5xx` peut doubler une notification, jamais
+au-delà des plafonds. Une livraison refusée en `429` peut être renvoyée telle quelle
+tant que son horodatage est dans la fenêtre.
 
 **Le mode webhook de Telegram** (`telegram.mode = "webhook"`, `telegram.webhook_url`),
 promis depuis la 0.17, n'a jamais été servi : la validation le refuse désormais en le
