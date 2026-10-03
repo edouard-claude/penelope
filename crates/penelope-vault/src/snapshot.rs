@@ -61,7 +61,9 @@ pub async fn fresh_snapshot(s: &Services, scope: &crate::session_project::Scope)
 }
 
 /// Budget du niveau Cœur, mesuré sur ce qui est réellement injecté (hors entrées
-/// expirées) : un dépassement est signalé dans `DREAMS.md` (issue #25).
+/// expirées) : un dépassement est signalé dans `DREAMS.md` (issue #25). Le constat seul :
+/// ce que la nuit en fait est dit à côté (issue #298), et les entrées hors du bloc restent
+/// trouvables par le rappel (#62).
 pub async fn core_overflow(s: &Services, budget: u64) -> Option<String> {
     let hidden = s.memory.hidden_uids().await.ok()?;
     let mut entries = s.memory.by_level(Level::Coeur).await.ok()?;
@@ -69,8 +71,8 @@ pub async fn core_overflow(s: &Services, budget: u64) -> Option<String> {
     let (total, left_out) = penelope_memory::recall::Snapshots::budget_use(&entries, budget);
     (left_out > 0).then(|| {
         format!(
-            "niveau Cœur à ~{total} jetons pour un budget de {budget} ({left_out} entrée(s) \
-             non injectée(s)) : alléger memoire.md ou relever core_budget_tokens"
+            "niveau Cœur à ~{total} jetons pour un budget de {budget} : {left_out} entrée(s) \
+             hors du bloc servi d'office, trouvables par le rappel"
         )
     })
 }

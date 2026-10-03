@@ -2130,9 +2130,10 @@ décision, avec ses critères et sa justification, est écrite dans la section �
 **La forme du digest.** Le digest du matin (08:00, `memory.digest_cron`) part au foyer
 (`telegram.home`) et tient en **une bulle**. Il dit, dans cet ordre : ce que la nuit a
 appris (le compte, puis cinq exemples au plus, tronqués à 80 caractères, avec leur
-fichier), les fichiers touchés, combien de questions attendent une réponse, le seul
-avertissement qui demande une action du propriétaire (le niveau Cœur au-delà de
-`memory.core_budget_tokens`), les entrées trop longues avec la commande qui en propose le
+fichier), les fichiers touchés, combien de questions attendent une réponse, l'état du
+niveau Cœur s'il dépasse `memory.core_budget_tokens` et ce que la nuit en a fait
+(nouveautés rangées en notes, entrée descendue), sans commande à taper, les entrées trop
+longues avec la commande qui en propose le
 découpage, les entrées jamais rappelées depuis soixante jours (trois exemples), les
 motifs d'écart regroupés par famille avec leur compte (« imprécis : 18 »,
 « retrouvable ailleurs : 4 », cinq familles au plus, les autres additionnées), la
@@ -2381,8 +2382,20 @@ Une donnée client, financière ou de sécurité (montant, marge, faille) porte
 `sensible: oui` : un simple marqueur. Le vault est privé, une information client ou
 d'infrastructure utile se garde et s'injecte comme les autres. Un fait sur
 la configuration de Pénélope elle-même n'est pas retenu, `self_status` fait foi. Les deux
-annotations se posent aussi à la main et sont relues par `penelope mem reindex`. Quand le
-niveau Cœur (`memoire.md`) dépasse `memory.core_budget_tokens`, `DREAMS.md` le signale.
+annotations se posent aussi à la main et sont relues par `penelope mem reindex`.
+
+**Le Cœur a un budget, la nuit le tient.** Le niveau Cœur (`memoire.md`) est servi
+d'office sous `memory.core_budget_tokens`, les entrées les plus importantes d'abord et, à
+importance égale, la plus récente d'abord. Quand il est plein, la nuit regarde la place
+avant d'y écrire : une nouveauté que le bloc ne servirait pas (importance trop basse) va
+en fiche curée (`notes.md`), rappelée à la demande ; une nouveauté qui s'y classe est
+écrite au Cœur, et la moins utile des entrées hors du bloc (importance la plus basse, la
+moins rappelée) descend en `notes.md`, section « Descendues du Cœur », ligne, uid et
+signaux d'usage conservés, pré-images dans `mem_history` (`demote_entry`). Une descente
+par nuit au plus ; jamais une entrée écrite par le propriétaire ni une qui reprend sa
+phrase, jamais ce qui vient d'être écrit. `DREAMS.md` dit l'état du Cœur et chaque
+décision (« rangée en notes », « descendue en notes ») ; le bloc servi ne change que la
+nuit.
 
 **Historique git du vault.** Avec `memory.vault_git_autocommit` actif (15 min par défaut,
 `0s` pour désactiver), le vault devient un dépôt au démarrage (`.gitignore`, commit

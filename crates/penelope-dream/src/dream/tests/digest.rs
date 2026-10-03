@@ -279,6 +279,10 @@ fn the_morning_digest_is_short_and_readable() {
     report.cleanup = (0..6)
         .map(|i| format!("PROJET N°{i} … (3 188 caractères) — `penelope mem split 01M2Y1QK{i}`"))
         .collect();
+    // Ce que la nuit a fait du Cœur plein (#298) : dit, sans commande à taper.
+    report.core_full = 2;
+    report.demoted =
+        vec!["« Le client Martin règle à trente jours » (importance 3, 0 rappel(s))".into()];
 
     let digest = report.render_digest();
     assert!(
@@ -301,8 +305,15 @@ fn the_morning_digest_is_short_and_readable() {
         digest.contains("2 question(s)"),
         "le compte, pas les questions"
     );
-    // Le seul avertissement qui demande une action du propriétaire reste.
-    assert!(digest.contains("Cœur"), "{digest}");
+    // Le constat sur le Cœur reste, suivi de ce que la nuit a fait, jamais d'une
+    // injonction ni d'une commande (#298).
+    assert!(digest.contains("niveau Cœur à ~3021 jetons"), "{digest}");
+    assert!(digest.contains("Cœur plein : 2 nouveauté(s)"), "{digest}");
+    assert!(
+        digest.contains("Rétrogradée du Cœur en notes : « Le client Martin"),
+        "{digest}"
+    );
+    assert!(!digest.contains("config set"), "{digest}");
     // Ce qui a été appris se lit, et le nettoyage est proposé, jamais lancé.
     assert!(
         digest.contains("Yobbu ouvre son catalogue le 0"),

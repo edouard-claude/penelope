@@ -503,6 +503,12 @@ impl Snapshots {
 
     /// Bloc injecté **et** les uid qu'il contient : ce qui est servi d'office n'a pas
     /// d'usage mesurable par entrée, et n'a pas à être rappelé une seconde fois (#62).
+    ///
+    /// Ordre : importance décroissante, puis, à importance égale, la plus récente d'abord
+    /// (uid décroissant : les uid sont des ULID, donc datés). Le tri par uid croissant
+    /// faisait tomber du bloc ce que la nuit venait d'apprendre dès que le niveau
+    /// dépassait son budget (issue #298). L'ordre est total et ne dépend que des entrées :
+    /// mêmes entrées, même bloc.
     pub fn build_block_with_uids(
         entries: &[crate::index::IndexedEntry],
         budget_tokens: u64,
@@ -512,7 +518,7 @@ impl Snapshots {
             b.importance
                 .unwrap_or(5)
                 .cmp(&a.importance.unwrap_or(5))
-                .then_with(|| a.uid.cmp(&b.uid))
+                .then_with(|| b.uid.cmp(&a.uid))
         });
         let mut out = String::new();
         let mut uids = Vec::new();

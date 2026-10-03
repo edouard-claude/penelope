@@ -428,6 +428,8 @@ async fn consolidate_admitted(
     let mut sizer = BatchSizer::new(cfg.memory.dream_batch.max(1));
     let mut budget = OutputBudget::new(output_cap(d, cfg));
     let mut reasoning = ReasoningBudget::new(cfg);
+    // La place au Cœur, relue après chaque lot écrit (issue #298).
+    let mut core = CoreBudget::read(s, cfg.memory.core_budget_tokens as u64).await?;
     // Lots effectivement écrits : ce que la reprise n'aura pas à refaire.
     let mut lots_written = 0usize;
     // Candidats laissés par une passe arrêtée : ni jugés, ni reportés (#140).
@@ -552,6 +554,7 @@ async fn consolidate_admitted(
                 day,
                 gates,
                 &snapshot,
+                &mut core,
                 slice,
                 batch_ops,
                 updates,
@@ -564,6 +567,7 @@ async fn consolidate_admitted(
                 // Ce qui vient d'être écrit est connu du lot suivant : les
                 // nouveaux UID, et les textes qui ne doivent pas se dédoubler.
                 snapshot = VaultSnapshot::read(s, vault).await?;
+                core.refresh(s).await?;
                 save_stats(s, run_id, report).await?;
             }
             lots_written += 1;
@@ -743,19 +747,21 @@ mod batches;
 mod candidates;
 mod clash;
 mod consolidate;
+mod core_budget;
 mod digest;
 mod nightly;
 mod runs;
 mod snapshot;
 
 pub use apply::wiki_review;
-use apply::{append_dreams, apply, target_file, today};
+use apply::{append_dreams, apply, mutate, target_file, today};
 use batches::{
     BatchSizer, LONE_WATCH, OWN_TIMEOUT, OutputBudget, REASONING_START, batch_event,
     consolidate_retrying, output_cap, reasoning_fallback, write_batch,
 };
 #[cfg(test)]
 use batches::{network_stall, own_timeout};
+use core_budget::{CoreBudget, CorePlacement, demote, to_notes};
 // Descendue avec les instantanés (T22) : le doctor la cite aussi.
 pub use candidates::submission_order;
 use candidates::{Clash, Item, ids_for, is_journal, nearby_batch, short, sort_and_plan};

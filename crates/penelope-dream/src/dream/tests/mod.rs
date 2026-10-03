@@ -10,6 +10,7 @@ mod apply;
 mod batches;
 mod candidates;
 mod clash;
+mod core_budget;
 mod digest;
 mod operations;
 mod sizing;

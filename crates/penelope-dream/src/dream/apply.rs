@@ -445,7 +445,7 @@ fn title_of(file: &str) -> &'static str {
 
 /// Lit, transforme, écrit atomiquement sans écraser une édition concurrente, et garde la
 /// pré-image dans `mem_history`.
-async fn mutate(
+pub(super) async fn mutate(
     s: &Services,
     vault: &Path,
     rel: &str,

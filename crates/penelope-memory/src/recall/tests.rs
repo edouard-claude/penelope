@@ -553,6 +553,43 @@ fn snapshot_block_respects_budget_and_importance() {
     );
 }
 
+/// #298 : à importance égale, le bloc sert d'abord la plus récente (uid le plus grand) ;
+/// jusqu'ici c'était la plus ancienne, et ce que la nuit venait d'apprendre tombait le
+/// premier. Mêmes entrées, même bloc : l'ordre ne dépend d'aucune autre donnée.
+#[test]
+fn at_equal_importance_the_most_recent_entry_is_served_first() {
+    let entries: Vec<IndexedEntry> = ["01A-OLD", "01B-MID", "01C-NEW"]
+        .iter()
+        .map(|uid| {
+            let mut e = simple_entry(
+                uid,
+                &format!("une entrée de quarante caractères tout rond. {uid}"),
+                Level::Coeur,
+                "2026-10-01",
+            );
+            e.importance = Some(6);
+            e
+        })
+        .collect();
+    // Chaque entrée coûte 13 jetons : deux tiennent, la troisième tombe.
+    let (block, uids) = Snapshots::build_block_with_uids(&entries, 27);
+    assert_eq!(uids, vec!["01C-NEW", "01B-MID"], "{block}");
+    assert!(
+        !block.contains("01A-OLD"),
+        "la plus ancienne tombe : {block}"
+    );
+    assert_eq!(
+        Snapshots::build_block_with_uids(&entries, 27),
+        (block, uids),
+        "déterministe"
+    );
+    // L'importance prime toujours sur la récence.
+    let mut entries = entries;
+    entries[0].importance = Some(9);
+    let (_, uids) = Snapshots::build_block_with_uids(&entries, 27);
+    assert_eq!(uids, vec!["01A-OLD", "01C-NEW"]);
+}
+
 #[test]
 fn predicates_are_lowercased_and_sparse() {
     let c = CurrentContext {

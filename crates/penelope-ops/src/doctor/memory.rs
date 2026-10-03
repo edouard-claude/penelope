@@ -39,15 +39,20 @@ pub async fn memory_size_check(s: &Services) -> DoctorCheck {
             long.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
         ));
     }
+    // Le conseil suit le constat : le découpage pour les entrées longues ; pour le Cœur
+    // plein, ce que la nuit fait seule et le réglage qui relève le budget (issue #298).
+    let mut fix = Vec::new();
+    if !long.is_empty() {
+        fix.push("`penelope mem split <uid>` propose le découpage en un fait par entrée");
+    }
     if let Some(w) = overflow {
         detail.push(w);
+        fix.push(
+            "la nuit range les nouveautés en notes et rétrograde une entrée par passe ; \
+             `memory.core_budget_tokens` relève le budget",
+        );
     }
-    DoctorCheck::fail(
-        ID,
-        LABEL,
-        detail.join(" ; "),
-        Some("`penelope mem split <uid>` propose le découpage en un fait par entrée".into()),
-    )
+    DoctorCheck::fail(ID, LABEL, detail.join(" ; "), Some(fix.join(" ; ")))
 }
 
 /// Contenu du vault hors de l'index (issue #15).
