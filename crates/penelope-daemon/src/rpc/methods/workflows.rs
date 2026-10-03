@@ -167,8 +167,8 @@ impl Rpc {
                 Ok(json!({"id": id, "destination": to}))
             }
             method::SCHEDULE_ADD => {
-                let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
-                    .ok_or_else(|| anyhow::anyhow!(UNKNOWN_KIND))?;
+                let kind = penelope_workflow::TriggerKind::parse_known(&required_str(p, "kind")?)
+                    .map_err(anyhow::Error::msg)?;
                 penelope_orchestrator::scheduler::create(
                     s,
                     kind,
@@ -194,11 +194,7 @@ impl Rpc {
                 };
                 // Une faute de frappe ne passe pas pour une pause réussie (#221). Le
                 // secret d'un webhook part avec sa planification (#294).
-                let found = match state {
-                    "deleted" => penelope_orchestrator::scheduler::remove(s, &id).await?,
-                    _ => s.schedules.set_state(&id, state).await?,
-                };
-                if !found {
+                if !penelope_orchestrator::scheduler::set_state(s, &id, state).await? {
                     anyhow::bail!("planification inconnue : {id}");
                 }
                 Ok(json!({"ok": true}))
@@ -257,7 +253,3 @@ async fn skill_install(d: &Core, p: &Value) -> anyhow::Result<Value> {
         "report": penelope_ops::skill_install::report(&src, &installed, &missing),
     }))
 }
-
-/// Refus d'un `kind` de planification inconnu : les sept déclencheurs (#293, #294).
-const UNKNOWN_KIND: &str =
-    "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook ou mcp_subscribe";

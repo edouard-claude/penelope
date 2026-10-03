@@ -114,6 +114,15 @@ pub async fn remove(s: &Services, id: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Pause, reprise ou suppression d'une planification (#221) ; la suppression passe par
+/// `remove`, qui efface le secret d'un webhook (#294). Faux si elle est inconnue.
+pub async fn set_state(s: &Services, id: &str, state: &str) -> anyhow::Result<bool> {
+    match state {
+        "deleted" => remove(s, id).await,
+        _ => Ok(s.schedules.set_state(id, state).await?),
+    }
+}
+
 /// Adresse locale d'un hook, pour la réponse de création : ce que le tunnel ou le réseau
 /// privé devra joindre.
 pub(super) fn local_url(listen: &str, path: &str) -> String {

@@ -49,6 +49,14 @@ impl TriggerKind {
             TriggerKind::McpSubscribe => "mcp_subscribe",
         }
     }
+    /// `parse`, ou le refus qui nomme les sept déclencheurs (#293, #294).
+    pub fn parse_known(s: &str) -> Result<TriggerKind, String> {
+        Self::parse(s).ok_or_else(|| {
+            "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook ou \
+             mcp_subscribe"
+                .to_string()
+        })
+    }
     pub fn parse(s: &str) -> Option<TriggerKind> {
         Some(match s {
             "cron" => TriggerKind::Cron,

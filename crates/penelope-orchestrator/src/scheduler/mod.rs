@@ -360,7 +360,7 @@ use triggers::{
 use wake::LATE;
 pub use wake::{Late, Wake, WakeWatch, health, held_text, late_of, late_text, wake_check};
 use webhook::{DELIVERY, UNTRUSTED_BODY};
-pub use webhook::{SIGNATURE_HEADER, remove, webhook_server, withhold_secret};
+pub use webhook::{SIGNATURE_HEADER, remove, set_state, webhook_server, withhold_secret};
 
 #[cfg(test)]
 mod tests;
