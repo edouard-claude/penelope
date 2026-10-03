@@ -120,6 +120,9 @@ scenario_cases! {
     // Expérience persévérance (#291) : l'indice `developer` est dans la surface, pas dans
     // le monde.
     indice_perseverance_codex => "indice-perseverance-codex",
+    // Le gate « vas-y » vu depuis la conversation (#302) : clic, « vas-y » tapé, refus
+    // de `workflow_start` avant toute carte, arrêt du tour au deuxième.
+    plan_clic_puis_vas_y_tape => "plan-clic-puis-vas-y-tape",
 }
 
 #[test]

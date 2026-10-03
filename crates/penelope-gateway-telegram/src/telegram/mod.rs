@@ -442,6 +442,14 @@ impl TelegramGateway {
                 {
                     return Ok(());
                 }
+                // « vas-y » tapé alors que la carte a déjà lancé le run (#302) : l'état,
+                // sans tour de modèle.
+                if self
+                    .plan_go_typed(chat_id, topic_id, message_id, &text)
+                    .await?
+                {
+                    return Ok(());
+                }
 
                 // Profil vide : l'accueil est proposé une fois, sans retenir le message.
                 if s.kv_get("tg.onboard.proposed").await?.is_none()

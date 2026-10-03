@@ -1,0 +1,45 @@
+name = "plan-clic-puis-vas-y-tape"
+description = """Le gate « vas-y » vu depuis la conversation (#302). Le modèle propose un plan
+(`workflow_plan`) ; le propriétaire clique « Vas-y (v1) » : le run part, et la conversation
+d'origine reçoit l'événement `workflow.plan.launched` et une note pour son prochain tour.
+« vasy » puis « Vas-y ! » tapés ensuite reçoivent l'état du run sans tour de modèle. Le
+message suivant part au modèle avec la note (`<evenements>`, dans le contexte figé du
+message) ; le modèle rappelle quand même `workflow_start` deux fois : le premier appel est
+refusé avant toute carte d'approbation, avec le run et son état ; le second arrête le tour,
+qui répond cet état sans autre appel au modèle. Le message d'après montre que le modèle
+cite le run. Le monde : un seul run, aucune approbation, le run jamais relancé."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state, current_step, iterations, error FROM workflow_runs ORDER BY started_at, rowid"
+
+[[observe]]
+name = "approbations"
+sql = "SELECT kind, subject, state FROM approval_requests ORDER BY created_at, rowid"
+
+[[steps]]
+kind = "telegram"
+text = "Corrige /stop pour qu'il arrête aussi le run en cours, et propose-moi un plan."
+
+[[steps]]
+kind = "telegram"
+click = "Vas-y (v1)"
+
+[[steps]]
+kind = "telegram"
+text = "vasy"
+
+[[steps]]
+kind = "telegram"
+text = "Vas-y !"
+
+[[steps]]
+kind = "telegram"
+text = "Alors, lance-le."
+
+[[steps]]
+kind = "telegram"
+text = "Où en est le run ?"

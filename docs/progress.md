@@ -12,6 +12,71 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.35
+
+**Workflows : après le clic « vas-y », la conversation sait que le run est parti, et
+`workflow_start` depuis un canal dit l'état réel au lieu de renvoyer à `workflow_plan`
+(#302).** Constat le 03/10, dans un sujet Telegram : `workflow_plan` publie la carte, le
+propriétaire clique « vas-y », le run `r_plan_…` démarre et travaille six minutes. La
+session de conversation n'en sait rien : elle reçoit « vasy » puis « vas-y » en texte et
+appelle `workflow_start` quatre fois ; chaque appel passe par une carte d'approbation que
+le propriétaire valide, puis est refusé par « propose d'abord un plan avec workflow_plan ;
+seul le propriétaire peut valider « vas-y » », comme si rien n'avait été approuvé ;
+`workflow_plan` répond « le plan a déjà été approuvé » sans dire qu'un run tourne ;
+Pénélope conclut à tort que le lancement n'a pas reconnu « vasy ». Un seul run, aucune
+information.
+
+Correctif, en six points. **Le cœur écrit le lancement dans la session d'origine** : le
+clic (`go_plan`, Telegram ou `wf.plan.go`) ajoute l'événement `workflow.plan.launched`
+(run, version, empreinte, workflow, étape) à la session qui a préparé le plan, et une note
+pour son prochain tour (`penelope_app::notices`, en `kv`) ; rien n'entre dans le
+transcript hors tour, un message inséré tomberait entre un appel d'outil en attente et son
+résultat. La note part dans le contexte volatil du message suivant, bloc `<evenements>`
+figé avec lui (`prefix::settle`), et n'est retirée qu'une fois partie : « Le propriétaire a
+cliqué « vas-y » sur la carte du plan v1 (« … ») : le run `r_plan_…` est lancé, étape
+`e1-spec`. Ne rappelle ni `workflow_start` ni `workflow_plan` pour ce plan ;
+`workflow_status` donne son état ». **Le refus dit l'état réel**
+(`penelope_workflow::plan::gate`) : aucun plan (« propose d'abord un plan ») ; plan en
+revue (« le propriétaire le valide par le bouton de la carte », et le run encore vivant
+d'un plan précédent s'il en reste un) ; approuvé sans run (« attend son run : seul le
+clic le lance ») ; lancé (« déjà lancé : run `r_plan_…`, en pause à l'étape `e1-spec` ;
+`workflow_status` donne son état, `workflow_control` op `resume` le reprend »).
+`workflow_plan` sur un plan approuvé le dit aussi, derrière « déjà approuvé ». **Pas de
+carte pour un appel voué à l'échec** : le gate est vérifié au précontrôle de l'exécuteur
+(`validate_call`), avant la politique et l'approbation, directement et par `tool_call` ;
+l'exécution le redit au cas où. **« vas-y » tapé après le clic** (« vasy », « Vas-y ! »,
+« ok vas-y » ; jamais « go » ni « ok », qui répondent au modèle) reçoit de la passerelle
+l'état du run (« Déjà lancé : run `…` du plan v1, en cours ; `/stop` l'arrête,
+`/resume` le reprend »), sans tour de modèle, tant qu'un run du plan est vivant ; sans
+plan, ou le run fini, le texte part au modèle comme avant. **Garde anti-boucle** : un
+refus de l'exécuteur avant toute carte (`ToolError::Denied` au précontrôle) revient au
+modèle avec l'état ; le deuxième sur le même outil dans le tour arrête le tour
+(`turn.halted`) : le résultat entre dans la conversation, les appels qui suivaient sont
+fermés, la réponse au propriétaire est l'état connu, sans autre appel au modèle.
+**Scénario** `plan-clic-puis-vas-y-tape` : plan, clic, « vasy » et « Vas-y ! » répondus
+sans tour, puis le modèle rappelle `workflow_start` deux fois : refus avec le run, arrêt du
+tour ; la surface montre la note `<evenements>` dans le message suivant, le monde un seul
+run et aucune approbation.
+
+Documentation : description de `workflow_start`, « Plans et gate » dans workflows.md,
+`turn.halted` dans runtime-events.md, référence des outils régénérée.
+
+Tests : le gate (textes des quatre états, « vas-y » strict, lecture plan et run) ; les
+notes (ordre, retrait de ce qui est parti seulement, bloc) ; le préfixe (note envoyée une
+fois) ; l'orchestrateur (événement et note dans la conversation d'origine, une fois, rien
+dans la session du run) ; l'exécuteur (refus au précontrôle, direct et par `tool_call`,
+dans les quatre états, à l'exécution, `workflow_plan` approuvé, CLI et run non concernés) ;
+la boucle (deuxième refus : tour arrêté, deux résultats, aucune carte, deux appels au
+modèle, `turn.halted`) ; la passerelle (« vas-y » tapé : état sans tour, message ordinaire
+sans plan ou run fini). Ce qui marchait déjà et continue : le clic périmé, un seul run par
+plan, `/stop` sur les runs de la conversation (`plan-en-phases`, `rpc-plans`,
+`livraison-*`), la garde d'arguments invalides (#117), le détecteur de boucles (#31).
+
+Vus au passage dans le même run, hors de ce lot : les captures renvoyées par un outil MCP
+en bloc image sont marquées « non transmise » et rien n'est écrit sur disque ;
+`git_clone` en https sans identifiants échoue là où `gh repo clone` réussit. Deux issues
+séparées, #304 et #305. Closes #302.
+
 ### 1.0.34
 
 **Expérience persévérance : un indice de contexte en fin de requête et le rappel de

@@ -180,3 +180,93 @@ async fn a_nested_call_that_asks_is_refused_without_a_card() {
     assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
     assert_eq!(e.calls.load(Ordering::SeqCst), 0);
 }
+
+/// Exécuteur dont le précontrôle refuse `workflow_start`, comme le gate « vas-y » d'un
+/// canal (#302).
+struct GateExecutor;
+
+#[async_trait::async_trait]
+impl ToolExecutor for GateExecutor {
+    async fn precheck(&self, name: &str, _args: &Value) -> Result<(), penelope_tools::ToolError> {
+        if name == "workflow_start" {
+            return Err(penelope_tools::ToolError::Denied(
+                "le plan v1 est déjà lancé : run `r_plan_1`, en pause".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        name: &str,
+        _args: &Value,
+    ) -> Result<ToolOutcome, penelope_tools::ToolError> {
+        Ok(ToolOutcome::ok(json!({"tool": name})))
+    }
+}
+
+/// #302 : un appel refusé par l'exécuteur avant toute carte revient au modèle avec
+/// l'état ; le deuxième refus du même outil dans le tour arrête le tour, sans carte ni
+/// autre appel au modèle, et le propriétaire reçoit cet état.
+#[tokio::test]
+async fn a_second_executor_refusal_in_a_turn_halts_it_with_the_state() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let args = json!({"id": "build-verify"});
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call("c1", "workflow_start", args.clone())],
+    ));
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call("c2", "workflow_start", args.clone())],
+    ));
+    p.reply("jamais appelé");
+    let conv = MemoryConversation::new("Tu es Pénélope.", "lance-le");
+    let mut spec = request(&sid);
+    spec.tools = vec![ToolDef::new(
+        "workflow_start",
+        "lancer",
+        json!({"type":"object"}),
+    )];
+    let out = AgentLoop::new(s.clone(), p.clone())
+        .run_conversation(&spec, &conv, &GateExecutor, &NullSink)
+        .await
+        .unwrap();
+    match out {
+        TurnOutcome::Answered { text, .. } => {
+            assert!(
+                text.contains("Tour arrêté") && text.contains("run `r_plan_1`"),
+                "{text}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(p.call_count(), 2, "aucun appel au modèle après l'arrêt");
+    assert!(
+        s.approvals.pending(10).await.unwrap().is_empty(),
+        "aucune carte"
+    );
+    let tail = conv.tail().await.unwrap();
+    let results: Vec<String> = tail
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .map(|m| m.text())
+        .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(
+        results
+            .iter()
+            .all(|r| r.starts_with("Refusé : le plan v1 est déjà lancé")),
+        "{results:?}"
+    );
+    assert_eq!(tail.last().unwrap().role, Role::Assistant);
+    assert!(tail.last().unwrap().text().contains("Tour arrêté"));
+    let halted = s
+        .events
+        .session_events_of_kind(&sid, "turn.halted")
+        .await
+        .unwrap();
+    assert_eq!(halted.len(), 1);
+    assert_eq!(halted[0].payload["tool"], "workflow_start");
+}

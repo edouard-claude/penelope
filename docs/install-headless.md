@@ -1719,7 +1719,7 @@ et `/stop` interrompt tout le lot.
 | `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. (à la demande) |
 | `workflow_list` | read | Liste les workflows disponibles. (à la demande) |
 | `workflow_plan` | write | Propose ou révise un plan de workflow avant tout lancement. (à la demande) |
-| `workflow_start` | write | Lancement direct réservé aux contextes internes et CLI ; depuis Telegram, propose d'abord `workflow_plan` et attends le gate « vas-y ». (à la demande) |
+| `workflow_start` | write | Lancement direct réservé aux contextes internes, à la CLI et aux runs ; depuis une conversation, propose d'abord `workflow_plan` : seul le clic « vas-y » du propriétaire sur la carte lance le run, et un appel ici est refusé avant toute carte, avec l'état du plan et de son run (déjà lancé : `workflow_status`). (à la demande) |
 | `workflow_status` | read | État d'un run. (à la demande) |
 <!-- reference:outils:fin -->
 

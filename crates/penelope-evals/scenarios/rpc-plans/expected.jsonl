@@ -75,6 +75,7 @@
 {"type":"event","session":"{{session:1}}","seq":15,"kind":"turn.finished","payload":{"attempt":1,"cost_usd":0,"iterations":2,"kind":"message","origin_turn":"{{turn:1}}","reason":"answered","turn_id":"{{turn:1}}"}}
 {"type":"event","session":"{{session:2}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"workflow_run","parent_id":null}}
 {"type":"event","session":"{{session:2}}","seq":2,"kind":"workflow.started","payload":{"held":false,"parent":null,"plan":{"fingerprint":"{{hash}}","session":"{{session:1}}","version":1,"workflow":"build-verify"},"run":"{{run:1}}","workflow":"plan-0d47c34e5524"}}
+{"type":"event","session":"{{session:1}}","seq":16,"kind":"workflow.plan.launched","payload":{"fingerprint":"{{hash}}","run":"{{run:1}}","step":"e1-spec","version":1,"workflow":"build-verify"}}
 {"type":"event","session":"{{session:3}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"workflow_run","parent_id":"{{session:2}}"}}
 {"type":"event","session":"{{session:3}}","seq":2,"kind":"conv.user","payload":{"content":[{"text":"[Workflow `plan-0d47c34e5524`, étape `e1-spec` : Spécification · Définir le format du rapport]\n\nPlan approuvé v1 : Rapport hebdomadaire des runs\nÉtapes du plan :\n1. [Spécification] Définir le format du rapport\n2. [Code] Écrire le rapport\n3. [Revue] Relire le rapport\n\nBrief de la conversation : \n\nTa tâche : étape 1 (Spécification) — Définir le format du rapport.\nÉcris la spécification : comportement attendu, critères d'acceptation vérifiables, cas limites. Rends-la dans `content` de `return_value`.\n\nRépertoire de travail : `{{home}}/state/runs/{{run:1}}`. Quand l'étape est terminée, appelle `return_value` si un résultat est attendu, puis `step_done()`.","type":"text"}],"episode":0,"source":"owner","surface":{"op":"append"},"tokens_est":"{{tokens}}","v":1}}
 {"type":"event","session":"{{session:3}}","seq":3,"kind":"conv.context","payload":{"block":"<contexte>\nDate et heure : Thursday 01 January 2026, 04:00 (Indian/Reunion).\nÉtat du run : Run {{run:1}} du workflow `plan-0d47c34e5524`, étape `e1-spec`, itération 0/40\n</contexte>\n\n","target":2,"v":1}}
@@ -260,5 +261,5 @@
 {"type":"usage","session":"{{session:8}}","model":"openrouter:z-ai/glm-5.2","provider":"mock","role":"chat","prompt":1000,"completion":50,"cached":0,"reasoning":0}
 {"type":"usage","session":"{{session:9}}","model":"openrouter:z-ai/glm-5.2","provider":"mock","role":"chat","prompt":1000,"completion":50,"cached":0,"reasoning":0}
 {"type":"usage","session":"{{session:9}}","model":"openrouter:z-ai/glm-5.2","provider":"mock","role":"chat","prompt":1000,"completion":50,"cached":0,"reasoning":0}
-{"type":"audit","ok":true,"checked":155,"purged":0}
+{"type":"audit","ok":true,"checked":156,"purged":0}
 {"type":"observed","name":"runs","row":{"workflow_id":"plan-0d47c34e5524","state":"blocked","current_step":null,"iterations":8,"error":"`e3-revue-r2-libre` → failed : limite de 2 reprises atteinte"}}

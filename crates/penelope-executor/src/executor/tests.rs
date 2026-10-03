@@ -748,3 +748,120 @@ async fn a_restricted_sub_agent_does_not_get_the_vault() {
     assert!(matches!(e, ToolError::Denied(_)), "{e}");
     assert!(!own.join("vault:sources").exists());
 }
+
+/// #302 : depuis un canal, `workflow_start` est refusé au précontrôle, avant toute carte,
+/// et le refus dit l'état réel : aucun plan, plan en revue, plan approuvé et son run (en
+/// cours, puis en pause) ; `workflow_plan` sur un plan approuvé le dit aussi. La CLI
+/// n'est pas concernée.
+#[tokio::test]
+async fn a_channel_start_is_refused_before_any_card_with_the_plan_state() {
+    use penelope_workflow::plan::execution::{self, Limits};
+    use penelope_workflow::plan::{PlanStore, plan_run_id};
+    let (_dir, mut e) = executor().await;
+    let args = json!({"id":"build-verify", "params": {"objectif": "stop"}});
+    assert!(
+        e.precheck("workflow_start", &args).await.is_ok(),
+        "CLI : pas de gate"
+    );
+    e.env.origin = Origin::Telegram {
+        chat_id: 1,
+        topic_id: Some(2),
+        message_id: Some(3),
+    };
+    let refused = |r: Result<(), ToolError>| match r {
+        Err(ToolError::Denied(m)) => m,
+        other => panic!("{other:?}"),
+    };
+    let none = refused(e.precheck("workflow_start", &args).await);
+    assert!(
+        none.contains("`workflow_plan`") && none.contains("vas-y"),
+        "{none}"
+    );
+    let via = refused(
+        e.precheck(
+            "tool_call",
+            &json!({"name": "workflow_start", "args": args}),
+        )
+        .await,
+    );
+    assert_eq!(via, none, "même refus par tool_call");
+
+    e.execute(
+        "workflow_plan",
+        &json!({
+            "id":"build-verify", "goal":"Corriger /stop",
+            "steps":[{"phase":"tests", "title":"Tester"}], "params": {"objectif":"stop"}
+        }),
+    )
+    .await
+    .unwrap();
+    let review = refused(e.precheck("workflow_start", &args).await);
+    assert!(
+        review.contains("en revue") && review.contains("Corriger /stop"),
+        "{review}"
+    );
+
+    let plans = PlanStore::new(e.services.store.clone());
+    let draft = plans.get("s1").await.unwrap().unwrap();
+    let mut approved = draft.clone();
+    approved.approve(1).unwrap();
+    plans.replace("s1", &draft, &approved).await.unwrap();
+    let waiting = refused(e.precheck("workflow_start", &args).await);
+    assert!(waiting.contains("approuvé et attend son run"), "{waiting}");
+
+    let wf = execution::compile(&approved, &Limits::default()).unwrap();
+    let id = plan_run_id("s1", &approved.fingerprint());
+    let run_session = e
+        .services
+        .sessions
+        .create(penelope_kernel::session::SessionKind::WorkflowRun, None)
+        .await
+        .unwrap();
+    e.services
+        .runs
+        .create_as(&id, &wf, run_session.id.as_str(), json!({}))
+        .await
+        .unwrap();
+    let running = refused(e.precheck("workflow_start", &args).await);
+    assert!(
+        running.contains(&format!("run `{id}`")) && running.contains("en cours"),
+        "{running}"
+    );
+    assert!(running.contains("`workflow_status`"), "{running}");
+    e.services
+        .runs
+        .control(&id, &penelope_workflow::Control::Pause)
+        .await
+        .unwrap();
+    let paused = refused(e.precheck("workflow_start", &args).await);
+    assert!(
+        paused.contains("en pause") && paused.contains("op `resume`"),
+        "{paused}"
+    );
+    // À l'exécution aussi, au cas où le précontrôle aurait été contourné.
+    let executed = e
+        .execute("workflow_start", &args)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(executed.contains(&id), "{executed}");
+    // Réviser un plan approuvé dit où en est son run, pas seulement « déjà approuvé ».
+    let revise = e
+        .execute(
+            "workflow_plan",
+            &json!({
+                "id":"build-verify", "expected_version":1, "goal":"Autre",
+                "steps":[{"phase":"tests", "title":"T"}]
+            }),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        revise.contains("déjà été approuvé") && revise.contains(&id),
+        "{revise}"
+    );
+    // Dans un run, le lancement n'est pas gardé par le plan de la conversation.
+    e.env.in_workflow = true;
+    assert!(e.precheck("workflow_start", &args).await.is_ok());
+}

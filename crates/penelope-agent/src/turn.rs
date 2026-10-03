@@ -66,6 +66,14 @@ impl AgentLoop {
                         )
                         .await;
                 }
+                // Refus répété de l'exécuteur (#302) : la réponse est l'état connu.
+                Pending::Halt { answer } => {
+                    return Ok(TurnOutcome::Answered {
+                        text: answer,
+                        iterations: iteration,
+                        cost_usd: cost,
+                    });
+                }
                 Pending::Nothing | Pending::Resolved => {}
             }
             // 2. Gardes, dans l'ordre fixe : arrêt demandé, budget vérifié **avant** chaque

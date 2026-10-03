@@ -3,6 +3,25 @@
 use super::*;
 
 impl NativeToolExecutor {
+    /// L'état du gate « vas-y » du plan de la session (#302) : ce que `workflow_start`
+    /// refusé et `workflow_plan` sur un plan approuvé disent au modèle.
+    pub(crate) async fn plan_gate(&self) -> ToolResult<penelope_workflow::plan::gate::Gate> {
+        let s = &self.services;
+        let plans = penelope_workflow::plan::PlanStore::new(s.store.clone());
+        Ok(penelope_workflow::plan::gate::gate(&plans, &s.runs, &self.env.session_id).await?)
+    }
+
+    /// `workflow_start` depuis un canal, hors run : refusé, avec l'état réel du plan
+    /// (#302). Le 03/10, le refus renvoyait à `workflow_plan` alors que le plan était
+    /// approuvé et son run lancé ; la session a relancé quatre fois. Vérifié au
+    /// précontrôle, avant toute carte, et à l'exécution.
+    pub(crate) async fn channel_start_gate(&self) -> ToolResult<()> {
+        if !self.env.origin.is_channel() || self.env.in_workflow {
+            return Ok(());
+        }
+        Err(ToolError::Denied(self.plan_gate().await?.refusal()))
+    }
+
     /// Skills.
     pub(super) async fn skill_tools(
         &self,
@@ -154,7 +173,7 @@ impl NativeToolExecutor {
                 json!({"definition": w, "graphe": w.render_graph()})
             }
             "workflow_plan" => {
-                use penelope_workflow::plan::{PlanStep, PlanStore};
+                use penelope_workflow::plan::{PlanError, PlanStep, PlanStore};
                 let id = str_arg(args, "id")?;
                 s.workflows
                     .get(&id)
@@ -190,9 +209,23 @@ impl NativeToolExecutor {
                                         "expected_version requis pour réviser".into(),
                                     )
                                 })?;
+                            // Un plan approuvé ne se révise plus : le refus dit aussi où
+                            // en est son run (#302), pas seulement « déjà approuvé ».
+                            let state = if old.plan.can_execute() {
+                                Some(self.plan_gate().await?.refusal())
+                            } else {
+                                None
+                            };
+                            let refused = |e: PlanError| {
+                                ToolError::Invalid(match (&e, &state) {
+                                    (PlanError::AlreadyApproved, Some(state)) => {
+                                        format!("{e} ; {state}")
+                                    }
+                                    _ => e.to_string(),
+                                })
+                            };
                             if let Some(version) = restore {
-                                old.restore(expected, version)
-                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                                old.restore(expected, version).map_err(refused)?;
                             } else {
                                 let goal =
                                     goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
@@ -201,8 +234,7 @@ impl NativeToolExecutor {
                                         ToolError::Invalid("steps requis".into())
                                     })?)
                                     .map_err(|e| ToolError::Invalid(e.to_string()))?;
-                                old.revise(expected, goal, steps)
-                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                                old.revise(expected, goal, steps).map_err(refused)?;
                             }
                             old.params = args.get("params").cloned().unwrap_or(old.params);
                             old.brief = args
@@ -228,11 +260,9 @@ impl NativeToolExecutor {
                 serde_json::to_value(&draft).unwrap_or_default()
             }
             "workflow_start" => {
-                if self.env.origin.is_channel() && !self.env.in_workflow {
-                    return Err(ToolError::Invalid(
-                        "propose d'abord un plan avec workflow_plan ; seul le propriétaire peut valider « vas-y »".into(),
-                    ));
-                }
+                // Déjà refusé au précontrôle depuis un canal (#302) ; redit ici au cas où
+                // l'appel l'aurait contourné.
+                self.channel_start_gate().await?;
                 let o = self
                     .orchestrator
                     .as_ref()

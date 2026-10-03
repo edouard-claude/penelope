@@ -106,6 +106,7 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `turn.merged` | des messages du propriétaire rejoignent le tour : avant qu'il parte (`phase: queued`) ou pendant, avant un appel au modèle ou entre deux appels d'outils (`phase: running`) | `turn`, `count`, `phase` |
 | `turn.empty_answer` | le modèle n'a rendu ni texte ni appel d'outil ; relancé une fois, sauf si le raisonnement a mangé la sortie | `model`, `upstream`, `generation_id`, `finish`, `native_finish`, `completion_tokens`, `reasoning_tokens`, `retried` |
 | `turn.loop_aborted` | le détecteur de boucles arrête les outils du tour | `report` |
+| `turn.halted` | l'exécuteur a refusé le même outil deux fois dans le tour, avant toute carte (le gate « vas-y » de `workflow_start`, #302) : le tour s'arrête sur l'état connu, sans autre appel au modèle | `tool`, `answer` |
 | `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) ; `nudge_style` (`classique` ou `doux`, #291) quand le résultat porte le rappel de délégation |
 | `tool.call_id_reused` | un appel en attente porte un identifiant que la session a déjà vu (#266) : pour la carte d'approbation et le ledger d'effets, il est renuméroté sous une identité ancrée au message qui le porte ; le transcript garde l'identifiant émis | `call_id`, `identity`, `tool` |
 | `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |

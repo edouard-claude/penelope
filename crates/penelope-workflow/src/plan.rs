@@ -6,6 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub mod execution;
+pub mod gate;
 
 /// La phase donne au moteur un sens stable, même si l'ordre des pas est proposé
 /// librement par l'orchestrateur.

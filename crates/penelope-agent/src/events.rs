@@ -23,6 +23,9 @@ pub enum TurnEventKind {
     EmptyAnswer,
     /// Le détecteur de boucles a arrêté les outils du tour.
     LoopAborted,
+    /// L'exécuteur a refusé le même outil deux fois avant toute carte : le tour s'arrête
+    /// sur l'état connu, sans autre appel au modèle (#302).
+    Halted,
     /// Un appel d'outil a rendu son résultat.
     ToolResult,
     /// Un appel en attente porte un identifiant que la session a déjà vu (#266).
@@ -41,12 +44,13 @@ pub enum TurnEventKind {
 
 impl TurnEventKind {
     /// Toutes les variantes, pour les tests.
-    pub const ALL: [TurnEventKind; 12] = [
+    pub const ALL: [TurnEventKind; 13] = [
         TurnEventKind::Started,
         TurnEventKind::Finished,
         TurnEventKind::Merged,
         TurnEventKind::EmptyAnswer,
         TurnEventKind::LoopAborted,
+        TurnEventKind::Halted,
         TurnEventKind::ToolResult,
         TurnEventKind::CallIdReused,
         TurnEventKind::LlmRetried,
@@ -64,6 +68,7 @@ impl TurnEventKind {
             TurnEventKind::Merged => "turn.merged",
             TurnEventKind::EmptyAnswer => "turn.empty_answer",
             TurnEventKind::LoopAborted => "turn.loop_aborted",
+            TurnEventKind::Halted => "turn.halted",
             TurnEventKind::ToolResult => "tool.result",
             TurnEventKind::CallIdReused => "tool.call_id_reused",
             TurnEventKind::LlmRetried => "llm.retried",

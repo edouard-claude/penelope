@@ -354,3 +354,56 @@ async fn a_refusal_stops_the_run_and_nothing_resumes_it() {
     assert_eq!(e.p.call_count(), 2);
     assert_eq!(s.runs.trace(&run.id).await.unwrap().len(), 2);
 }
+
+/// #302 : « vas-y » écrit dans la **conversation d'origine** l'événement du lancement et
+/// une note pour son prochain tour, qui nomme le run et `workflow_status` ; un clic rejoué
+/// n'écrit rien de plus, et la session du run n'en reçoit pas.
+#[tokio::test]
+async fn go_tells_the_origin_conversation_once() {
+    let e = env().await;
+    let s = &e.d.services;
+    let (chat, v1) = proposed(&e).await;
+    let first = go_plan(&e.d, &chat, 1, &v1.fingerprint(), &owner())
+        .await
+        .unwrap();
+    assert!(first.created);
+    let kind = super::super::plan_run::KIND_PLAN_LAUNCHED;
+    let launched = s.events.session_events_of_kind(&chat, kind).await.unwrap();
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].payload["run"], first.run.id);
+    assert_eq!(launched[0].payload["version"], 1);
+    assert_eq!(launched[0].payload["step"], "e1-spec");
+    let notes = penelope_app::notices::peek(s, &chat).await.unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains(&format!("run `{}`", first.run.id))
+            && notes[0].contains("`workflow_status`")
+            && notes[0].contains("Corriger /stop")
+            && notes[0].contains("`e1-spec`"),
+        "{}",
+        notes[0]
+    );
+
+    go_plan(&e.d, &chat, 1, &v1.fingerprint(), &owner())
+        .await
+        .unwrap();
+    assert_eq!(
+        s.events
+            .session_events_of_kind(&chat, kind)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "clic rejoué : rien de plus"
+    );
+    assert_eq!(
+        penelope_app::notices::peek(s, &chat).await.unwrap().len(),
+        1
+    );
+    assert!(
+        penelope_app::notices::peek(s, &first.run.session_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

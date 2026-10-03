@@ -19,6 +19,31 @@ fn link_key(run_id: &str) -> String {
     format!("wf.plan.link.{run_id}")
 }
 
+/// Événement écrit dans la **session d'origine** quand « vas-y » lance le run (#302) :
+/// la conversation qui a préparé le plan sait qu'il est parti.
+pub const KIND_PLAN_LAUNCHED: &str = "workflow.plan.launched";
+
+/// La note du prochain tour de la conversation d'origine (#302) : le 03/10, la session
+/// ignorait que le clic avait lancé le run et a rappelé `workflow_start` quatre fois.
+fn launched_note(draft: &PlanDraft, run: &Run) -> String {
+    let step = run
+        .current_step
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!(", étape `{s}`"))
+        .unwrap_or_default();
+    format!(
+        "Le propriétaire a cliqué « vas-y » sur la carte du plan v{} (« {} ») : le run `{}` \
+         est lancé{step}. Ne rappelle ni `workflow_start` ni `workflow_plan` pour ce plan ; \
+         `workflow_status` (run_id `{}`) donne son état, `workflow_control` le met en pause \
+         ou le reprend.",
+        draft.plan.version(),
+        draft.plan.goal(),
+        run.id,
+        run.id
+    )
+}
+
 /// Le lien d'un run de plan vers la révision qu'il exécute : `session`, `version`,
 /// `fingerprint`, `workflow`. Un run lancé hors plan n'en a pas.
 pub(super) async fn plan_link(s: &Services, run_id: &str) -> Option<Value> {
@@ -196,6 +221,23 @@ async fn launch(
         .ok_or("run introuvable")?;
     progress(d, &run, &wf, None).await;
     d.workflows.wake();
+    // La conversation d'origine apprend le lancement (#302) : l'événement dans sa
+    // session, et une note pour son prochain tour, puisque rien n'entre dans un
+    // transcript hors tour. Le cœur écrit les deux ; le canal n'y est pour rien.
+    let _ = s
+        .events
+        .append(
+            EventDraft::new(
+                KIND_PLAN_LAUNCHED,
+                json!({"run": run.id, "version": draft.plan.version(), "fingerprint": fingerprint,
+                       "workflow": draft.workflow_id, "step": run.current_step}),
+            )
+            .session(session),
+        )
+        .await;
+    if let Err(e) = penelope_app::notices::push(s, session, &launched_note(draft, &run)).await {
+        tracing::warn!(run = %run.id, error = %e, "lancement du plan non noté pour la conversation");
+    }
     Ok((run, true))
 }
 
