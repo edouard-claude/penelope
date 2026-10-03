@@ -12,6 +12,134 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.38
+
+**Vocaux Telegram : l'original est conservé et son chemin suit le transcript (#308).**
+Constat : à la réception d'un vocal, la passerelle téléchargeait les octets, les confiait
+à la transcription et les oubliait ; l'agent ne recevait que le texte et ne pouvait pas
+réutiliser l'audio, par exemple pour importer dans un serveur MCP un échantillon de voix
+envoyé par le propriétaire, sans lui demander de le renvoyer comme document.
+
+Correctif. `penelope_app::media::save_voice` range l'original sous `{data}/media/voice`, au
+format reçu (OGG/Opus pour un vocal, l'extension d'origine pour un fichier audio), sous un
+nom tiré du message (`tg_<chat>_<message>`) : une réception rejouée réécrit le même
+fichier. `voice_note` ajoute au message transcrit `(vocal enregistré : <chemin> ; …)`,
+comme la mention d'une photo ; la notion reste générique côté cœur (archtest vert), le
+nom vient de la passerelle. La transcription est inchangée : un original qui ne s'écrit
+pas est journalisé et le transcript part sans chemin. Une transcription en échec garde
+l'original, seule trace du vocal : le propriétaire voit l'erreur comme avant, et le tour
+reçoit `(message vocal, transcription échouée : …)` avec le chemin, pour que l'agent
+puisse la relancer ; une transcription vide l'efface, qu'aucun message ne citerait. **Purge et rétention** : la purge d'une
+session efface déjà les fichiers sous `{data}/media` cités par ses messages
+(`media_paths`), elle emporte donc l'original avec son message ; comme pour les photos, il
+n'existe pas de rétention par âge des médias (`retention.days` ne touche que la base), ce
+lot n'en ajoute pas. Rien dans le daemon. Tests : vocal reçu, fichier écrit à l'octet,
+chemin vu par le modèle, transcript intact, purge de la session qui l'efface, écriture
+impossible qui laisse passer la transcription, échec de transcription qui garde
+l'original et en transmet le chemin. Doc : install-headless.md (« Messages vocaux »).
+
+Closes #308.
+
+**Binaire local d'abord : `git_clone` emprunte les identifiants de `gh` ou de `glab`
+connecté, et le message système le dit (#305).** Constat (run de plan vu dans #302) :
+`git_clone` sur un dépôt GitHub privé en https échouait faute d'identifiants, puis le
+modèle relançait `gh repo clone` dans le shell, qui réussissait. Un appel perdu, et un
+clone qui échappait aux contrôles de `git_clone` (`normalize_clone_url`, réutilisation du
+dépôt déjà présent, #160). L'inventaire savait pourtant `gh` connecté (#156) ; personne
+ne s'en servait pour décider. Principe validé par le propriétaire : comme sa bibliothèque
+de serveurs MCP, Pénélope a une bibliothèque de binaires locaux, et elle les privilégie,
+surtout authentifiés.
+
+Correctif. **`git_clone`** : sur une source `https://` dont l'hôte est github.com avec
+`gh` connecté, ou l'instance à laquelle `glab` est connecté, l'executor lit l'inventaire
+rangé (`machine.inventory`, sans sonde dans le tour) et passe à git
+`-c credential.https://<hôte>.helper=` puis `-c credential.https://<hôte>.helper=!gh auth
+git-credential` (resp. `glab`) : git demande le jeton à l'assistant par son entrée
+standard, rien ne le porte dans l'adresse, les arguments, l'environnement, le journal,
+l'audit ni la trace, ni dans `.git/config` du clone. Les contrôles restent ; le résultat
+dit `credentials: "gh"`. Un clone qui échoue avec l'assistant refait **une** sonde de
+connexion (`machine::recheck_login`), range l'état corrigé dans `kv` s'il a changé (la
+ligne T1 cesse de dire connecté ce qui ne l'est plus) et le dit dans l'erreur, sans
+nouvel essai. `ssh://` et `git@…` gardent les clés SSH. **Inventaire** : l'état
+d'authentification y était déjà, sans jeton (`account` : compte `gh`, instance `glab`,
+`joignable` pour Docker, sondes rafraîchies avec l'inventaire, jamais `--show-token`) ; un
+test le fixe sur une sortie de `gh auth status` qui affiche une ligne `Token:`. **Message
+système** : une phrase « Binaire local d'abord, serveur MCP ou service tiers ensuite : un
+binaire connecté porte déjà ses identifiants, ne les redemande pas (`git_clone` passe par
+ceux de `gh`). » ferme la ligne machine du bloc d'environnement dès qu'un binaire connu est
+présent ; la parenthèse ne nomme que les forges connectées. Elle ne dépend que des
+binaires et de leur connexion, comme le reste de la ligne : elle ne bouge pas d'un tour à
+l'autre, le préfixe reste stable. Aucun rejeu existant ne sème d'inventaire : aucun
+attendu ni test doré ne change. Pour les rejeux, `Platform` porte `git_config` (vide sur la machine) et
+`Services::for_tests_with` la retouche avant de la partager ; le harnais gagne
+`[[forge_repos]]`, un dépôt privé fictif servi par un dépôt nu local derrière une
+réécriture d'adresse. Doc : install-headless.md (« Binaire local d'abord », ligne
+machine).
+
+Tests : un faux hôte git en HTTP qui exige une authentification Basic, et un faux client
+de forge comme assistant : refus sans lui, clone réussi avec lui, jeton absent du
+résultat, de l'erreur et de la configuration du clone ; l'assistant scopé à l'hôte et
+seulement pour `https://` ; le choix du client (`gh` pour github.com, `glab` pour son
+instance, rien sans connexion) ; la règle présente une fois et fixe, absente sans binaire ;
+la nouvelle sonde qui corrige un inventaire périmé. Scénario de rejeu
+`outils-git-prive` : `gh` marqué connecté, dépôt privé fictif, `git_clone` par le
+raccourci `owner/repo` réussit en un appel (`credentials: gh`) sans repli shell, puis
+`fs_read` du README. Ce qui marchait déjà et continue : la réutilisation d'un clone
+présent, la validation des sources, les clones `file://`, la ligne T1 stable à la mise à
+jour d'un binaire, la remarque de `http_fetch` vers une forge connectée. Reste ouvert :
+les autres outils natifs ne consultent pas encore l'inventaire ; le scénario ne sollicite
+pas l'assistant lui-même (la forge fictive est locale), c'est le test de `penelope-tools`
+qui l'exerce.
+
+Closes #305.
+
+**MCP : une image ou un son rendu par un outil n'est plus perdu (#304).** Constat (run de
+plan vu dans #302) : une étape de workflow téléchargeait les captures d'écran d'un ticket
+par l'outil de pièces jointes du serveur de tickets ; le modèle recevait `[image
+image/png, N octets en base64, non transmise]` et rien n'apparaissait dans le répertoire
+du run. Cause : `result_json` (`penelope-mcp-host`) remplaçait tout bloc `image`/`audio`
+par ce texte, sans le poser nulle part ni le montrer au modèle. Le `save_path` de l'outil
+est une affaire du serveur, qui écrit chez lui.
+
+Correctif. `result_json` garde la donnée du bloc à côté de sa mention (le port
+`McpGateway` le dit) ; qui ne lit que le texte (relève `mcp_poll`, agenda du digest) voit
+la même mention qu'avant. L'exécuteur (`penelope-executor`, module `mcp_media`) pose le
+bloc sur disque avant tout transcript : `mcp-media/` du répertoire du run pour une étape
+de workflow, sinon `{data}/media/mcp/<session>/` ; nom tiré du contenu (16 caractères de
+SHA-256, extension d'après le type), donc la même capture rendue deux fois est le même
+fichier ; plafond de 10 Mo décodés, celui d'une photo reçue, jugé avant de décoder. Le
+résultat garde `[image image/png, 12 Ko, enregistrée : <chemin>]` ; au-delà du plafond ou
+en base64 illisible, rien n'est écrit et la mention le dit. Aucun base64 ne reste dans la
+valeur, le texte, le ledger ni l'historique. Si le modèle du tour lit les images (d'après
+le catalogue, comme une photo Telegram), la boucle les lui montre à l'appel qui suit le
+résultat, dans la copie envoyée seulement, en un message final marqué contenu observé :
+l'historique et le préfixe ne bougent pas, et une image refusée par le fournisseur suit
+le chemin de #231. Codex, modèle principal de l'instance, la reçoit comme les autres :
+son catalogue annonce les images et le message part en `input_image` après le
+`function_call_output` (testé sur le corps Responses et dans la boucle). L'URI passe par `model_data_url`, la réduction des photos reçues
+(#242), via deux méthodes du port `ToolExecutor` (`shown_images`, `model_images`) : la
+boucle ne connaît ni le disque ni MCP. Seul l'exécuteur écrit le champ `saved` ; celui
+qu'un serveur glisserait est retiré, et un chemin hors des dossiers de médias n'est jamais
+montré. `image_inspect` lit aussi `{data}/media/mcp`. Rétention : la purge d'une session
+emporte les fichiers que cite son historique (chemin sous `{data}/media`, déjà en place) ;
+la passe quotidienne retire ceux de `{data}/media/mcp` plus vieux que `retention.days`
+(`mcp_media` dans son rapport) ; ceux d'un run partent avec son répertoire. Le daemon ne
+change pas. Doc : mcp.md (« Risque et approbation »).
+
+Tests : bloc image écrit, nom stable, mention avec chemin et sans base64 ; bloc audio écrit
+mais jamais montré ; plafond dépassé et base64 illisible sans fichier ; `saved` forgé par un
+serveur retiré et chemin hors racine refusé ; appel MCP de bout en bout hors workflow
+(dossier de la session, URI pour le modèle, racine d'`image_inspect`) et dans un run
+(`mcp-media/` du répertoire du run) ; boucle : un modèle qui voit reçoit la capture à
+l'appel suivant et une seule fois, l'historique n'en garde que le chemin, un modèle sans
+vision n'a que le chemin ; rétention des vieux médias seulement. Ce qui marchait déjà et
+continue : les photos Telegram et `image_inspect`, les blocs texte et ressource, la relève
+`mcp_poll` et l'agenda du digest. Assumé : un audio n'est jamais transmis au modèle, seul son
+chemin l'est (un outil de transcription le relit). Reste ouvert : les blocs binaires d'une ressource
+(`mcp_resource_read`) restent une mention.
+
+Closes #304.
+
 ### 1.0.37
 
 **Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les

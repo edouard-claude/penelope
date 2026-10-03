@@ -1,7 +1,8 @@
 //! Pièces jointes reçues : photos et fichiers, rangés hors de la base (§14.4).
 //!
 //! Les photos vivent sous `{data}/media/photos` : le tour qui les porte les relit pour
-//! les montrer au modèle. Un fichier qui n'est pas un document ingérable est déposé dans
+//! les montrer au modèle. Les vocaux reçus gardent leur original sous `{data}/media/voice`,
+//! à côté de leur transcription (issue #308). Un fichier qui n'est pas un document ingérable est déposé dans
 //! le premier workspace, là où les outils de fichiers et le shell peuvent l'atteindre.
 
 use crate::services::Services;
@@ -113,6 +114,46 @@ pub fn save_photo(s: &Services, bytes: &[u8]) -> Result<PathBuf, String> {
     ));
     write(&path, bytes)?;
     Ok(path)
+}
+
+/// Conserve l'original d'un vocal reçu sous `{data}/media/voice`, au format d'origine
+/// (issue #308). `key` nomme le message d'où il vient : une réception rejouée réécrit le
+/// même fichier au lieu d'en ajouter un. L'extension est celle de `file_name`
+/// (`audio.ogg`), `ogg` à défaut. Renvoie le chemin.
+pub fn save_voice(
+    s: &Services,
+    key: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let ext = Path::new(file_name)
+        .extension()
+        .map(|e| safe_file_name(&e.to_string_lossy()))
+        .unwrap_or_else(|| "ogg".into());
+    let path = s
+        .platform
+        .dirs
+        .data()
+        .join("media")
+        .join("voice")
+        .join(format!("{}.{ext}", safe_file_name(key)));
+    write(&path, bytes)?;
+    Ok(path)
+}
+
+/// Mention d'un vocal conservé, jointe au texte transcrit comme celle d'une photo : le
+/// chemin y reste pour qu'un outil réutilise l'audio, et la purge d'une session l'y lit.
+pub fn voice_note(path: &Path) -> String {
+    format!(
+        "\n(vocal enregistré : {} ; audio d'origine, à transmettre tel quel à un outil)",
+        path.display()
+    )
+}
+
+/// Médias rendus par les outils MCP hors workflow, un dossier par session (issue #304) :
+/// l'exécuteur les y pose, la rétention les en retire.
+pub fn mcp_root(data: &Path) -> PathBuf {
+    data.join("media").join("mcp")
 }
 
 /// Relit une image enregistrée et la rend en URI `data:` pour le modèle.
@@ -502,5 +543,25 @@ mod tests {
         assert_eq!(p["before"], "4000x3000");
         assert_eq!(p["after"], "3600x2700");
         assert_eq!(p["after_bytes"], 3_600 * 2_700 / 3);
+    }
+
+    /// Issue #308 : l'original d'un vocal est rangé sous `media/voice`, au format reçu,
+    /// sous un nom tiré du message ; la mention cite son chemin.
+    #[tokio::test]
+    async fn a_voice_note_is_kept_under_a_stable_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            std::sync::Arc::new(penelope_kernel::clock::SystemClock);
+        let s = Services::for_tests(dir.path().join("home"), clock)
+            .await
+            .unwrap();
+        let path = save_voice(&s, "c1_60", "audio.ogg", b"OggS-1").unwrap();
+        assert_eq!(path, s.platform.dirs.data().join("media/voice/c1_60.ogg"));
+        let again = save_voice(&s, "c1_60", "audio.ogg", b"OggS-2").unwrap();
+        assert_eq!(again, path, "une réception rejouée réécrit le même fichier");
+        assert_eq!(std::fs::read(&path).unwrap(), b"OggS-2");
+        let mp3 = save_voice(&s, "../x", "audio.mp3", b"ID3").unwrap();
+        assert_eq!(mp3.file_name().unwrap(), "x.mp3", "nom sans chemin");
+        assert!(voice_note(&path).contains(&path.display().to_string()));
     }
 }

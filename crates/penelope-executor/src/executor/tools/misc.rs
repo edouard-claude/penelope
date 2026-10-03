@@ -102,10 +102,14 @@ impl NativeToolExecutor {
                     crate::vision::Task::parse(&str_arg(args, "mode")?).ok_or_else(|| {
                         ToolError::Invalid("`mode` : describe, read ou locate".into())
                     })?;
-                // Une photo reçue vit dans `{data}/media/photos`, hors des workspaces.
+                // Une photo reçue vit dans `{data}/media/photos`, une image d'outil MCP
+                // dans `{data}/media/mcp` (#304), hors des workspaces.
                 let mut roots = self.workspaces();
                 roots.push(penelope_platform::sandbox::normalise(
                     &s.platform.dirs.data().join("media").join("photos"),
+                ));
+                roots.push(penelope_platform::sandbox::normalise(
+                    &crate::mcp_media::root(&s.platform.dirs.data()),
                 ));
                 let path = penelope_tools::fs::resolve(&str_arg(args, "path")?, &roots)?;
                 let o = self

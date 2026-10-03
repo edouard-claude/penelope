@@ -380,3 +380,89 @@ async fn a_rare_native_tool_is_found_and_called_like_a_direct_one() {
         vec!["schedule_create".to_string()]
     );
 }
+
+/// Passerelle qui rend une capture d'écran, comme `result_json` la transmet.
+struct ScreenshotGateway;
+
+/// Un PNG de 1 × 1, en base64.
+const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+#[async_trait::async_trait]
+impl McpGateway for ScreenshotGateway {
+    async fn call_tool(
+        &self,
+        _qualified: &str,
+        _args: &Value,
+        _from: penelope_app::elicitation::Destination,
+    ) -> Result<Value, String> {
+        Ok(json!({"content": [
+            {"type": "text", "text": "1 pièce jointe"},
+            {"type": "image", "mimeType": "image/png", "data": PNG,
+             "text": "[image image/png, 96 octets en base64, non transmise]"},
+        ], "isError": false}))
+    }
+    async fn server_lines(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// #304 : hors workflow, l'image d'un outil MCP est posée sous `{data}/media/mcp/<session>`,
+/// le texte du résultat donne son chemin sans base64, et l'exécuteur la rend au modèle.
+#[tokio::test]
+async fn an_mcp_image_lands_in_the_session_media_dir_and_can_be_shown() {
+    let (_d, mut x) = executor().await;
+    with_redmine(&mut x).await;
+    x.mcp = Some(Arc::new(ScreenshotGateway));
+    let out = x
+        .execute("mcp__redmine__get_issue", &json!({"issue_id": 7653}))
+        .await
+        .unwrap();
+    assert!(!out.text.contains(PNG) && !out.value.to_string().contains(PNG));
+    let shown = x.shown_images(&out.value);
+    assert_eq!(shown.len(), 1, "{}", out.value);
+    let data = x.services.platform.dirs.data();
+    assert!(
+        shown[0].starts_with(data.join("media").join("mcp").join("s1")),
+        "{}",
+        shown[0].display()
+    );
+    assert!(
+        out.text.contains(&shown[0].display().to_string()),
+        "{}",
+        out.text
+    );
+    assert!(out.text.contains("1 pièce jointe"));
+    let urls = x.model_images(&shown, "openrouter:v/voit", "s1").await;
+    assert_eq!(urls.len(), 1);
+    assert!(urls[0].starts_with("data:image/"), "{}", &urls[0][..30]);
+    // `image_inspect` peut la relire : le dossier est dans ses racines.
+    let roots = x.mcp_media_roots();
+    assert!(roots.iter().any(|r| shown[0].starts_with(r)));
+}
+
+/// #304 : dans une étape de workflow, l'image va dans le répertoire du run.
+#[tokio::test]
+async fn an_mcp_image_in_a_workflow_lands_in_the_run_dir() {
+    let (d, x) = executor().await;
+    let workdir = penelope_platform::sandbox::normalise(&d.path().join("runs").join("r1"));
+    std::fs::create_dir_all(&workdir).unwrap();
+    let mut env = x.env.clone();
+    env.in_workflow = true;
+    env.run_id = Some("r1".into());
+    env.workspaces.insert(0, workdir.clone());
+    let mut x = NativeToolExecutor::new(x.services.clone(), env);
+    with_redmine(&mut x).await;
+    x.mcp = Some(Arc::new(ScreenshotGateway));
+    let out = x
+        .execute("mcp__redmine__get_issue", &json!({"issue_id": 7653}))
+        .await
+        .unwrap();
+    let shown = x.shown_images(&out.value);
+    assert_eq!(shown.len(), 1, "{}", out.value);
+    assert!(
+        shown[0].starts_with(canonical_workspace(&workdir).join("mcp-media")),
+        "{}",
+        shown[0].display()
+    );
+    assert!(shown[0].exists());
+}

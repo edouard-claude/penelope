@@ -73,10 +73,13 @@ impl Harness<'_> {
     /// simulé, reprise. La première vie sème aussi les fichiers et ouvre la session.
     async fn boot_once(&mut self, first: bool) -> anyhow::Result<Value> {
         let shared: SharedClock = self.clock.clone();
+        let git_config = seed_forge(self.root.path(), &self.spec.forge_repos)?;
         let services = Arc::new(
-            Services::for_tests(self.root.path().to_path_buf(), shared)
-                .await
-                .context("services de test")?,
+            Services::for_tests_with(self.root.path().to_path_buf(), shared, |p| {
+                p.git_config = git_config
+            })
+            .await
+            .context("services de test")?,
         );
         self.db = Some(services.store.path().to_path_buf());
         for id in &self.spec.vision_models {
@@ -677,6 +680,41 @@ fn seed_git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
         String::from_utf8_lossy(&out.stderr)
     );
     Ok(())
+}
+
+/// Sème les dépôts `[[forge_repos]]` hors du workspace (une fois, la première vie) et rend
+/// la réécriture d'adresse de chacun vers son dépôt nu.
+fn seed_forge(
+    root: &Path,
+    repos: &[crate::scenario::ForgeRepo],
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut config = Vec::new();
+    for (i, r) in repos.iter().enumerate() {
+        let bare = root.join("forge").join(format!("{i}.git"));
+        if !bare.exists() {
+            let work = root.join("forge").join(format!("{i}.travail"));
+            std::fs::create_dir_all(&bare)?;
+            std::fs::create_dir_all(&work)?;
+            seed_git(&bare, &["init", "-q", "--bare", "-b", "main"])?;
+            seed_git(&work, &["init", "-q", "-b", "main"])?;
+            for (path, content) in &r.files {
+                let file = work.join(path);
+                if let Some(parent) = file.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&file, content)?;
+            }
+            seed_git(&work, &["add", "."])?;
+            seed_git(&work, &["commit", "-q", "--allow-empty", "-m", "départ"])?;
+            seed_git(&work, &["push", "-q", &bare.to_string_lossy(), "main"])?;
+        }
+        // Chemin absolu d'un répertoire temporaire : ni espace ni caractère à échapper.
+        config.push((
+            format!("url.file://{}.insteadOf", bare.display()),
+            r.url.clone(),
+        ));
+    }
+    Ok(config)
 }
 
 /// Sème un dépôt `[[repos]]` : `base` vide poussée sur un remote nu, `branch` avec les

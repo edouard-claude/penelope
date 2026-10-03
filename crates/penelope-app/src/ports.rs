@@ -330,7 +330,9 @@ pub fn question_text(
 pub trait McpGateway: Send + Sync {
     /// Appelle un outil par son nom qualifié `mcp__<serveur>__<outil>`.
     /// `from` : la conversation qui appelle — une élicitation du serveur y revient
-    /// plutôt que d'atterrir dans le chat privé (issue #143).
+    /// plutôt que d'atterrir dans le chat privé (issue #143). Un bloc `image` ou `audio`
+    /// du résultat garde son `data` en base64 à côté d'un `text` qui le mentionne :
+    /// l'appelant qui le garde le pose sur disque avant tout transcript (issue #304).
     async fn call_tool(
         &self,
         qualified: &str,

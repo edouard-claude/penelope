@@ -36,16 +36,7 @@ impl NativeToolExecutor {
                 )
                 .await?
             }
-            "git_clone" => {
-                let dest = self.path_arg(args, "dest")?;
-                penelope_tools::git::clone_in(
-                    &str_arg(args, "url")?,
-                    &dest,
-                    &self.workspaces(),
-                    u_arg(args, "depth").map(|d| d as u32),
-                )
-                .await?
-            }
+            "git_clone" => return self.git_clone(args).await,
             "git_push" => {
                 penelope_tools::git::push(
                     &self.cwd_arg(args)?,
@@ -60,6 +51,53 @@ impl NativeToolExecutor {
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// `git_clone` (#305) : sur une source `https://` dont le client de forge est connecté
+    /// d'après l'inventaire, git emprunte ses identifiants par l'assistant du client. Un
+    /// échec avec cet assistant refait une fois la sonde de connexion et le dit, sans
+    /// nouvel essai.
+    async fn git_clone(&self, args: &Value) -> ToolResult<ToolOutcome> {
+        let s = &self.services;
+        let dest = self.path_arg(args, "dest")?;
+        let url = str_arg(args, "url")?;
+        let mut auth = penelope_tools::git::CloneAuth::default();
+        if let Some(host) = penelope_tools::git::normalize_clone_url(&url)
+            .ok()
+            .and_then(|u| penelope_tools::git::https_host(&u))
+            && let Some(inv) = penelope_app::machine::cached(s).await
+            && let Some(program) = inv.credential_helper(&host)
+        {
+            auth = penelope_tools::git::CloneAuth::forge_helper(program, &host);
+        }
+        auth.config.extend(s.platform.git_config.iter().cloned());
+        let cloned = penelope_tools::git::clone_in(
+            &url,
+            &dest,
+            &self.workspaces(),
+            u_arg(args, "depth").map(|d| d as u32),
+            &auth,
+        )
+        .await;
+        match (cloned, auth.helper) {
+            (Ok(v), _) => Ok(ToolOutcome::ok(v)),
+            (Err(ToolError::Other(why)), Some(program)) => {
+                let now = match penelope_app::machine::recheck_login(s, &program).await {
+                    Some(account) => format!(
+                        "`{program}` est toujours connecté ({account}) : l'échec ne vient pas \
+                         de sa connexion (droits sur le dépôt, adresse)"
+                    ),
+                    None => format!(
+                        "`{program}` n'est plus connecté, l'inventaire est corrigé : au \
+                         propriétaire de lancer `{program} auth login`, ne réessaie pas"
+                    ),
+                };
+                Err(ToolError::Other(format!(
+                    "{why}\nIdentifiants empruntés à `{program}` ; nouvelle sonde : {now}."
+                )))
+            }
+            (Err(e), _) => Err(e),
+        }
     }
 
     /// Réseau.

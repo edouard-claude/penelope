@@ -50,6 +50,12 @@ const REFLEX: &[(&str, &str)] = &[
     ("docker", "images et conteneurs → `docker`"),
 ];
 
+/// La règle « binaire local d'abord » (#305), émise dès qu'un binaire connu est là. Elle
+/// ne dépend que des binaires et de leur connexion : la ligne T1 ne bouge pas d'un tour à
+/// l'autre.
+const LOCAL_FIRST: &str = "Binaire local d'abord, serveur MCP ou service tiers ensuite : un \
+     binaire connecté porte déjà ses identifiants, ne les redemande pas";
+
 /// Les binaires dont l'absence de connexion se voit : sans elle, la règle de réflexe
 /// n'est pas émise, même si le binaire est là.
 const NEEDS_LOGIN: &[&str] = &["gh", "glab"];
@@ -197,7 +203,38 @@ impl Inventory {
                 reflexes.join(" ; ")
             ));
         }
+        if !self.present.is_empty() {
+            line.push('\n');
+            line.push_str(LOCAL_FIRST);
+            // Seulement les forges connectées : nommer `glab` absent enverrait le modèle
+            // vers une commande qui n'existe pas.
+            let forges: Vec<String> = NEEDS_LOGIN
+                .iter()
+                .filter(|bin| self.connected(bin))
+                .map(|bin| format!("`{bin}`"))
+                .collect();
+            if !forges.is_empty() {
+                line.push_str(&format!(
+                    " (`git_clone` passe par ceux de {})",
+                    forges.join(" et de ")
+                ));
+            }
+            line.push('.');
+        }
         line
+    }
+
+    /// Le client de forge dont `git_clone` emprunte les identifiants pour `https://<host>`
+    /// (#305) : `gh` pour github.com, `glab` pour l'instance à laquelle il est connecté.
+    /// Rien si le client n'est pas connecté : git échouerait de la même façon, et un
+    /// assistant qui ne répond pas masquerait la vraie cause.
+    pub fn credential_helper(&self, host: &str) -> Option<&'static str> {
+        let host = host.to_ascii_lowercase();
+        if host == "github.com" && self.connected("gh") {
+            return Some("gh");
+        }
+        let glab = self.tool("glab")?.account.as_deref()?;
+        (host == glab.to_ascii_lowercase()).then_some("glab")
     }
 }
 
@@ -385,6 +422,34 @@ pub async fn cached(s: &Services) -> Option<Inventory> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Refait la sonde de connexion d'un client après un échec d'authentification (#305) :
+/// l'inventaire a jusqu'à une heure. Un état qui a changé est rangé dans `kv`, et la ligne
+/// T1 cesse de dire connecté ce qui ne l'est plus. Une seule sonde, jamais de nouvel essai
+/// du clone : l'appelant le dit au modèle et s'arrête.
+pub async fn recheck_login(s: &Services, name: &str) -> Option<String> {
+    let path = s.platform.discovery.path.clone();
+    let program = name.to_string();
+    let account = tokio::task::spawn_blocking(move || {
+        let bin = penelope_platform::process::which_in(&program, &path)?;
+        account_of(&program, &bin)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(mut inv) = cached(s).await
+        && let Some(tool) = inv.present.iter_mut().find(|t| t.name == name)
+        && tool.account != account
+    {
+        tool.account = account.clone();
+        if let Ok(raw) = serde_json::to_string(&inv)
+            && let Err(e) = s.kv_set(KV_KEY, &raw).await
+        {
+            tracing::warn!(error = %e, "inventaire après nouvelle sonde");
+        }
+    }
+    account
+}
+
 /// Hôtes desservis par `gh`, quel que soit le compte.
 const GITHUB_HOSTS: &[&str] = &[
     "github.com",
@@ -521,6 +586,90 @@ mod tests {
             "plus de réflexe vers `gh` : {after}"
         );
         assert!(after.contains("installés : gh, git"), "{after}");
+    }
+
+    /// #305 : la règle « binaire local d'abord » suit les binaires présents, fixe d'un
+    /// tour à l'autre ; une machine sans aucun binaire connu ne la porte pas.
+    #[test]
+    fn the_line_carries_the_local_first_rule() {
+        let line = inventory().prompt_line();
+        assert!(
+            line.ends_with(&format!(
+                "{LOCAL_FIRST} (`git_clone` passe par ceux de `gh`)."
+            )),
+            "{line}"
+        );
+        assert_eq!(line.matches("Binaire local d'abord").count(), 1);
+        let mut logged_out = inventory();
+        logged_out.present[0].account = None;
+        assert!(
+            logged_out
+                .prompt_line()
+                .ends_with(&format!("{LOCAL_FIRST}.")),
+            "sans forge connectée, la règle ne nomme personne"
+        );
+        let mut bare = inventory();
+        bare.present.clear();
+        assert!(!bare.prompt_line().contains("Binaire local d'abord"));
+    }
+
+    /// #305 : `git_clone` emprunte `gh` pour github.com et `glab` pour son instance,
+    /// seulement s'ils sont connectés.
+    #[test]
+    fn a_clone_borrows_only_a_connected_client() {
+        let inv = inventory();
+        assert_eq!(inv.credential_helper("github.com"), Some("gh"));
+        assert_eq!(inv.credential_helper("GitHub.com"), Some("gh"));
+        assert_eq!(inv.credential_helper("gitlab.apnl.tech"), None);
+        assert_eq!(inv.credential_helper("example.com"), None);
+
+        let mut logged_out = inventory();
+        logged_out.present[0].account = None;
+        assert_eq!(logged_out.credential_helper("github.com"), None);
+
+        let mut with_glab = inventory();
+        with_glab
+            .present
+            .push(tool("glab", None, Some("gitlab.apnl.tech")));
+        assert_eq!(
+            with_glab.credential_helper("gitlab.apnl.tech"),
+            Some("glab")
+        );
+        assert_eq!(with_glab.credential_helper("gitlab.com"), None);
+    }
+
+    /// #305 : l'inventaire garde l'état de connexion, jamais un jeton, même quand la
+    /// sortie de la sonde en affiche un.
+    #[test]
+    fn a_login_probe_keeps_the_account_not_the_token() {
+        let text = "github.com\n  ✓ Logged in to github.com account edouard-claude (keyring)\n\
+                    - Active account: true\n  - Token: gho_************************************\n\
+                    - Token scopes: 'gist', 'read:org', 'repo'";
+        let account = forge_login(true, text, Field::Account).unwrap();
+        assert_eq!(account, "edouard-claude");
+        let mut inv = inventory();
+        inv.present[0].account = Some(account);
+        let stored = serde_json::to_string(&inv).unwrap();
+        assert!(!stored.contains("gho_"), "{stored}");
+    }
+
+    /// Une nouvelle sonde sans le binaire (plateforme de test : PATH vide) le dit
+    /// déconnecté et corrige l'inventaire rangé, donc la ligne T1.
+    #[tokio::test]
+    async fn a_recheck_corrects_a_stale_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::TestClock::default());
+        let s = crate::services::Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap();
+        s.kv_set(KV_KEY, &serde_json::to_string(&inventory()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(recheck_login(&s, "gh").await, None);
+        let after = cached(&s).await.unwrap();
+        assert!(!after.connected("gh"));
+        assert!(!after.prompt_line().contains("gh api"));
     }
 
     /// Le profil de bac à sable et le réseau du shell sont dits : ils décident de ce qui

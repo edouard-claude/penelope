@@ -160,8 +160,9 @@ fn template_hint(logs: &[String]) -> Option<String> {
     None
 }
 
-/// Résultat d'outil au format MCP, sans les données binaires : une image ou un audio
-/// n'entre pas dans le transcript en base64.
+/// Résultat d'outil au format MCP. Une image ou un audio garde son `data` pour que
+/// l'exécuteur le pose sur disque (issue #304) ; son `text` n'est qu'une mention, pour
+/// qui ne lit que le texte (relève, digest) : le base64 n'entre jamais dans un transcript.
 pub fn result_json(r: &ToolResult) -> Value {
     let content: Vec<Value> = r
         .content
@@ -169,11 +170,15 @@ pub fn result_json(r: &ToolResult) -> Value {
         .map(|b| match b {
             ContentBlock::Text { text } => json!({"type": "text", "text": text}),
             ContentBlock::Image { data, mime_type } => json!({
-                "type": "text",
+                "type": "image",
+                "mimeType": mime_type,
+                "data": data,
                 "text": format!("[image {mime_type}, {} octets en base64, non transmise]", data.len()),
             }),
             ContentBlock::Audio { data, mime_type } => json!({
-                "type": "text",
+                "type": "audio",
+                "mimeType": mime_type,
+                "data": data,
                 "text": format!("[audio {mime_type}, {} octets en base64, non transmis]", data.len()),
             }),
             ContentBlock::ResourceLink {
