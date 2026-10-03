@@ -12,7 +12,7 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
-### 1.0.35
+### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les
 sujets existants le deviennent au premier démarrage (#301).** Constat sur une instance, le
@@ -74,6 +74,8 @@ nommé par le port, connu (`LinkedIn`) ou pas (`Dose`). Ce qui marchait déjà e
 `/projet` et `penelope session project` (scénarios `commandes-reglages`, `rpc-sessions`),
 le filtre T2 par projet, la stabilité du préfixe d'un tour à l'autre, les noms de sujets
 pour `/schedules` et le digest. Closes #301.
+
+### 1.0.35
 
 **Mémoire : le digest compte chaque candidat écarté une fois (#297), et la nuit tient le
 budget du Cœur au lieu de demander au propriétaire de l'alléger (#298).**
