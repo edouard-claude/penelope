@@ -284,7 +284,34 @@ impl Config {
             crate::cron::Cron::parse(&self.backup.cron)?;
         }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
-        self.validate_backup_s3()
+        self.validate_backup_s3()?;
+        self.validate_voice_postprocess()
+    }
+
+    /// Post-traitement vocal (#299) : moteur et périphérique connus, délai lisible et non
+    /// nul. Vérifié même éteint : une clé fausse se voit avant d'allumer.
+    fn validate_voice_postprocess(&self) -> Result<()> {
+        let p = &self.voice.postprocess;
+        if !VOICE_ENGINES.contains(&p.engine.trim()) {
+            return Err(KernelError::config(format!(
+                "voice.postprocess.engine `{}` inconnu : {}",
+                p.engine,
+                VOICE_ENGINES.join(", ")
+            )));
+        }
+        if !VOICE_RESEMBLE_DEVICES.contains(&p.resemble_device.trim()) {
+            return Err(KernelError::config(format!(
+                "voice.postprocess.resemble_device `{}` inconnu : {}",
+                p.resemble_device,
+                VOICE_RESEMBLE_DEVICES.join(", ")
+            )));
+        }
+        if parse_duration(&p.timeout)?.is_zero() {
+            return Err(KernelError::config(
+                "voice.postprocess.timeout : un délai non nul est attendu",
+            ));
+        }
+        Ok(())
     }
 
     /// Destination S3 (#289) : adresse en HTTPS (HTTP seulement vers la boucle locale),

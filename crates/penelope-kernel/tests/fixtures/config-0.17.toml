@@ -315,6 +315,18 @@ tts_voice = "fr_female"
 max_chars = 1500
 reply_in_kind = false
 
+[voice.postprocess]
+enabled = false
+engine = "resemble_enhance"
+timeout = "180s"
+ffmpeg_bin = ""
+ffmpeg_filters = "highpass=f=70,lowpass=f=16000,equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,loudnorm=I=-16:LRA=7:TP=-1.5"
+ffmpeg_output_args = "-ac 1 -ar 24000"
+opus_bitrate = "48k"
+resemble_bin = ""
+resemble_run_dir = ""
+resemble_device = "cpu"
+
 [retention]
 days = 90
 memory_history_days = 30

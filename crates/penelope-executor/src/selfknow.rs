@@ -120,8 +120,11 @@ async fn inventory_section(
                     "voice": cfg.voice.tts_voice,
                     "max_chars": cfg.voice.max_chars,
                     "reply_in_kind": cfg.voice.reply_in_kind,
-                    "ffmpeg": penelope_platform::audio::ffmpeg().is_some(),
+                    "ffmpeg": crate::voice::postprocess::ffmpeg_path(&cfg.voice.postprocess).is_some(),
                     "local_provider_enabled": cfg.providers.local.enabled,
+                    // Post-traitement local (#299) : allumé ou non, et son moteur.
+                    "postprocess": cfg.voice.postprocess.enabled,
+                    "postprocess_engine": cfg.voice.postprocess.engine,
                 },
             })
         }
