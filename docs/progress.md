@@ -312,6 +312,66 @@ lecture, encadré. Ce qui marchait déjà et continue : `mcp_poll` inchangé (m�
 `seen_items`), les quatre autres kinds, les alertes de planification, les notifications
 en texte libre. Closes #293.
 
+**Historique : les appels d'outils entrent dans l'index plein texte, dans `history_expand`
+et dans les ancres des résumés ; une commande lancée la veille se retrouve après
+compaction (#300).** Constat du 02 au 03/10 sur une instance : Pénélope avait produit un
+rendu audio par un `shell_exec` FFmpeg (`-af "highpass=…,acompressor=…,loudnorm=…"`) ; le
+lendemain, dans la même session compactée, `history_grep` sur `acompressor` ou `loudnorm`
+rendait 0 résultat, `history_expand` du bon nœud relisait le passage sans la commande, et
+elle a conclu « la commande exacte n'est plus récupérable » (commentaire de #299). La
+commande était intacte dans `messages.content`. Cause : les deux voies d'accès ne gardaient
+que le **texte** d'un message. `searchable()` indexait `message.text()`, vide pour un
+message assistant qui n'est qu'un appel (`messages_fts.content = ''`, vérifié sur
+l'instance) ; `history_expand` rendait `{seq, role, texte}`.
+
+Correctif, en cinq points. **Index** : `store::searchable_text` indexe le texte du message
+puis chaque appel sur sa ligne (`outil clé: valeur …`, feuilles de l'objet d'arguments
+aplaties, 2 000 caractères par appel, `fs_write.content` exclu, ainsi que la requête de
+`history_grep` et la question de `history_expand_query`, qui se retrouveraient elles-mêmes à
+chaque recherche), arguments passés par le
+rédacteur de `penelope-observe` (le même détecteur que `secret_shelf`, sans ranger : un
+jeton dans une commande est masqué avant l'index) ; le projecteur, la double écriture
+(`Row::of`) et `rebuild_fts` passent tous par `store::searchable`, qui garde le texte
+d'origine d'un corps externalisé ; `rebuild_fts` relit maintenant `tool_call_id`,
+`tool_name`, `artifact_id` et `event_id`, donc redonne les mêmes entrées que l'écriture
+directe. **`history_expand`** rend `appels: [{outil, arguments}]` pour un message qui en
+porte, arguments passés par `redact_json`, chaînes coupées à 1 500 caractères
+(`… [tronqué : N caractères]`), structure gardée. **Ancres** : type `commande`
+(`AnchorKind::Command`, rendu « commande »), première ligne de chaque `shell_exec` du lot,
+rédigée, 300 caractères, placée avant les ancres du texte sous le même plafond ;
+`history_describe` la montre, et le résumé la porte, donc `history_grep` trouve le nœud par
+un mot de la commande. **Réindexation** : migration `0026_messages_fts_tool_calls`, qui ne
+réécrit pas le cache (règle des caches de `penelope-archtest`) : elle pose
+`store.messages_fts_pending` dans `kv` si la base a des messages ; la passe de maintenance
+du daemon (`session_ops::reindex_fts_if_pending`) refait `messages_fts` depuis `messages`,
+lignes scellées comprises, lève la clé et laisse un `store.rebuilt` (`reason: migration`) ;
+`penelope store rebuild` et la reconstruction après restauration lèvent la clé aussi ; le
+journal n'est pas touché et `history verify` ne lit pas l'index. **Comportement** : règle du
+harnais dans le prompt système (« Ce que tu as fait reste écrit, même après un résumé » :
+`history_grep` sur un mot de la commande ou de l'argument avant de dire « irrécupérable »,
+puis `history_expand`), descriptions de `history_grep` et `history_expand` mises à jour.
+
+Tests : index (un appel trouvé par un mot de ses arguments, `loudnorm=I` compris, le
+résultat indexé à part ; corps d'un `fs_write` hors index et chemin dedans ; jeton masqué ;
+appel coupé au plafond ; `rebuild_fts` redonne les entrées de l'écriture directe, corps
+externalisé compris) ; `expanded_message` (appels rendus, jeton masqué, contenu tronqué,
+pas de clé sans appel) ; ancres (`shell_exec` seul, première ligne, rédigée, coupée) ;
+migration (marque posée sur une base avec messages, pas sur une base vide, journal
+intact, pas rejouée) ; `reindex_fts_if_pending` (une fois, journal de la conversation
+intact). Scénario `outils-historique-appels` : commande lancée (un `true` qui porte les
+filtres en arguments, sortie vide), deux échanges semés plus gros que la queue, `/compact`
+qui résume les quatre premiers messages, `history_grep`
+« acompressor » trouve le message brut et le résumé par son ancre, `history_expand` rend
+l'appel, la réponse cite la commande. La sortie du `shell_exec` qu'il recopie porte une
+durée mesurée : le normaliseur des scénarios masque désormais l'estimation de jetons d'un
+objet qui cite une durée (`{{tokens}}`), comme il le faisait pour la racine temporaire et
+la version, sans quoi deux rejeux différaient d'un jeton. Le texte du prompt système et les descriptions
+d'outils changent : les surfaces de tous les scénarios ont été régénérées
+(`UPDATE_SCENARIOS=1`), la référence des outils aussi (`UPDATE_DOCS=1`). Ce qui marchait
+déjà et continue : `history_grep` sur le texte et les sorties d'outils, les ancres `path`,
+`sha`, `ticket`, `url`, la refonte `history reindex`, les empreintes scellées (l'index n'en
+fait pas partie). Closes #300.
+
 ### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les

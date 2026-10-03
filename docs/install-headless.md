@@ -1777,9 +1777,9 @@ et `/stop` interrompt tout le lot.
 | `git_push` | external | Pousse une branche vers le dépôt distant. (à la demande) |
 | `git_status` | read | État du dépôt : branche, fichiers modifiés. (à la demande) |
 | `history_describe` | read | Manifeste d'un nœud de résumé : tokens, intervalle, enfants. (à la demande) |
-| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut. (à la demande) |
+| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut : chaque message avec son texte et, pour un message assistant, ses appels d'outils (`appels` : outil et arguments, longues valeurs tronquées). (à la demande) |
 | `history_expand_query` | read | Retrouve, dans toutes les sessions y compris fermées, les passages liés à une question en langage naturel : recherche mot significatif par mot significatif, extraits classés par nombre de mots trouvés, avec le titre et la date de leur session. (à la demande) |
-| `history_grep` | read | Recherche plein texte dans les messages bruts et les résumés. |
+| `history_grep` | read | Recherche plein texte dans les messages bruts (texte et appels d'outils : nom, commande, chemin, requête) et les résumés. |
 | `http_fetch` | external | Récupère une URL. |
 | `image_generate` | external | Génère une image et la stocke en artefact. (à la demande) |
 | `image_inspect` | read | Pose une question au modèle de vision sur une image : photo reçue (son chemin est dans le message) ou capture d'écran du workspace. (à la demande) |
@@ -2968,9 +2968,11 @@ modèle, comme le premier tour d'un fork. Chaque décision laisse un événement
 après échec, rien à compacter, réserve épuisée) et `context.compacted`, aussi en INFO dans
 les journaux. `/status`, `/budget` et `self_status` donnent la taille réelle du contexte,
 le seuil de fond et la date de la dernière compaction. Les derniers échanges restent mot pour mot, les identifiants
-(chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
-jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par
-`history_grep` et `history_expand`.
+(chemins, tickets, SHA, URLs, première ligne des commandes `shell_exec`) sont conservés
+tels quels, et un résumé existant est mis à jour plutôt que refait. Rien n'est effacé : les
+échanges résumés restent consultables par `history_grep` et `history_expand`, appels
+d'outils compris (nom et arguments indexés et rendus, secrets masqués) : une commande
+lancée la veille se retrouve par un mot de ses arguments, même après compaction (#300).
 
 **Notes de travail.** Pour une tâche longue, le modèle tient les notes de la session avec
 l'outil `session_notes` : objectif, plan, décisions, fichiers touchés, points ouverts,
@@ -3269,6 +3271,14 @@ refaire (lignes sans événement ni scellement) est laissée intacte et nommée.
 caches se rattrapent aussi seuls : à l'ouverture de chaque tour, ce qu'une écriture
 interrompue a laissé derrière le journal est refait ; un rattrapage en échec apparaît
 dans `penelope doctor`.
+
+L'index plein texte seul (`messages_fts`) se refait depuis les lignes de `messages`, lignes
+scellées comprises, par `penelope store rebuild`. Depuis la 1.0.35, il porte aussi les
+appels d'outils de chaque message (#300) ; la migration qui l'introduit ne réécrit pas
+l'index : elle pose la clé `store.messages_fts_pending` dans `kv`, que la passe de
+maintenance du daemon lève au premier passage en refaisant l'index (événement
+`store.rebuilt`, `reason: migration`). `penelope store rebuild` lève la clé aussi. Le
+journal n'est jamais touché, et `penelope history verify` ne lit pas l'index.
 
 ### Relire une requête envoyée
 

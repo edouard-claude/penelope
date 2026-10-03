@@ -247,11 +247,12 @@ pub(super) fn history() -> Vec<ToolSpec> {
         spec(
             "history_grep",
             RiskClass::Read,
-            "Recherche plein texte dans les messages bruts et les résumés. Par défaut dans \
-             la session en cours ; `scope: \"all\"` cherche dans toutes les sessions, y \
-             compris fermées, pour retrouver une conversation antérieure. `query` attend des \
-             mots-clés, pas une phrase : chaque mot doit apparaître. Chaque extrait donne le \
-             titre et la date de sa session.",
+            "Recherche plein texte dans les messages bruts (texte et appels d'outils : nom, \
+             commande, chemin, requête) et les résumés. Par défaut dans la session en \
+             cours ; `scope: \"all\"` cherche dans toutes les sessions, y compris fermées, \
+             pour retrouver une conversation antérieure. `query` attend des mots-clés, pas \
+             une phrase : chaque mot doit apparaître. Chaque extrait donne le titre et la \
+             date de sa session.",
             obj(
                 json!({
                     "query": {
@@ -284,7 +285,9 @@ pub(super) fn history() -> Vec<ToolSpec> {
         spec(
             "history_expand",
             RiskClass::Read,
-            "Contenu paginé d'un nœud ou d'un intervalle brut.",
+            "Contenu paginé d'un nœud ou d'un intervalle brut : chaque message avec son texte \
+             et, pour un message assistant, ses appels d'outils (`appels` : outil et \
+             arguments, longues valeurs tronquées).",
             obj(
                 json!({"node_id": {"type":"string"}, "page": {"type":"integer","minimum":0}}),
                 &["node_id"],

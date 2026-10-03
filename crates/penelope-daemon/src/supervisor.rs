@@ -549,6 +549,12 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         tracing::warn!(error = %e, "reconstruction des index après restauration");
     }
 
+    // Index plein texte des messages d'avant #300 : les appels d'outils y entrent au
+    // premier passage après la migration qui a posé la marque.
+    if let Err(e) = penelope_ops::session_ops::reindex_fts_if_pending(&d.services).await {
+        tracing::warn!(error = %e, "réindexation des appels d'outils");
+    }
+
     // Sauvegarde complète à l'heure dite (issue #42).
     if let Err(e) = penelope_ops::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
         tracing::warn!(error = %e, "sauvegarde nocturne");

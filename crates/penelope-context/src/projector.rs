@@ -30,7 +30,7 @@ use crate::replay::{
     Expected, Lineage, Origin, ReplayError, archive_expected, archive_of, session_events,
 };
 use crate::store::seal::sealed_offset_in;
-use crate::store::{HistoryStore, mark_compacted_in, origin_in, serialise_content};
+use crate::store::{HistoryStore, mark_compacted_in, origin_in, searchable, serialise_content};
 use penelope_kernel::event::Event;
 use penelope_kernel::ids::NodeId;
 use penelope_store::rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -145,35 +145,8 @@ fn addresses(c: &Connection, sid: &str) -> penelope_store::Result<BTreeMap<i64, 
     Ok(out)
 }
 
-/// Le texte que le plein texte indexe pour une ligne : celui du message, sauf pour un
-/// corps externalisé (niveau 1), dont l'index garde le texte d'origine, celui de
-/// l'événement d'ajout (`externalise` ne touche pas `messages_fts`).
-fn searchable(
-    tx: &Transaction<'_>,
-    node: &MessageNode,
-    event_id: Option<i64>,
-) -> penelope_store::Result<String> {
-    let original = match (&node.artifact_id, event_id) {
-        (Some(_), Some(id)) => tx
-            .query_row(
-                "SELECT kind, payload FROM events WHERE id = ?1",
-                [id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?
-            .and_then(|(kind, payload)| {
-                let value: Value = serde_json::from_str(&payload).ok()?;
-                match ConvEvent::decode(&kind, &value).ok()?? {
-                    ConvEvent::ToolResult(p) => Some(tool_node(p).message.text()),
-                    _ => None,
-                }
-            }),
-        _ => None,
-    };
-    Ok(original.unwrap_or_else(|| node.message.text()))
-}
-
-/// Écrit une ligne `messages` et son entrée plein texte.
+/// Écrit une ligne `messages` et son entrée plein texte (`store::searchable` : texte et
+/// appels d'outils, ou le texte d'origine d'un corps externalisé).
 #[allow(clippy::too_many_arguments)] // une colonne par argument, comme `insert_row`
 fn insert_message(
     tx: &Transaction<'_>,
@@ -221,7 +194,11 @@ fn insert_message(
     let id = tx.last_insert_rowid();
     tx.execute(
         "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1, ?2, ?3)",
-        params![searchable(tx, node, event_id)?, sid, id],
+        params![
+            searchable(tx, m, node.artifact_id.as_deref(), event_id)?,
+            sid,
+            id
+        ],
     )?;
     Ok(())
 }

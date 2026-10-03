@@ -1,0 +1,28 @@
+name = "outils-historique-appels"
+description = """Une commande lancée avant un résumé se retrouve (#300) : le modèle lance un
+`shell_exec` dont seuls les arguments portent les filtres audio (la commande commence par
+`true` : rien ne s'exécute, la sortie est vide), deux échanges semés plus gros que la queue
+verbatim poussent le tour hors de la queue, `/compact` le résume. Le propriétaire redemande la commande : `history_grep`
+sur un mot de l'argument (`acompressor`) la trouve dans le message brut (l'appel est
+indexé, pas seulement le texte) et dans l'ancre `commande` du résumé ; `history_expand` du
+nœud rend l'appel avec ses arguments (`appels`) ; la réponse la cite."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "fais le rendu audio de la maquette avec le filtre habituel"
+
+[[steps]]
+kind = "seed"
+exchanges = 2
+user = "point {i} : on reprend la maquette demain"
+assistant = "noté pour le point {i}"
+tokens = 3000
+
+[[steps]]
+kind = "command"
+command = "/compact"
+
+[[steps]]
+kind = "message"
+text = "quelle commande exacte avais-tu lancée pour le rendu, avec les filtres ?"
