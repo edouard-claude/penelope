@@ -284,6 +284,14 @@ impl Config {
             crate::cron::Cron::parse(&self.backup.cron)?;
         }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
+        // L'agenda du digest (#295) : un outil MCP par son nom qualifié, ou rien.
+        let agenda = self.digest.agenda.trim();
+        if !agenda.is_empty() && !agenda_tool_is_qualified(agenda) {
+            return Err(KernelError::config(format!(
+                "digest.agenda doit nommer un outil MCP qualifié `mcp__<serveur>__<outil>` \
+                 (par exemple `mcp__agenda__events_today`), lu : « {agenda} »"
+            )));
+        }
         self.validate_backup_s3()
     }
 

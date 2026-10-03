@@ -196,12 +196,18 @@ pub async fn digest_text(
             ));
         }
     }
-    // Ce qui part aujourd'hui, et où (#124).
+    // Ce qui part aujourd'hui, et où (#124), avec les rendez-vous de l'agenda (#295).
     let due = inputs.due_today;
     if !due.is_empty() {
         t.push_str(&format!(
             "\n🗓 Aujourd'hui :\n{}\n",
-            due.into_iter().take(10).collect::<Vec<_>>().join("\n")
+            due.into_iter().take(12).collect::<Vec<_>>().join("\n")
+        ));
+    }
+    if let Some(why) = inputs.agenda_error {
+        t.push_str(&format!(
+            "\n🗓 Agenda non lu : {}\n",
+            why.chars().take(200).collect::<String>()
         ));
     }
     // Lignes des composants d'au-dessus, telles quelles (#301).

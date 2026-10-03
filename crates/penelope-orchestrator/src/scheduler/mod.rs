@@ -73,7 +73,11 @@ pub async fn scheduler_loop(d: Context, ports: Ports) {
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        let (dream, feed) = (d.dream(), Arc::new(DigestFeed(d.services.clone())));
+        let feed = Arc::new(DigestFeed {
+            services: d.services.clone(),
+            mcp: ports.mcp.clone(),
+        });
+        let dream = d.dream();
         let crons = penelope_dream::system_crons(&dream, feed, &ports.messenger, &ports.mcp);
         if let Err(e) = crons.await {
             tracing::warn!(error = %e, "consolidation ou digest programmés");
@@ -234,6 +238,7 @@ async fn finish(
     Ok(())
 }
 
+mod agenda;
 mod digest;
 mod fire;
 mod origin;
@@ -241,11 +246,11 @@ mod outcome;
 mod templating;
 mod triggers;
 mod wake;
-pub use digest::{DigestFeed, digest_inputs};
+pub use digest::{DigestFeed, digest_inputs, digest_inputs_with};
 use fire::fire;
 pub use fire::{alert, create, label, recovered};
-use origin::target_origin;
 pub use origin::{destination, due_today, listing, place_name, retarget};
+use origin::{due_today_dated, target_origin};
 use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
 use templating::{items_lines, substitute, template_params, tool_payload};

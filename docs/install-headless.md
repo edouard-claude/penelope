@@ -478,6 +478,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.prune_episodic_days` | `180` | Âge d'élagage du journal. Sans effet dans cette version. |
 | `memory.expire_ecart_days` | `90` | Âge au-delà duquel un écart jamais promu est abandonné, en jours. |
 
+**[digest]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `digest.agenda` | `""` | Outil MCP qui rend les rendez-vous du jour, par son nom qualifié `mcp__<serveur>__<outil>` (`mcp__agenda__events_today` avec le serveur livré) ; vide : l'« Aujourd'hui » du digest ne liste que les planifications. L'outil doit être en lecture ; il est appelé avec `{"timezone": owner.timezone}` et doit rendre `events[]` avec `summary`, `start`, `end`, `all_day`, `calendar` et `location`. |
+
 **[mcp]**
 
 | Clé | Défaut | Rôle |
@@ -1826,6 +1832,41 @@ carte arrive sur Telegram (Accepter, Refuser, Annuler) ; sans réponse avant
 `elicitation_timeout` (10 min par défaut), la demande est annulée. Sans Telegram
 configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 
+### Agenda CalDAV
+
+Pénélope lit l'agenda du propriétaire par CalDAV, en lecture seule, sans permission à
+cliquer sur la machine (1.0.35, #295) : un serveur MCP livré dans le binaire, `penelope
+agenda-mcp`, que `mcp.d/agenda.toml` déclare. Chez iCloud, créer un mot de passe
+d'application (appleid.apple.com, « Mots de passe d'application ») ; chez Fastmail ou
+Nextcloud, un mot de passe d'application de même. Puis :
+
+```bash
+penelope secret set agenda_password
+cat > "$(penelope paths --json | jq -r .config)/mcp.d/agenda.toml" <<'EOF'
+command = "penelope"
+args = ["agenda-mcp"]
+timeout = "45s"
+
+[env]
+AGENDA_URL = "https://caldav.icloud.com"
+AGENDA_USER = "prenom@icloud.com"
+AGENDA_PASSWORD = "${SECRET:agenda_password}"
+AGENDA_TIMEZONE = "Indian/Reunion"
+EOF
+penelope mcp test agenda
+penelope config set digest.agenda mcp__agenda__events_today
+```
+
+`penelope mcp test agenda` découvre le compte, liste les calendriers et appelle un outil
+en lecture ; une erreur nomme l'étape (« identifiants refusés par le serveur CalDAV (HTTP
+401) ») sans jamais répéter le mot de passe. Le modèle atteint ensuite `calendar_list`,
+`events_today`, `events_range` et `event_search` par `tool_call`, comme tout serveur MCP ;
+`AGENDA_CALENDARS = "Perso, Famille"` restreint les calendriers servis. Avec
+`digest.agenda`, l'« Aujourd'hui » du digest mêle les rendez-vous du jour aux
+planifications, dans `owner.timezone` ; un agenda injoignable est dit en une ligne, sans
+retenir le digest. Le détail des variables, des outils, des récurrences servies et de ce
+qui n'est pas encore là est dans [mcp.md](mcp.md#lagenda-caldav-un-serveur-livré).
+
 ### Déposer une skill
 
 Une skill est un dossier avec un `SKILL.md` dans `{data}/skills/` : il suffit de le
@@ -2137,7 +2178,8 @@ longues avec la commande qui en propose le
 découpage, les entrées jamais rappelées depuis soixante jours (trois exemples), les
 motifs d'écart regroupés par famille avec leur compte (« imprécis : 18 »,
 « retrouvable ailleurs : 4 », cinq familles au plus, les autres additionnées), la
-dépense de la veille et l'agenda du jour. Deux nuits de suite ou plus sans rien promouvoir
+dépense de la veille et l'agenda du jour (les planifications et, avec `digest.agenda`, les
+rendez-vous du calendrier). Deux nuits de suite ou plus sans rien promouvoir
 ajoutent une ligne explicite, avec le motif dominant : un motif qui revient vingt fois est
 un réglage à revoir.
 

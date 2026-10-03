@@ -37,6 +37,12 @@ pub async fn run(cli: Cli) -> CliResult<()> {
     // Les commandes hors daemon d'abord : elles doivent marcher sans socket.
     match &cli.command {
         Command::Paths => return paths(&cli),
+        // Le serveur d'agenda (#295) : lancé par Pénélope elle-même, depuis `mcp.d`.
+        Command::AgendaMcp => {
+            return penelope_agenda_mcp::run_stdio()
+                .await
+                .map_err(CliError::Usage);
+        }
         Command::Approvals {
             cmd: Some(ApprovalsCmd::Stats { days }),
         } => return approval_stats::run(&cli, *days),

@@ -12,6 +12,74 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.37
+
+**Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les
+rendez-vous du jour dans l'« Aujourd'hui » du digest (#295).** Constat : Pénélope n'avait
+aucun agenda ; le digest ne listait que ses propres planifications et ignorait les
+rendez-vous, anniversaires et vacances du propriétaire, alors qu'elle sert déjà de rappel.
+L'instance est pilotée en SSH : aucune autorisation TCC ne peut être cliquée, le
+calendrier Apple local (EventKit, `shortcuts`) est hors de portée. Voie retenue, écrite
+dans la décision [0018](decisions/0018-agenda-caldav-en-lecture.md) : CalDAV avec un mot
+de passe d'application, en lecture seule, dans un serveur MCP à part, conformément à la
+frontière canal/cœur de la V1.
+
+Correctif. Nouvelle crate `penelope-agenda-mcp` : un serveur MCP stdio (protocole
+2025-06-18 au plus, `server/discover` inconnu, `initialize`, `tools/list`, `tools/call`,
+`ping`) qui lit un compte CalDAV (iCloud, Fastmail, Nextcloud, tout serveur en
+authentification Basic) : découverte RFC 6764 (`current-user-principal`,
+`calendar-home-set`, dossier), calendriers d'événements seuls (rappels et boîtes de
+réception écartés), redirection suivie avec la même méthode, `REPORT calendar-query`
+borné ; parseur iCalendar écrit à la main (dépliage, paramètres, `DTSTART`/`DTEND` en
+date, heure flottante, UTC ou `TZID`, `DURATION`, `EXDATE`, `RECURRENCE-ID`,
+`STATUS:CANCELLED`) et récurrences quotidienne (`BYDAY` filtre), hebdomadaire (`BYDAY`,
+`WKST`), mensuelle (`BYMONTHDAY`, `BYDAY` avec rang), annuelle (`BYMONTH`), `INTERVAL`,
+`COUNT`, `UNTIL` ; un `TZID` inconnu est rabattu sur `AGENDA_TIMEZONE`. Quatre outils,
+tous en lecture (`readOnlyHint`) : `calendar_list`, `events_today(timezone)`,
+`events_range(start, end, timezone)` (366 jours au plus), `event_search(query, from, to,
+timezone)` (50 résultats) ; texte lisible et `structuredContent` (`events[]` : `uid`,
+`summary`, `calendar`, `all_day`, `start`, `end` en RFC 3339 dans le fuseau demandé ou en
+dates pour une journée entière, `location`) ; arguments illisibles et identifiants refusés
+en `isError`, outil inconnu en erreur de protocole. Identifiants par l'environnement
+(`AGENDA_URL`, `AGENDA_USER`, `AGENDA_PASSWORD` par `${SECRET:…}`, `AGENDA_TIMEZONE`,
+`AGENDA_CALENDARS`, `AGENDA_TIMEOUT`) ; le mot de passe n'apparaît dans aucune erreur,
+aucun `Debug`, aucune adresse. **Release** : le serveur est aussi la sous-commande
+`penelope agenda-mcp` (`penelope-cli` dépend de la crate), donc `mcp.d/agenda.toml`
+déclare `command = "penelope"`, `args = ["agenda-mcp"]` et `release.yml`, le `Makefile`
+et `penelope upgrade` ne changent pas ; le binaire `penelope-agenda-mcp` existe hors
+release. **Digest** : clé `digest.agenda` (vide par défaut ; un nom qualifié
+`mcp__<serveur>__<outil>`, validé) ; `DigestFeed` reçoit le branchement MCP de la
+composition et l'« Aujourd'hui » mêle rendez-vous et planifications, rangés par heure,
+journées entières en tête, dans `owner.timezone` ; l'outil doit être en lecture et connu
+du registre, l'appel passe par le port `McpGateway` (archtest vert) ; un outil inconnu, en
+écriture, un superviseur absent ou une réponse en erreur donnent une ligne « Agenda non
+lu : … » (`DigestInputs.agenda_error`) sans retenir le digest. Rien de l'agenda n'entre en
+mémoire durable. Dépendance nouvelle `roxmltree` (MIT ou Apache-2.0, sans dépendance),
+justifiée dans le `Cargo.toml`. Doc : mcp.md (« L'agenda CalDAV, un serveur livré »),
+install-headless.md (« Agenda CalDAV », digest), README (commande, décision), architecture
+(crate), référence des clés et golden `config.get` régénérés.
+
+Tests (34 dans la crate) : fixtures `.ics` (événement `TZID` avec lignes pliées et
+échappements, journées entières, hebdomadaire avec `EXDATE`, `COUNT`, instance déplacée et
+instance annulée, quotidienne à `UNTIL` en UTC, anniversaire annuel, mensuelle par jour et
+par dernier vendredi, UTC avec `DURATION`, heure flottante, fréquence horaire inconnue) ;
+règles sans borne, 31 du mois, jours ouvrés ; faux serveur CalDAV (Basic vérifié,
+découverte en trois requêtes, `REPORT` avec sa plage, 401 sans le mot de passe, 500 avec
+l'étape, redirection, adresse déjà dossier, adresses refusées) ; le protocole (négociation
+descendante, `server/discover` inconnu, notifications muettes, JSON illisible, quatre
+outils en lecture, `events_today` sur deux calendriers dans deux fuseaux avec cache de la
+liste, `events_range` et `event_search` avec leurs bornes, arguments fautifs en `isError`,
+outil inconnu en `-32602`, identifiants refusés, calendriers restreints). Côté Pénélope :
+validation de `digest.agenda` ; l'ordonnanceur avec un faux serveur MCP (éteint par
+défaut, mélange trié avec les planifications, fuseau du propriétaire passé à l'outil,
+superviseur absent, outil en erreur, en écriture ou inconnu refusés sans appel) ; le
+digest dit l'agenda non lu en une ligne tronquée, rien sans configuration ; la commande
+`agenda-mcp` hors daemon. Ce qui marchait déjà et continue : l'« Aujourd'hui » des
+planifications seules et son ordre (`due_today`), les `mcp_poll`, la négociation du
+client MCP. Reste ouvert (#295, points 2 et 3) : l'écriture sous approbation, la
+relecture mémoire qui propose une entrée d'agenda, la cohérence des planifications avec
+l'agenda ; Google Agenda (OAuth 2 sur son point CalDAV). Closes #295.
+
 ### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les

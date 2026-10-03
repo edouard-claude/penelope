@@ -27,6 +27,7 @@ pub struct Config {
     pub agent: Agent,
     pub context: Context,
     pub memory: Memory,
+    pub digest: Digest,
     pub mcp: Mcp,
     pub runners: Runners,
     pub sandbox: Sandbox,

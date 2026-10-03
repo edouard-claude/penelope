@@ -79,6 +79,16 @@ pub async fn listing(s: &Services) -> anyhow::Result<Vec<Value>> {
 /// locale et avec leur destination : le digest du matin les rappelle, pour qu'une
 /// livraison au mauvais endroit se voie tout de suite (#124).
 pub async fn due_today(s: &Services) -> Vec<String> {
+    due_today_dated(s)
+        .await
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// Les mêmes, avec l'heure locale qui les range : le digest les mêle aux rendez-vous de
+/// l'agenda (#295).
+pub(super) async fn due_today_dated(s: &Services) -> Vec<(chrono::NaiveTime, String)> {
     let tz = s
         .config
         .config()
@@ -112,5 +122,7 @@ pub async fn due_today(s: &Services) -> Vec<String> {
         ));
     }
     rows.sort_by_key(|(at, _)| *at);
-    rows.into_iter().map(|(_, line)| line).collect()
+    rows.into_iter()
+        .map(|(at, line)| (at.time(), line))
+        .collect()
 }

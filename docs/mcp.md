@@ -154,6 +154,86 @@ disent quels serveurs le joignent ; `penelope doctor` les nomme, avec la raison.
 autres systèmes, les serveurs stdio confinés ne démarrent pas (pas de bac à sable, échec
 fermé) : le réglage n'y change rien.
 
+## L'agenda CalDAV, un serveur livré
+
+Pénélope livre un serveur MCP d'agenda (1.0.35, #295, décision
+[0018](decisions/0018-agenda-caldav-en-lecture.md)) : la sous-commande `penelope
+agenda-mcp` lit un compte CalDAV en lecture seule (iCloud avec un mot de passe
+d'application, Fastmail, Nextcloud, tout serveur en authentification Basic) et expose
+quatre outils, tous en lecture. Il se déclare comme n'importe quel serveur stdio ; la
+commande est `penelope` lui-même, donc présent dans chaque release :
+
+```toml
+# mcp.d/agenda.toml
+command = "penelope"
+args = ["agenda-mcp"]
+timeout = "45s"
+
+[env]
+AGENDA_URL = "https://caldav.icloud.com"
+AGENDA_USER = "prenom@icloud.com"
+AGENDA_PASSWORD = "${SECRET:agenda_password}"
+AGENDA_TIMEZONE = "Indian/Reunion"
+```
+
+```bash
+penelope secret set agenda_password     # le mot de passe d'application, à l'invite
+penelope mcp test agenda                # découverte, liste des calendriers, un outil
+```
+
+Le mot de passe n'existe que dans l'environnement du processus : Pénélope développe
+`${SECRET:…}` au lancement, le serveur ne touche pas au trousseau et aucune de ses erreurs
+ne le répète (« identifiants refusés par le serveur CalDAV (HTTP 401) : vérifier
+`AGENDA_USER` et le mot de passe d'application »).
+
+| Variable | Rôle |
+|---|---|
+| `AGENDA_URL` | Adresse de découverte : `https://caldav.icloud.com`, `https://caldav.fastmail.com/dav/`, `https://cloud.exemple.fr/remote.php/dav` ; sans identifiants dedans |
+| `AGENDA_USER` | Le compte (l'adresse e-mail chez iCloud et Fastmail) |
+| `AGENDA_PASSWORD` | Le mot de passe d'application, par `${SECRET:nom}` |
+| `AGENDA_TIMEZONE` | Fuseau par défaut des réponses, et celui des heures sans fuseau et des dates ; `UTC` sinon |
+| `AGENDA_CALENDARS` | Noms des calendriers servis, séparés par des virgules ; tous les calendriers d'événements sinon |
+| `AGENDA_TIMEOUT` | Délai d'une requête CalDAV, en secondes (20) |
+
+La découverte suit RFC 6764 : `current-user-principal` sur l'adresse, `calendar-home-set`
+du principal, puis la liste du dossier ; les collections sans `VEVENT` (rappels, boîtes de
+réception) sont écartées ; une redirection est suivie avec la même méthode. Les événements
+viennent d'un `REPORT calendar-query` borné dans le temps, puis sont développés côté
+serveur MCP : `TZID`, UTC, heures sans fuseau, journées entières, `DURATION`, `RRULE`
+quotidienne, hebdomadaire (`BYDAY`), mensuelle (`BYMONTHDAY`, `-1FR`), annuelle,
+`INTERVAL`, `COUNT`, `UNTIL`, `EXDATE`, instances déplacées ou annulées
+(`RECURRENCE-ID`, `STATUS:CANCELLED`). Un `TZID` inconnu (nom Windows) est lu dans
+`AGENDA_TIMEZONE`.
+
+| Outil | Arguments | Rend |
+|---|---|---|
+| `calendar_list` | aucun | les calendriers lisibles (nom, adresse, couleur) |
+| `events_today` | `timezone` (défaut : `AGENDA_TIMEZONE`) | les événements du jour dans ce fuseau, journées entières d'abord |
+| `events_range` | `start`, `end` (`AAAA-MM-JJ`, jour entier, ou RFC 3339 ; 366 jours au plus), `timezone` | les événements de la période |
+| `event_search` | `query`, `from`, `to`, `timezone` | ceux dont le titre, le lieu ou la description contient les mots, d'un mois en arrière à onze mois en avant par défaut, 50 au plus |
+
+Chaque réponse porte un texte lisible (`- 11:00–11:45 Dentiste · Perso · 12 rue des
+Lilas`, `- journée Fête · Famille`) et `structuredContent` : `timezone`, `count`,
+`events[]` avec `uid`, `summary`, `calendar`, `all_day`, `start`, `end` (RFC 3339 dans le
+fuseau demandé ; des dates seules pour une journée entière, fin incluse) et `location`.
+La description reste chez le serveur. Une date illisible ou des identifiants refusés
+reviennent en `isError`, que le modèle peut lire ; un outil inconnu est une erreur de
+protocole. Le serveur parle le protocole 2025-06-18 au plus : la sonde `server/discover`
+de Pénélope reçoit « méthode inconnue » et le `initialize` historique suit.
+
+**Le digest.** `penelope config set digest.agenda mcp__agenda__events_today` : chaque
+matin, l'« Aujourd'hui » du digest mêle les rendez-vous aux planifications, rangés par
+heure, journées entières en tête, dans `owner.timezone`. L'outil doit être en lecture et
+connu du registre ; sinon, ou si le serveur répond en erreur, le digest le dit en une ligne
+(« Agenda non lu : … ») et garde ses planifications. Rien de ce que l'agenda rend n'entre
+en mémoire durable : un calendrier partagé contient des rendez-vous de tiers.
+
+**Pas dans ce lot.** L'écriture (créer ou déplacer un événement, soumise à approbation),
+Google Agenda (son point CalDAV exige OAuth 2, pas un mot de passe d'application), les
+fréquences infra-journalières et `BYSETPOS` des règles de récurrence, la relecture
+mémoire qui proposerait une entrée d'agenda, et l'avertissement de cohérence quand une
+planification double un événement.
+
 ## Registre paresseux
 
 Un serveur peut publier des centaines d'outils. Les injecter tous dans le prompt coûterait

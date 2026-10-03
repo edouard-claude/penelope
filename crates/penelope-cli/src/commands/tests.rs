@@ -660,3 +660,15 @@ fn restore_all_resolves_its_s3_source() {
     assert_eq!(s3.region, "fr-par");
     assert!(restore::resolve_s3("git@github.com:moi/x.git", &local, None, None).is_err());
 }
+
+/// #295 : le serveur d'agenda est une commande hors daemon, sans argument ; sa
+/// configuration vient de l'environnement de `mcp.d/agenda.toml`.
+#[test]
+fn agenda_mcp_is_an_offline_command() {
+    let c = parse(&["agenda-mcp"]);
+    assert!(matches!(c.command, Command::AgendaMcp));
+    assert!(
+        route(&c.command).is_err(),
+        "pas de méthode RPC : la commande sert le protocole MCP elle-même"
+    );
+}
