@@ -17,6 +17,11 @@ impl ChannelDelivery for TelegramGateway {
         channel::place_name(&self.daemon.services, origin).await
     }
 
+    /// Le nom du sujet de la session, quand il vaut projet : ni Général, ni le foyer (#301).
+    async fn subject_of(&self, session_id: &str) -> Option<String> {
+        self.session_subject(session_id).await
+    }
+
     /// `telegram.trace` (#273) : en mode `narre`, le rôle `trace` a un modèle joignable.
     async fn doctor_checks(&self) -> Vec<penelope_kernel::api::DoctorCheck> {
         trace::narrate::doctor_check(&self.daemon.services)

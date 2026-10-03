@@ -12,6 +12,69 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.36
+
+**Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les
+sujets existants le deviennent au premier démarrage (#301).** Constat sur une instance, le
+02/10 : 18 sujets nommés, une session chacun, 8 projets enregistrés seulement, dont 4
+déduits du premier message avec des faux positifs (`clients`, `projets`, `helloasso` pour
+le sujet « WestRiders ») ; les 10 autres sujets sans projet. Cause : `resolve()` ne
+rattachait une session qu'à un projet déjà connu du vault (annotation ou section de
+`projets.md`) ; un sujet nouveau ne créait jamais rien. Règle du propriétaire : un sujet
+est un projet, systématiquement et rétroactivement.
+
+Correctif. **Le sujet prime** : la session d'un sujet a pour projet `normalize(nom du
+sujet)` (`how = "sujet"`), connu du vault ou pas ; le titre et le premier message ne servent
+plus qu'aux sessions hors sujet, parmi les projets connus, fiches comprises. Le cœur ne
+connaît pas Telegram : la passerelle dit « cette session a un sujet nommé » par le port
+`ChannelDelivery::subject_of` (`penelope-app`), en taisant le sujet « Général » (id 1) et le
+foyer (`telegram.home`), et `session_project.rs` perd ses deux mentions du canal. **Fiche
+de projet** `projets/<slug>.md` au gabarit du wiki (`type: projet`, `nom`, `aliases`,
+`tags`, `created`, `updated`, titre, d'où il vient, lien vers `[[projets]]`), créée à la
+création du sujet (`forum_topic_created`) et par la migration ; hors index (inventaire et
+réindexation : ses entrées vivent dans `projets.md` et les annotations), type `projet`
+connu du wiki, ligne `projet` dans `log.md`. **Renommage** (`forum_topic_edited`) : la fiche
+est déplacée vers le nouveau slug (`rename_note`, wikilinks réécrits, ancien nom et ancien
+slug en `aliases`), les annotations `<!-- projet: … -->` de `memoire.md` et `projets.md`
+et la section `## Ancien nom` de `projets.md` prennent le nouveau nom, l'index est refait,
+les sessions du sujet suivent ; jamais de seconde fiche. Le nom de naissance d'un sujet,
+répété par Telegram en tête de chaque message, ne fait plus foi : il ne sert qu'à un sujet
+encore inconnu, et ne défait plus un renommage (il écrasait le nom appris, avant).
+**Migration au démarrage** de la passerelle, idempotente : pour chaque `tg.topic_name.*`
+(hors Général et foyer), fiche manquante créée et **toutes** les sessions du sujet,
+fermées comprises, rattachées ; un rattachement `titre` ou `message` est remplacé, un
+`sujet` d'un autre nom aussi, un `explicite` (`/projet`) jamais ; le bon projet venu du
+titre est juste requalifié `sujet`. Le préfixe retenu d'une session active rattachée est
+libéré une fois (`session.project` au journal, instantané refigé), comme `set()` ; une
+session fermée n'est que réécrite. Le compte rendu (sujets, fiches créées, sessions
+rattachées, rattachements corrigés, choix conservés) est gardé quand quelque chose a
+changé et paraît dans le digest du jour et du lendemain, par un point d'extension
+générique du digest (`DigestInputs.notes`, lignes libres rendues telles quelles). **`/projet`
+dans un sujet** montre « le projet du sujet « Dose » », avant même le premier message ; le
+changer ne vaut que pour la session et la réponse le dit (« une nouvelle session du sujet
+reviendra à son projet ») ; en privé, la réponse d'avant mot pour mot. `known()` liste
+aussi les fiches `projets/`, donc les boutons de `/projet`. Doc : telegram.md (section
+Sujets, ligne `/projet`), install-headless.md (sujet de travail), skill `wiki-markdown`
+(type `projet`, emplacement `projets/`, opération `projet`).
+
+Tests : cœur (`session_project/tests.rs`, port double) : le sujet est le projet sans être
+connu, le titre et le message ne servent qu'aux sessions sans sujet et voient les fiches,
+l'explicite prime ; migration sur un store mêlant session sans projet, rattachement
+`message` faux, `sujet` d'un ancien nom, bon projet venu du titre, explicite et session
+fermée (comptes, kv, un seul `session.project` par session active changée, aucun pour la
+fermée ni l'explicite, fiches au gabarit, `log.md`, exclusion de l'index, ligne du
+digest), puis second passage sans changement ; renommage (fiche déplacée avec alias,
+wikilink et annotations réécrits, section de `projets.md`, index, sessions, explicite
+gardé, second renommage à vide). Passerelle (`tests/subjects.rs`) : migration avec Général,
+foyer, trois sujets dont un rattachement `message` et un explicite, port `subject_of` muet
+pour le foyer et Général, second passage à vide ; `/projet` dans un sujet et le choix
+limité à la session, réponse privée inchangée ; création de sujet, renommage, nom de
+naissance répété sans effet, foyer sans fiche. Conversation : la tuile T2 suit le sujet
+nommé par le port, connu (`LinkedIn`) ou pas (`Dose`). Ce qui marchait déjà et continue :
+`/projet` et `penelope session project` (scénarios `commandes-reglages`, `rpc-sessions`),
+le filtre T2 par projet, la stabilité du préfixe d'un tour à l'autre, les noms de sujets
+pour `/schedules` et le digest. Closes #301.
+
 ### 1.0.35
 
 **Mémoire : le digest compte chaque candidat écarté une fois (#297), et la nuit tient le

@@ -50,6 +50,7 @@ mod onboarding;
 mod outbox;
 mod screens;
 mod sessions_menu;
+mod subjects;
 mod trace;
 mod usage;
 
@@ -218,6 +219,12 @@ impl TelegramGateway {
             tracing::warn!(error = %e, "setMyCommands refusé");
         }
         self.register();
+        // Un sujet = un projet, rétroactif (#301) : les sujets déjà nommés deviennent des
+        // projets et leurs sessions y sont rattachées, une fois, avant le premier message.
+        let adopted = self.adopt_subjects().await;
+        if adopted.changed() {
+            tracing::info!(report = ?adopted, "sujets devenus projets au démarrage");
+        }
         // Effets restés incertains après un arrêt brutal : la question part sans attendre
         // que le propriétaire pense à `/approvals` (#83).
         if let Err(e) = self.announce_uncertain_effects().await {
@@ -386,25 +393,28 @@ impl TelegramGateway {
             owner_id: self.owner_id,
             allowed_chats: s.config.config().telegram.allowed_chats.clone(),
         };
-        // Nom du sujet Telegram : il peut donner son sujet de travail à la session (#119).
+        // Nom du sujet Telegram : il est le projet de ses sessions (#119, #301). Un nom
+        // qui fait foi (création, renommage) remplace l'ancien ; le nom de naissance
+        // répété en tête des messages ne sert qu'à un sujet encore inconnu.
+        if let Some(t) = topic_name_of(update)
+            && access.allowed_chats.contains(&t.chat)
+        {
+            let key = topic_name_key(t.chat, t.topic);
+            let previous = s.kv_get(&key).await.ok().flatten();
+            let changed = previous.as_deref() != Some(t.name.as_str());
+            if changed && (t.current || previous.is_none()) {
+                let _ = s.kv_set(&key, &t.name).await;
+                self.subject_named(t.chat, t.topic, &t.name, previous.as_deref())
+                    .await;
+            }
+        }
         // Titre du groupe : il nomme où livre une planification (#124).
-        let names = topic_name_of(update)
-            .map(|(chat, topic, name)| (chat, topic_name_key(chat, topic), name))
-            .into_iter()
-            .chain(chat_title_of(update).map(|(chat, t)| (chat, chat_title_key(chat), t)));
-        for (chat, key, name) in names {
-            if access.allowed_chats.contains(&chat)
-                && self
-                    .daemon
-                    .services
-                    .kv_get(&key)
-                    .await
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    != Some(name.as_str())
-            {
-                let _ = s.kv_set(&key, &name).await;
+        if let Some((chat, title)) = chat_title_of(update)
+            && access.allowed_chats.contains(&chat)
+        {
+            let key = chat_title_key(chat);
+            if s.kv_get(&key).await.ok().flatten().as_deref() != Some(title.as_str()) {
+                let _ = s.kv_set(&key, &title).await;
             }
         }
         let incoming = classify(update, &access);

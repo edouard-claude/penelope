@@ -2218,13 +2218,20 @@ le même message chaque nuit : il revient quand la raison change, et le digest c
 nuits.
 
 **Sujet de travail.** Ce qui est injecté d'office (profil, mémoire de fond, projets) suit
-le sujet de la session : le profil et les entrées sans projet toujours, une entrée d'un
+le projet de la session : le profil et les entrées sans projet toujours, une entrée d'un
 projet (annotation `<!-- projet: nom -->`, ou section de `projets.md`) seulement dans les
-sessions de ce projet. Le sujet se déduit du nom du sujet Telegram, du titre ou du premier
-message quand ils nomment un projet connu, ou se choisit (`/projet`, `penelope session
-project <nom>`, `aucun`). Rien n'est perdu : ce qui n'est pas injecté revient par le rappel
-et `mem_search`. Le sujet se fige avec l'instantané de l'épisode, le préfixe du prompt ne
-bouge pas d'un tour à l'autre ; le changer à la main le refige au message suivant.
+sessions de ce projet. Un sujet Telegram est un projet (#301) : la session d'un sujet a
+pour projet le nom du sujet, normalisé (« Dose » donne `dose`), connu de la mémoire ou pas,
+et chaque sujet a sa fiche `projets/<slug>.md` dans le vault (type `projet`, nom, alias ;
+hors index : ses entrées vivent dans `projets.md` et les annotations). Ni le sujet
+« Général » ni le foyer (`telegram.home`) ne sont des projets. Une session hors sujet
+prend pour projet celui que nomment son titre ou son premier message, parmi les projets
+connus, ou celui qu'on choisit (`/projet`, `penelope session project <nom>`, `aucun`) ; un
+choix explicite n'est jamais repris. Au premier démarrage après la mise à jour, les sujets
+déjà nommés deviennent des projets et leurs sessions y sont rattachées, une fois ; le digest
+du lendemain en donne le compte. Rien n'est perdu : ce qui n'est pas injecté revient par le
+rappel et `mem_search`. Le projet se fige avec l'instantané de l'épisode, le préfixe du
+prompt ne bouge pas d'un tour à l'autre ; le changer à la main le refige au message suivant.
 
 **Journal des états en cours.** Ce qui est vrai aujourd'hui mais pas dans un mois (ticket
 corrigé en dev, document pas encore lu, rendez-vous) va dans `projets.md`, section « États

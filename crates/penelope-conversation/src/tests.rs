@@ -109,18 +109,33 @@ async fn the_injected_memory_follows_the_session_subject() {
         penelope_vault::session_project::of_session(&s, &titled).await,
         (Some("fidelatoo".into()), Some("titre".into()))
     );
+    // Le sujet de la conversation, que le canal nomme par son port, est le projet (#301) :
+    // connu du vault ou non.
     let topic = session(&s).await;
-    s.sessions
-        .bind_telegram(&topic, -10_042, Some(21))
-        .await
-        .unwrap();
-    let key = penelope_app::helpers::topic_name_key(-10_042, 21);
-    s.kv_set(&key, "Posts LinkedIn").await.unwrap();
+    let unknown = session(&s).await;
+    s.channel.delivery.set(Some(Arc::new(NamedSubjects(vec![
+        (topic.clone(), "LinkedIn".into()),
+        (unknown.clone(), "Dose".into()),
+    ]))));
     let t = t2(topic.clone()).await;
     assert!(
         t.contains("Trois publications") && !t.contains("Scaleway"),
         "{t}"
     );
+    assert_eq!(
+        penelope_vault::session_project::of_session(&s, &topic).await,
+        (Some("linkedin".into()), Some("sujet".into()))
+    );
+    let u = t2(unknown.clone()).await;
+    assert!(
+        u.contains("tutoiement") && !u.contains("Scaleway") && !u.contains("Trois"),
+        "{u}"
+    );
+    assert_eq!(
+        penelope_vault::session_project::of_session(&s, &unknown).await,
+        (Some("dose".into()), Some("sujet".into()))
+    );
+    s.channel.delivery.set(None);
     let plain = session(&s).await;
     let p = t2(plain).await;
     assert!(
@@ -136,6 +151,21 @@ async fn session(s: &Services) -> String {
         .unwrap()
         .id
         .to_string()
+}
+
+/// Un canal qui ne fait qu'une chose : nommer le sujet de certaines sessions (#301).
+struct NamedSubjects(Vec<(String, String)>);
+
+#[async_trait::async_trait]
+impl ChannelDelivery for NamedSubjects {
+    async fn deliver(&self, _: &str, _: &str, _: &Origin, _: &penelope_app::outcome::TurnOutcome) {}
+
+    async fn subject_of(&self, session_id: &str) -> Option<String> {
+        self.0
+            .iter()
+            .find(|(sid, _)| sid == session_id)
+            .map(|(_, name)| name.clone())
+    }
 }
 
 const PRATIQUE: &str = "---\n\

@@ -20,6 +20,11 @@ pub async fn digest_inputs(s: &Services) -> DigestInputs {
         failing_schedules: failing,
         struggling_sessions: penelope_conversation::compaction::struggling_sessions(s).await,
         due_today: due_today(s).await,
+        // Sujets devenus projets au dernier démarrage, le lendemain (#301).
+        notes: penelope_vault::session_project::subjects::digest_note(s)
+            .await
+            .into_iter()
+            .collect(),
     }
 }
 
