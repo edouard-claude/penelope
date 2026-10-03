@@ -158,6 +158,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         if let Some(id) = line[key].as_str() {
             n.text(id);
         }
+        n.note_world(line);
     }
     let outcomes = std::mem::take(&mut h.outcomes);
     let expected: Vec<Value> = outcomes
