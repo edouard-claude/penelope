@@ -24,6 +24,7 @@ pub mod effects;
 pub mod error;
 pub mod event;
 pub mod frontmatter;
+pub mod hmac;
 pub mod ids;
 pub mod journal;
 pub mod risk;

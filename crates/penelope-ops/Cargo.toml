@@ -28,8 +28,8 @@ base64.workspace = true
 # Téléchargement des releases, des archives de skills, échanges OAuth Codex, et le
 # stockage S3 des sauvegardes (#289).
 reqwest.workspace = true
-# Signature AWS SigV4 des envois S3 (HMAC-SHA256 écrit sur `sha2`, sans SDK ni crate
-# `hmac`, #289).
+# Signature AWS SigV4 des envois S3 (#289) : empreintes des corps ; le HMAC-SHA256 est
+# celui du noyau (`penelope_kernel::hmac`), partagé avec les webhooks (#294).
 sha2.workspace = true
 # Signature des releases (`upgrade`).
 minisign-verify.workspace = true

@@ -29,7 +29,8 @@ impl Default for Owner {
 pub struct Telegram {
     /// Jeton du bot, par référence au magasin de secrets.
     pub token: String,
-    /// Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi).
+    /// Réception des messages : `polling` (long polling), la seule valeur servie ;
+    /// `webhook` est refusé à la validation (#294).
     pub mode: String,
     /// Sujets de forum Telegram. Sans effet dans cette version.
     pub topics: bool,
@@ -54,7 +55,8 @@ pub struct Telegram {
     /// Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au
     /// moins).
     pub draft_interval_ms: u64,
-    /// Adresse du webhook. Sans effet dans cette version.
+    /// Sans effet : le mode `webhook` n'est pas servi (#294) ; les webhooks entrants de
+    /// Pénélope sont la section `[webhooks]`.
     pub webhook_url: String,
     /// Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en
     /// ajoutant son identifiant à `telegram.allowed_chats`.

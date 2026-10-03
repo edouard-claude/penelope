@@ -76,7 +76,35 @@ impl Config {
         self.validate_models()?;
         self.validate_turn_limits()?;
         self.validate_schedules()?;
-        self.validate_mcp_and_runtime()
+        self.validate_mcp_and_runtime()?;
+        self.validate_webhooks()
+    }
+
+    /// Webhooks entrants (#294) : une adresse d'écoute lisible avec un port non nul, ou
+    /// vide (pas de serveur) ; des plafonds qui laissent passer au moins une requête.
+    fn validate_webhooks(&self) -> Result<()> {
+        let w = &self.webhooks;
+        if !w.listen.trim().is_empty() {
+            let bind = w.listen.parse::<std::net::SocketAddr>().map_err(|_| {
+                KernelError::config("webhooks.listen invalide (attendu `hôte:port`)")
+            })?;
+            if bind.port() == 0 {
+                return Err(KernelError::config(
+                    "webhooks.listen doit porter un port non nul",
+                ));
+            }
+        }
+        if w.max_body_bytes < 1024 {
+            return Err(KernelError::config(
+                "webhooks.max_body_bytes doit valoir au moins 1024",
+            ));
+        }
+        if w.rate_per_minute == 0 || w.prompt_turns_per_hour == 0 {
+            return Err(KernelError::config(
+                "webhooks.rate_per_minute et webhooks.prompt_turns_per_hour doivent valoir au moins 1",
+            ));
+        }
+        Ok(())
     }
 
     /// Propriétaire, flux runtime et canal Telegram.
@@ -115,15 +143,13 @@ impl Config {
             }
         }
 
-        if !matches!(self.telegram.mode.as_str(), "polling" | "webhook") {
-            return Err(KernelError::config(
-                "telegram.mode doit valoir `polling` ou `webhook`",
-            ));
-        }
-        if self.telegram.mode == "webhook" && self.telegram.webhook_url.is_empty() {
-            return Err(KernelError::config(
-                "telegram.webhook_url est requis en mode webhook",
-            ));
+        // Seul le long polling est servi (#294) : accepter `webhook` laisserait le bot
+        // sourd sans un mot, comme la clé le promettait depuis la 0.17.
+        if self.telegram.mode != "polling" {
+            return Err(KernelError::config(format!(
+                "telegram.mode : `{}` n'est pas servi, seul `polling` l'est (webhook_url est sans effet, #294)",
+                self.telegram.mode
+            )));
         }
         if !self.telegram.quiet_hours.is_empty() {
             TimeRange::parse(&self.telegram.quiet_hours)?;

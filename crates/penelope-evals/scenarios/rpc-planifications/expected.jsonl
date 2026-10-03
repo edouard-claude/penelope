@@ -1,5 +1,5 @@
 {"type":"outcome","step":1,"input":"rpc : schedule.add","result":{"id":"{{sch:1}}","kind":"cron","spec":{"expr":"0 9 * * 1"},"target":{"prompt":"fais le digest de la semaine","type":"prompt"},"dedup":{},"state":"active","last_run":null,"next_run":"{{ts+363600s}}","runs":0,"last_error":null,"failures_in_a_row":0}}
-{"type":"outcome","step":2,"input":"rpc : schedule.add","error":{"code":-32603,"message":"kind inconnu : cron, interval, mcp_poll, watch_file ou event"}}
+{"type":"outcome","step":2,"input":"rpc : schedule.add","error":{"code":-32603,"message":"kind inconnu : cron, interval, mcp_poll, watch_file, event ou webhook"}}
 {"type":"outcome","step":3,"input":"rpc : schedule.list","result":[{"id":"{{sch:1}}","kind":"cron","spec":{"expr":"0 9 * * 1"},"target":{"prompt":"fais le digest de la semaine","type":"prompt"},"dedup":{},"state":"active","last_run":null,"next_run":"{{ts+363600s}}","runs":0,"last_error":null,"failures_in_a_row":0,"destination":"aucune conversation (canal non configuré) (par défaut)","destination_origin":{"channel":"telegram","chat_id":42,"topic_id":null,"message_id":null}}]}
 {"type":"outcome","step":4,"input":"rpc : schedule.pause","result":{"ok":true}}
 {"type":"outcome","step":5,"input":"rpc : schedule.list","result":{"/*/state":["paused"]}}

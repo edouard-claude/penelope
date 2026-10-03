@@ -591,7 +591,9 @@ Il sert aussi aux suites transverses, par exemple pour dérouler le flux OAuth
 
 ## Limites actuelles
 
-- Seul le long polling est lancé : `telegram.mode = "webhook"` n'est pas servi.
+- Seul le long polling est lancé : `telegram.mode = "webhook"` n'est pas servi, et la
+  validation le refuse depuis la 1.0.35 (#294) ; les webhooks entrants de Pénélope
+  (`[webhooks]`) sont une autre porte, pas une passerelle Telegram.
 - Un PDF scanné est lu par OCR sur macOS seulement, et seulement s'il n'a aucune couche
   texte.
 

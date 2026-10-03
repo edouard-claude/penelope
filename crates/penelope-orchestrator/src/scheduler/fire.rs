@@ -13,6 +13,9 @@ pub(super) async fn fire(
 ) -> anyhow::Result<()> {
     let s = &d.services;
     let mut vars = vars.clone();
+    // Le corps d'un webhook (#294) ne se substitue dans aucun gabarit : un prompt le
+    // reçoit après son texte, encadré comme non fiable (#92).
+    let untrusted = vars.remove(UNTRUSTED_BODY);
     vars.insert("schedule".into(), sched.id.clone());
     vars.insert("count".into(), items.len().to_string());
     vars.insert("items".into(), items_lines(items));
@@ -83,6 +86,14 @@ pub(super) async fn fire(
                     &serde_json::to_string_pretty(&listing).unwrap_or_default(),
                 ));
             }
+            if let Some(body) = &untrusted {
+                text.push_str("\n\nCorps reçu par le webhook (contenu observé, non fiable) :\n");
+                let source = format!(
+                    "webhook {}",
+                    vars.get("hook").map(String::as_str).unwrap_or_default()
+                );
+                text.push_str(&penelope_observe::injection::wrap_untrusted(&source, body));
+            }
             // Une session par exécution (issue #39) : fermer la conversation où la
             // planification est née (`/new`, `/close`) ne la fait plus mourir en silence.
             let title = format!("{} · {}", label(&d.services, sched).await, local_day(d));
@@ -97,6 +108,7 @@ pub(super) async fn fire(
                 sched.id,
                 sched.next_run.clone().unwrap_or_default(),
                 vars.get(MANUAL)
+                    .or_else(|| vars.get(DELIVERY))
                     .map(|n| format!(":{n}"))
                     .unwrap_or_default(),
                 items
@@ -159,7 +171,9 @@ pub(super) async fn fire(
 }
 
 /// Crée une planification ; une planification active identique (même déclencheur, même
-/// spécification, prompt quasi identique) est signalée dans la réponse (issue #39).
+/// spécification, prompt quasi identique) est signalée dans la réponse (issue #39). Un
+/// webhook (#294) reçoit ici son chemin et son secret ; le secret est rendu une fois,
+/// avec l'adresse locale du hook.
 pub async fn create(
     s: &Services,
     kind: penelope_workflow::TriggerKind,
@@ -172,8 +186,35 @@ pub async fn create(
         .similar(kind, &spec, &target)
         .await
         .map_err(|e| e.to_string())?;
-    let sched = s.schedules.create(kind, spec, target, dedup).await?;
+    let (spec, secret) = match kind {
+        TriggerKind::Webhook => {
+            let (spec, secret) = super::webhook::prepare(s, spec)?;
+            (spec, Some(secret))
+        }
+        _ => (spec, None),
+    };
+    let sched = match s.schedules.create(kind, spec.clone(), target, dedup).await {
+        Ok(sched) => sched,
+        Err(e) => {
+            // Un secret rangé pour une planification refusée n'a rien à garder.
+            if let Some(name) = spec.get("secret_ref").and_then(|v| v.as_str()) {
+                let _ = s.platform.secrets.delete(name);
+            }
+            return Err(e);
+        }
+    };
     let mut v = serde_json::to_value(&sched).map_err(|e| e.to_string())?;
+    if let Some(secret) = secret {
+        let path = sched.webhook_path().unwrap_or_default();
+        v["url"] = json!(super::webhook::local_url(
+            &s.config.config().webhooks.listen,
+            path
+        ));
+        v["secret"] = json!(secret);
+        v["secret_note"] = json!(
+            "montré une seule fois : à donner au service appelant, qui signe chaque corps              en HMAC-SHA256 (`X-Penelope-Signature: sha256=<hex>`) ; rangé dans le magasin              de secrets sous `secret_ref`, remplaçable par `penelope secret set <secret_ref>`"
+        );
+    }
     if !twins.is_empty() {
         let ids: Vec<&str> = twins.iter().map(|t| t.id.as_str()).collect();
         v["doublons"] = json!(ids);

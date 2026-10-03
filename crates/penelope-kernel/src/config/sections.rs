@@ -819,3 +819,34 @@ impl Default for Retention {
         }
     }
 }
+
+/// Webhooks entrants (#294) : la porte par laquelle un service extérieur pousse un
+/// événement dans un déclencheur `webhook`. Le serveur n'écoute que l'adresse donnée,
+/// locale par défaut ; l'exposer passe par un tunnel ou un réseau privé, jamais par ici.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Webhooks {
+    /// Adresse d'écoute `hôte:port` des webhooks entrants ; `127.0.0.1` par défaut, pour
+    /// qu'un tunnel ou un réseau privé décide seul de l'exposition. Vide : aucun
+    /// serveur. Prise en compte au redémarrage.
+    pub listen: String,
+    /// Taille maximale d'un corps reçu, en octets ; au-delà, la requête est refusée
+    /// (413) sans être lue.
+    pub max_body_bytes: usize,
+    /// Réceptions admises par minute et par hook ; au-delà, 429 avec `Retry-After`.
+    pub rate_per_minute: u32,
+    /// Tours `prompt` déclenchés par webhook admis par heure, tous hooks confondus : une
+    /// source bavarde ne fait pas travailler le modèle sans fin.
+    pub prompt_turns_per_hour: u32,
+}
+
+impl Default for Webhooks {
+    fn default() -> Self {
+        Webhooks {
+            listen: "127.0.0.1:7778".into(),
+            max_body_bytes: 64 * 1024,
+            rate_per_minute: 60,
+            prompt_turns_per_hour: 20,
+        }
+    }
+}

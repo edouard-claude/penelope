@@ -219,14 +219,17 @@ impl Daemon {
                 self.hooks.messenger.clone(),
             )),
         ];
-        if !self
-            .services
-            .config
-            .config()
-            .observability
-            .runtime_consumers
-            .is_empty()
-        {
+        let cfg = self.services.config.config();
+        // Webhooks entrants (#294) : un listener dédié, seulement si une adresse d'écoute
+        // est donnée.
+        if !cfg.webhooks.listen.trim().is_empty() {
+            tasks.push(supervised("webhooks", |d| {
+                let ports = d.hooks.scheduler();
+                let cx = crate::workflow::context_of(&d.core);
+                Box::pin(penelope_orchestrator::scheduler::webhook_server(cx, ports)) as BoxLoop
+            }));
+        }
+        if !cfg.observability.runtime_consumers.is_empty() {
             tasks.push(supervised("runtime.stream", |d| {
                 Box::pin(async move {
                     if let Err(error) = crate::runtime_events::serve(d.services.clone()).await {

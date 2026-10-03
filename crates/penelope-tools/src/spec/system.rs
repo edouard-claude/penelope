@@ -251,7 +251,10 @@ pub(super) fn time() -> Vec<ToolSpec> {
              `{\"type\": \"prompt\", \"prompt\": \"…\"}` pour travailler à l'heure dite. \
              Autres kinds : `interval` (`every_ms`), `mcp_poll` (`server`, `tool` en lecture, \
              `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
-             (`path`), `event` (`event`). Le retour arrive dans ce chat, chaque exécution \
+             (`path`), `event` (`event`), `webhook` (spec `{}` ou `{\"filter\": {…}}` : \
+             Pénélope attribue le chemin `/hook/<jeton>` et un secret HMAC rangé dans le \
+             magasin, jamais montré au modèle ; le corps JSON reçu passe à la cible, encadré \
+             comme non fiable dans un prompt). Le retour arrive dans ce chat, chaque exécution \
              d'un prompt dans sa propre session (`label` dans target pour la nommer) ; une \
              planification identique déjà active est signalée (`doublons`). Un prompt peut \
              déclarer dans target son `livrable` (`message`, `fichier:<chemin>`, `run`) : sans \
@@ -259,7 +262,7 @@ pub(super) fn time() -> Vec<ToolSpec> {
              vu »), remis tel qu'avant si rien n'est livré.",
             obj(
                 json!({
-                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},
+                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event","webhook"]},
                     "spec": {"type":"object"},
                     "target": {"type":"object"},
                     "dedup": {"type":"object"}

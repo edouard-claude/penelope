@@ -41,9 +41,9 @@ fn each_invalid_value_is_refused_with_its_key() {
             c.observability.runtime_consumers = vec![consumer("a", " ")];
         }),
         ("telegram.mode", |c| c.telegram.mode = "push".into()),
-        ("telegram.webhook_url", |c| {
+        ("seul `polling` l'est", |c| {
             c.telegram.mode = "webhook".into();
-            c.telegram.webhook_url.clear();
+            c.telegram.webhook_url = "https://example.invalid/tg".into();
         }),
         ("heure invalide", |c| {
             c.telegram.quiet_hours = "22h-7h".into()
@@ -127,6 +127,21 @@ fn each_invalid_value_is_refused_with_its_key() {
             c.sandbox.default_profile = "prison".into()
         }),
         ("budget.alert_ratio", |c| c.budget.alert_ratio = 0.0),
+        ("webhooks.listen invalide", |c| {
+            c.webhooks.listen = "pas une adresse".into()
+        }),
+        ("webhooks.listen doit porter un port", |c| {
+            c.webhooks.listen = "127.0.0.1:0".into()
+        }),
+        ("webhooks.max_body_bytes", |c| {
+            c.webhooks.max_body_bytes = 10
+        }),
+        ("webhooks.rate_per_minute", |c| {
+            c.webhooks.rate_per_minute = 0
+        }),
+        ("webhooks.rate_per_minute", |c| {
+            c.webhooks.prompt_turns_per_hour = 0
+        }),
     ];
     for (want, mutate) in cases {
         let got = refused(*mutate);
