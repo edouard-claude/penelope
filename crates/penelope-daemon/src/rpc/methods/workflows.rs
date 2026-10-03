@@ -170,7 +170,7 @@ impl Rpc {
                 let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "kind inconnu : cron, interval, mcp_poll, watch_file ou event"
+                            "kind inconnu : cron, interval, mcp_poll, watch_file, event ou webhook"
                         )
                     })?;
                 penelope_orchestrator::scheduler::create(
@@ -196,8 +196,13 @@ impl Rpc {
                     method::SCHEDULE_RESUME => "active",
                     _ => "deleted",
                 };
-                // Une faute de frappe ne passe pas pour une pause réussie (#221).
-                if !s.schedules.set_state(&id, state).await? {
+                // Une faute de frappe ne passe pas pour une pause réussie (#221). Le
+                // secret d'un webhook part avec sa planification (#294).
+                let found = match state {
+                    "deleted" => penelope_orchestrator::scheduler::remove(s, &id).await?,
+                    _ => s.schedules.set_state(&id, state).await?,
+                };
+                if !found {
                     anyhow::bail!("planification inconnue : {id}");
                 }
                 Ok(json!({"ok": true}))

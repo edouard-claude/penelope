@@ -1,7 +1,11 @@
 //! Déclencheurs et jobs planifiés (§12.9).
 //!
-//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`.
+//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`, `webhook`.
 //! Cibles : `prompt`, `workflow`, `notify`.
+//!
+//! `webhook` (#294) : un service extérieur pousse un corps JSON sur `POST /hook/<jeton>`,
+//! signé en HMAC-SHA256 par un secret rangé dans le magasin de secrets ; la spécification
+//! ne porte que le chemin et le **nom** du secret (`secret_ref`), jamais sa valeur.
 //!
 //! Déduplication `mcp_poll` : un élément nouveau **ou modifié** (empreinte) déclenche la
 //! cible, une seule fois par élément. À la création, les éléments existants sont marqués
@@ -21,6 +25,7 @@ pub enum TriggerKind {
     McpPoll,
     WatchFile,
     Event,
+    Webhook,
 }
 
 impl TriggerKind {
@@ -31,6 +36,7 @@ impl TriggerKind {
             TriggerKind::McpPoll => "mcp_poll",
             TriggerKind::WatchFile => "watch_file",
             TriggerKind::Event => "event",
+            TriggerKind::Webhook => "webhook",
         }
     }
     pub fn parse(s: &str) -> Option<TriggerKind> {
@@ -40,9 +46,22 @@ impl TriggerKind {
             "mcp_poll" => TriggerKind::McpPoll,
             "watch_file" => TriggerKind::WatchFile,
             "event" => TriggerKind::Event,
+            "webhook" => TriggerKind::Webhook,
             _ => return None,
         })
     }
+}
+
+/// Préfixe des chemins de webhook : `/hook/<jeton>` (#294).
+pub const WEBHOOK_PATH_PREFIX: &str = "/hook/";
+
+/// Un jeton de chemin de webhook : 16 caractères au moins parmi `[A-Za-z0-9_-]`, pour
+/// qu'il ne se devine pas et ne porte rien qu'une URL ou un journal maltraite.
+pub fn webhook_token_ok(token: &str) -> bool {
+    token.len() >= 16
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +119,13 @@ impl Schedule {
             .and_then(TargetKind::parse)
     }
 
+    /// Chemin d'un déclencheur `webhook` (`/hook/<jeton>`), s'il en a un.
+    pub fn webhook_path(&self) -> Option<&str> {
+        (self.kind == TriggerKind::Webhook)
+            .then(|| self.spec.get("path").and_then(|v| v.as_str()))
+            .flatten()
+    }
+
     /// Validation d'une spécification avant activation (§12.9, aperçu puis HITL).
     pub fn validate(&self, tz: &str) -> Result<(), String> {
         match self.kind {
@@ -149,6 +175,40 @@ impl Schedule {
                     return Err("`event` est obligatoire".into());
                 }
             }
+            TriggerKind::Webhook => {
+                let path = self
+                    .spec
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or("`path` est obligatoire pour un webhook (attribué à la création)")?;
+                if !path
+                    .strip_prefix(WEBHOOK_PATH_PREFIX)
+                    .is_some_and(webhook_token_ok)
+                {
+                    return Err(format!(
+                        "`path` d'un webhook : `{WEBHOOK_PATH_PREFIX}<jeton>` attendu, reçu `{path}`"
+                    ));
+                }
+                let secret_ref = self.spec.get("secret_ref").and_then(|v| v.as_str()).ok_or(
+                    "`secret_ref` est obligatoire pour un webhook (attribué à la création)",
+                )?;
+                if secret_ref.is_empty()
+                    || !secret_ref
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+                {
+                    return Err(format!(
+                        "`secret_ref` d'un webhook : nom de secret invalide `{secret_ref}`"
+                    ));
+                }
+                // Le secret lui-même n'a rien à faire dans le store.
+                if self.spec.get("secret").is_some() {
+                    return Err("`secret` n'a pas sa place dans la spécification : le secret vit dans le magasin de secrets, sous `secret_ref`".into());
+                }
+                if self.spec.get("filter").is_some_and(|f| !f.is_object()) {
+                    return Err("`filter` d'un webhook : un objet `{chemin: valeur}`".into());
+                }
+            }
         }
 
         match self.target_kind() {
@@ -195,7 +255,7 @@ impl Schedule {
                 Some(now_ms + ms)
             }
             // Ces déclencheurs sont poussés par un événement externe.
-            TriggerKind::WatchFile | TriggerKind::Event => None,
+            TriggerKind::WatchFile | TriggerKind::Event | TriggerKind::Webhook => None,
         }
     }
 }

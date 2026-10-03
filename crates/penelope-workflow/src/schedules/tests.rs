@@ -421,3 +421,83 @@ fn failure_steps_and_motifs() {
     assert_ne!(failure_motif("HTTP 429"), failure_motif("HTTP 500"));
     assert_ne!(failure_motif("quota épuisé"), failure_motif("clé refusée"));
 }
+
+/// #294 : un webhook porte un chemin `/hook/<jeton>` et le nom de son secret, jamais sa
+/// valeur ; il n'a pas de prochain passage, c'est la requête qui le pousse.
+#[tokio::test]
+async fn a_webhook_carries_a_path_and_a_secret_name_and_never_a_next_run() {
+    let s = schedules(TestClock::default());
+    let spec =
+        json!({"path": "/hook/abcdefghijklmnop1234", "secret_ref": "webhook_abcdefghijklmnop1234"});
+    let sched = s
+        .create(
+            TriggerKind::Webhook,
+            spec.clone(),
+            json!({"type":"notify","template":"🔔 {{payload}}"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sched.next_run, None);
+    assert_eq!(sched.webhook_path(), Some("/hook/abcdefghijklmnop1234"));
+    assert!(sched.state == "active");
+    assert_eq!(sched.next_after(0, "Indian/Reunion"), None);
+
+    let refused = |spec: Value| {
+        let s = &s;
+        async move {
+            s.create(
+                TriggerKind::Webhook,
+                spec,
+                json!({"type":"notify","template":"x"}),
+                json!({}),
+            )
+            .await
+            .expect_err("refusé")
+        }
+    };
+    assert!(refused(json!({})).await.contains("`path`"));
+    assert!(
+        refused(json!({"path": "/hook/court", "secret_ref": "webhook_court"}))
+            .await
+            .contains("<jeton>")
+    );
+    assert!(
+        refused(json!({"path": "/autre/abcdefghijklmnop1234", "secret_ref": "x"}))
+            .await
+            .contains("<jeton>")
+    );
+    assert!(
+        refused(json!({"path": "/hook/abcdefghijklmnop1234"}))
+            .await
+            .contains("`secret_ref`")
+    );
+    assert!(
+        refused(json!({"path": "/hook/abcdefghijklmnop1234", "secret_ref": "a b"}))
+            .await
+            .contains("nom de secret invalide")
+    );
+    assert!(
+        refused(
+            json!({"path": "/hook/abcdefghijklmnop1234", "secret_ref": "n", "secret": "s3cret"})
+        )
+        .await
+        .contains("magasin de secrets")
+    );
+    assert!(
+        refused(json!({"path": "/hook/abcdefghijklmnop1234", "secret_ref": "n", "filter": 3}))
+            .await
+            .contains("`filter`")
+    );
+    assert_eq!(TriggerKind::parse("webhook"), Some(TriggerKind::Webhook));
+    assert_eq!(TriggerKind::Webhook.as_str(), "webhook");
+    assert!(sched.webhook_path().is_some());
+    assert!(
+        Schedule {
+            kind: TriggerKind::Cron,
+            ..sched
+        }
+        .webhook_path()
+        .is_none()
+    );
+}

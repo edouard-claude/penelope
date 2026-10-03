@@ -319,6 +319,12 @@
       },
       "approval": {
         "judge": "string"
+      },
+      "webhooks": {
+        "listen": "string",
+        "max_body_bytes": "integer",
+        "rate_per_minute": "integer",
+        "prompt_turns_per_hour": "integer"
       }
     }
   }

@@ -1802,6 +1802,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "futures",
+ "httparse",
  "penelope-agent",
  "penelope-app",
  "penelope-conversation",

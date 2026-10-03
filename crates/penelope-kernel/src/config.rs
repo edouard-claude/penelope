@@ -40,6 +40,7 @@ pub struct Config {
     pub retention: Retention,
     pub backup: Backup,
     pub approval: Approval,
+    pub webhooks: Webhooks,
 }
 
 mod approval;

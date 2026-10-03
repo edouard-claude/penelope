@@ -8,6 +8,9 @@
 //!   ├─ watch_file ────► fichier modifié ────────────────────────────────────────► cible
 //!   └─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
 //!
+//! hors du battement
+//!   webhook ─► POST signé reçu par `webhook_server` (127.0.0.1 par défaut, #294) ──► cible
+//!
 //! cible  prompt  ─► tour « déclencheur » dans une session neuve à chaque exécution, réponse
 //!                   dans le chat (ou le sujet) d'origine ; échec ou annulation : alerte
 //!        notify  ─► message direct au propriétaire, sans modèle
@@ -186,7 +189,7 @@ pub async fn run_now(d: &Context, ports: &Ports, id: &str) -> anyhow::Result<Val
 const MANUAL: &str = "declenchement_manuel";
 
 /// Enregistre le tir (ou l'erreur) et programme la suite.
-async fn finish(
+pub(super) async fn finish(
     d: &Context,
     ports: &Ports,
     sched: &Schedule,
@@ -246,6 +249,7 @@ mod outcome;
 mod templating;
 mod triggers;
 mod wake;
+mod webhook;
 pub use digest::{DigestFeed, digest_inputs, digest_inputs_with};
 use fire::fire;
 pub use fire::{alert, create, label, recovered};
@@ -257,6 +261,8 @@ use templating::{items_lines, substitute, template_params, tool_payload};
 use triggers::{event, event_cursor, events_between, last_event_id, poll, watch_file};
 use wake::LATE;
 pub use wake::{Late, Wake, WakeWatch, health, late_of, late_text, wake_check};
+use webhook::{DELIVERY, UNTRUSTED_BODY};
+pub use webhook::{SIGNATURE_HEADER, remove, webhook_server, withhold_secret};
 
 #[cfg(test)]
 mod tests;

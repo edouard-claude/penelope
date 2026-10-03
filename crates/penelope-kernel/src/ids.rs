@@ -135,14 +135,44 @@ fn random_80() -> u128 {
     u128::from_be_bytes(buf)
 }
 
+const B62: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
 /// Jeton opaque court, base62, pour les `callback_data` Telegram (≤ 64 octets, §14.8).
 pub fn short_token(len: usize) -> String {
-    const B62: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let mut raw = vec![0u8; len];
     let _ = getrandom::getrandom(&mut raw);
     raw.iter()
         .map(|b| B62[(*b as usize) % 62] as char)
         .collect()
+}
+
+/// Jeton base62 pour un secret (#294) : l'aléa du système ou une erreur, jamais une
+/// source plus faible, et sans biais (les octets au-delà du dernier multiple de 62 sont
+/// retirés plutôt que ramenés par modulo).
+pub fn secret_token(len: usize) -> Result<String, String> {
+    secret_token_from(len, |buf| {
+        getrandom::getrandom(buf).map_err(|e| format!("aléa du système indisponible : {e}"))
+    })
+}
+
+/// [`secret_token`] sur une source donnée, pour tester l'échec de l'aléa.
+pub fn secret_token_from(
+    len: usize,
+    mut fill: impl FnMut(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
+    const KEEP_BELOW: u8 = 62 * 4;
+    let mut out = String::with_capacity(len);
+    let mut raw = vec![0u8; len.max(16)];
+    while out.len() < len {
+        fill(&mut raw)?;
+        out.extend(
+            raw.iter()
+                .filter(|b| **b < KEEP_BELOW)
+                .map(|b| B62[(*b % 62) as usize] as char)
+                .take(len - out.len()),
+        );
+    }
+    Ok(out)
 }
 
 macro_rules! id_newtype {
@@ -236,6 +266,33 @@ mod tests {
     #[test]
     fn short_token_length() {
         assert_eq!(short_token(12).len(), 12);
+    }
+
+    /// Un secret vient de l'aléa ou n'existe pas : une source en échec rend l'erreur, et
+    /// les octets qui biaiseraient le modulo sont écartés, pas recyclés.
+    #[test]
+    fn secret_tokens_refuse_a_failing_source_and_skip_biased_bytes() {
+        let t = secret_token(48).unwrap();
+        assert_eq!(t.len(), 48);
+        assert!(t.bytes().all(|b| b.is_ascii_alphanumeric()));
+        assert_ne!(t, secret_token(48).unwrap());
+        assert_eq!(
+            secret_token_from(24, |_| Err("pas d'entropie".into())),
+            Err("pas d'entropie".to_string())
+        );
+        // 248..=255 sont écartés ; 0 et 61 donnent les deux bouts de l'alphabet.
+        let mut calls = 0;
+        let t = secret_token_from(2, |buf| {
+            calls += 1;
+            buf.fill(255);
+            if calls == 2 {
+                buf[3] = 0;
+                buf[9] = 61;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!((t.as_str(), calls), ("0Z", 2));
     }
 
     /// Crockford base32 : minuscules acceptées, `O` lu 0, `I` et `L` lus 1, `U` refusé.

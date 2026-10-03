@@ -292,7 +292,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `telegram.token` | `"${SECRET:telegram_bot_token}"` | Jeton du bot, par référence au magasin de secrets. |
-| `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi). |
+| `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling), la seule valeur servie ; `webhook` est refusé à la validation (#294). |
 | `telegram.topics` | `true` | Sujets de forum Telegram. Sans effet dans cette version. |
 | `telegram.rich_messages` | `false` | Rendu riche natif de la Bot API plutôt que HTML. |
 | `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la plage. |
@@ -303,7 +303,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.caption_limit` | `1024` | Taille maximale d'une légende. Sans effet dans cette version. |
 | `telegram.max_fragments` | `3` | Fragments au-delà desquels un avis interne (digest du matin, rapport de veille) part en document plutôt qu'en chapelet de messages (issue #145). 0 : jamais. |
 | `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
-| `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
+| `telegram.webhook_url` | `""` | Sans effet : le mode `webhook` n'est pas servi (#294) ; les webhooks entrants de Pénélope sont la section `[webhooks]`. |
 | `telegram.allow_groups` | `false` | Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en ajoutant son identifiant à `telegram.allowed_chats`. |
 | `telegram.allowed_chats` | `[]` | Conversations de groupe autorisées, par identifiant (`-100…` pour un supergroupe) : le propriétaire y parle, y compris en administrateur anonyme ; un sujet donne une session. `penelope doctor` liste les conversations refusées récemment avec leur identifiant. |
 | `telegram.text_group_window_ms` | `2000` | Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un tour. |
@@ -626,6 +626,15 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `approval.judge` | `"explain"` | Juge des lignes `shell_exec` sans motif possible (issue #203), sous les planchers déterministes : `off` (aucun appel), `explain` (la carte dit ce que la ligne fait réellement et propose une règle sur les pouvoirs reconnus ; rien n'est autorisé seul), `auto_read` (comme `explain`, et une lecture pure dans les workspaces, sans réseau ni écriture ni processus détaché, passe sans carte). Modèle : rôle `approval_judge`. |
+
+**[webhooks]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `webhooks.listen` | `"127.0.0.1:7778"` | Adresse d'écoute `hôte:port` des webhooks entrants ; `127.0.0.1` par défaut, pour qu'un tunnel ou un réseau privé décide seul de l'exposition. Vide : aucun serveur. Prise en compte au redémarrage. |
+| `webhooks.max_body_bytes` | `65536` | Taille maximale d'un corps reçu, en octets ; au-delà, la requête est refusée (413) sans être lue. |
+| `webhooks.rate_per_minute` | `60` | Réceptions admises par minute et par hook ; au-delà, 429 avec `Retry-After`. |
+| `webhooks.prompt_turns_per_hour` | `20` | Tours `prompt` déclenchés par webhook admis par heure, tous hooks confondus : une source bavarde ne fait pas travailler le modèle sans fin. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -2006,8 +2015,9 @@ suivante reprenne les mêmes éléments. Sans livrable déclaré, rien ne change
 
 Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
 lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier
-passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié) et `event`
-(un événement du journal, `run.done` par exemple). La création passe par une approbation.
+passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié), `event`
+(un événement du journal, `run.done` par exemple) et `webhook` (un `POST` signé venu de
+l'extérieur, section suivante). La création passe par une approbation.
 
 Sur Telegram, `/schedules` liste les déclencheurs et `/schedules pause|resume|rm|run <id>`
 les gère. En ligne de commande :
@@ -2036,6 +2046,93 @@ penelope schedule move <id> --chat -1001234567890 --topic 21
 Une « intention » est l'autre mémoire prospective : « quand on reparle du déploiement,
 rappelle-moi le changelog » reste armée et revient dans le contexte du premier message
 qui en parle (trois fois au plus, une fois par jour au plus).
+
+### Webhooks entrants
+
+Un service qui sait appeler une URL (forge, suivi de tickets, formulaire, domotique, un
+script sur une autre machine) peut pousser un événement dans Pénélope : c'est le
+déclencheur `webhook` (1.0.35, #294), sa première porte entrante, fermée par défaut sur
+`127.0.0.1`.
+
+```bash
+penelope schedule add webhook --spec '{}' \
+  --target '{"type":"notify","template":"🔔 {{title}} ({{action}})"}'
+```
+
+La réponse donne le chemin attribué (`/hook/<jeton>`, 24 caractères tirés au sort),
+l'adresse locale (`http://127.0.0.1:7778/hook/<jeton>`) et, **une seule fois**, le
+secret. Il est rangé dans le magasin de secrets sous `webhook_<jeton>` (`secret_ref` de
+la spécification) ; ni le store ni le journal ne le portent. Pour le remplacer par le
+vôtre : `penelope secret set webhook_<jeton>`. Demandé à Pénélope dans la conversation
+(`schedule_create`, soumis à approbation), le hook est créé de même, mais le secret n'est
+pas montré au modèle, dont la réponse entre dans le journal : posez le vôtre avec cette
+commande.
+
+L'appelant envoie un `POST` dont le corps est du JSON, horodaté et signé : l'en-tête
+`X-Penelope-Timestamp` porte l'instant de l'envoi en secondes Unix, et
+`X-Penelope-Signature` le HMAC-SHA256, par le secret, de l'horodatage, d'un point et du
+corps brut (`<horodatage>.<corps>`) :
+
+```bash
+body='{"title":"PR #12 ouverte","action":"opened"}'
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+curl -X POST "http://127.0.0.1:7778/hook/<jeton>" \
+  -H "Content-Type: application/json" \
+  -H "X-Penelope-Timestamp: $ts" \
+  -H "X-Penelope-Signature: sha256=$sig" \
+  --data "$body"
+```
+
+L'horodatage rend une requête capturée inutilisable : à plus de cinq minutes de
+l'horloge de la machine, dans un sens ou dans l'autre, elle est refusée (401) ; et dans
+ces cinq minutes, la même signature n'est admise qu'une fois (409). Un appelant qui
+réessaie signe à nouveau, avec un nouvel horodatage. L'horloge de l'appelant doit donc
+être à l'heure (NTP).
+
+Réponses : `202 {"accepted": true, "delivery": …}` quand la cible a tiré ;
+`202 {"accepted": false, "reason": "filtre"}` quand le `filter` de la spécification
+écarte le corps (`{"filter": {"action": "opened"}}`, même forme que pour `mcp_poll`) ;
+`401` signature absente ou fausse, horodatage absent ou hors de la fenêtre ; `409` même
+livraison déjà reçue (rejeu) ; `400` requête illisible ou ambiguë (CR ou LF nus, ligne
+repliée, `Content-Length` répété, `Transfer-Encoding` avec `Content-Length`) ; `411`
+transfert par morceaux ; `404` chemin inconnu, hook en pause ou supprimé ;
+`405` toute méthode autre que `POST` (un `GET` ne déclenche jamais) ; `413` corps au-delà
+de `webhooks.max_body_bytes` (64 Ko), refusé avant d'être lu ; `429` avec `Retry-After`
+au-delà de `webhooks.rate_per_minute` réceptions par hook (60) ou de
+`webhooks.prompt_turns_per_hour` tours `prompt` déclenchés par l'ensemble des hooks (20).
+Chaque réception, acceptée ou non, est un événement `webhook.received` du journal
+d'audit : statut, motif, taille, empreinte SHA-256 du corps, adresse de l'appelant ;
+jamais le corps ni les en-têtes.
+
+Les cibles sont celles des autres déclencheurs. `notify` : le gabarit reçoit
+`{{payload}}` (le corps en JSON compact) et chaque champ de premier niveau (`{{title}}`).
+`workflow` : `{{item}}` dans `params` est le corps entier. `prompt` : le corps n'est
+**jamais** substitué dans le texte du prompt ; il arrive après, encadré comme données non
+fiables, avec l'alerte du détecteur local s'il ressemble à une consigne, comme un message
+transféré ou une description MCP (#92). Chaque réception ouvre son propre tour.
+
+**Exposer sans rien ouvrir.** Le serveur n'écoute que `webhooks.listen`
+(`127.0.0.1:7778`), et Pénélope n'ouvre ni port ni pare-feu. Pour qu'un service distant
+l'atteigne : un tunnel sortant depuis la machine (`cloudflared tunnel --url
+http://127.0.0.1:7778`, `ssh -R 7778:127.0.0.1:7778 bastion`, ou l'équivalent chez ngrok
+ou Tailscale Funnel), qui donne une adresse publique en HTTPS à mettre chez l'appelant ;
+ou un réseau privé (Tailscale, WireGuard), avec `webhooks.listen = "100.x.y.z:7778"` sur
+l'adresse de ce réseau. Dans les deux cas la signature reste obligatoire : l'adresse
+n'est pas un secret, le secret l'est. `webhooks.listen = ""` n'ouvre rien ; la clé
+demande un redémarrage, et `penelope logs` dit « webhooks entrants à l'écoute ».
+
+Les compteurs de débit et les signatures déjà vues sont en mémoire : un redémarrage les
+remet à zéro, et une requête capturée dans les cinq minutes qui le précèdent passerait
+alors une fois de plus. Un même corps envoyé deux fois avec deux horodatages déclenche
+deux fois : un appelant qui réessaie sur un `5xx` peut doubler une notification, jamais
+au-delà des plafonds. Une livraison refusée en `429` peut être renvoyée telle quelle
+tant que son horodatage est dans la fenêtre.
+
+**Le mode webhook de Telegram** (`telegram.mode = "webhook"`, `telegram.webhook_url`),
+promis depuis la 0.17, n'a jamais été servi : la validation le refuse désormais en le
+disant (seul `polling` l'est), au lieu de laisser un bot sourd. Ce listener n'est pas une
+passerelle Telegram.
 
 ### Photos et documents
 
@@ -3314,7 +3411,9 @@ penelope approve <id> --effect done
 
 ## 11. Ce qui n'est pas encore branché
 
-Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram,
+Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram
+(`telegram.mode = "webhook"`, refusé à la validation depuis la 1.0.35 ; les webhooks
+entrants de Pénélope sont une autre porte, section « Webhooks entrants »),
 l'interprétation de `.penelope/deploy.toml` (le déploiement passe par les cibles `make`),
 et l'OCR des pages scannées d'un PDF qui a aussi du texte. Le gate de production d'un
 plan livré ne fusionne pas la PR et ne déploie rien : la fusion et le déploiement suivent
