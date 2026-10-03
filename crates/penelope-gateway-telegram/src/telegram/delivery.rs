@@ -70,42 +70,21 @@ impl ChannelDelivery for TelegramGateway {
         schedule_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
-        let ttl = 7 * 24 * 3_600_000;
-        let rerun = self
-            .actions
-            .create(
-                k::SCREEN_DO,
-                "schedule.run",
-                json!({"params": {"id": schedule_id}, "back": null}),
-                ttl,
-                true,
-            )
+        self.schedule_message(origin, schedule_id, text, "🔁 Relancer maintenant")
             .await
-            .map_err(|e| e.to_string())?;
-        let show = self
-            .actions
-            .create(k::SCREEN, "schedules", json!({}), ttl, false)
+    }
+
+    /// Carte d'un gabarit du catalogue émis par une planification (#293) : le texte rendu
+    /// par le cœur, « Relire maintenant » (le déclencheur repasse hors calendrier) et
+    /// l'écran des planifications.
+    async fn schedule_card(
+        &self,
+        origin: &Origin,
+        schedule_id: &str,
+        markdown: &str,
+    ) -> Result<(), String> {
+        self.schedule_message(origin, schedule_id, markdown, "⚡ Relire maintenant")
             .await
-            .map_err(|e| e.to_string())?;
-        let rows = vec![vec![
-            ButtonSpec::callback("🔁 Relancer maintenant", &rerun.token, ""),
-            ButtonSpec::callback("📅 Voir la planification", &show.token, ""),
-        ]];
-        self.outbox_push(
-            chat_id,
-            topic_id,
-            "sendMessage",
-            json!({
-                "chat_id": chat_id,
-                "text": markdown_to_html(text),
-                "parse_mode": "HTML",
-                "reply_markup": inline_keyboard(&rows),
-                "message_thread_id": topic_id,
-            }),
-        )
-        .await
-        .map_err(|e| e.to_string())
     }
 
     async fn session_titled(&self, session_id: &str, title: &str) {
@@ -277,6 +256,53 @@ impl TelegramGateway {
             .home
             .resolved()
             .unwrap_or((self.owner_id, None))
+    }
+
+    /// Message d'une planification avec ses deux boutons : relancer (libellé donné) et
+    /// voir l'écran `/schedules`.
+    async fn schedule_message(
+        &self,
+        origin: &Origin,
+        schedule_id: &str,
+        text: &str,
+        rerun_label: &str,
+    ) -> Result<(), String> {
+        let (chat_id, topic_id) = origin.telegram_chat().unwrap_or_else(|| self.home_chat());
+        let ttl = 7 * 24 * 3_600_000;
+        let rerun = self
+            .actions
+            .create(
+                k::SCREEN_DO,
+                "schedule.run",
+                json!({"params": {"id": schedule_id}, "back": null}),
+                ttl,
+                true,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let show = self
+            .actions
+            .create(k::SCREEN, "schedules", json!({}), ttl, false)
+            .await
+            .map_err(|e| e.to_string())?;
+        let rows = vec![vec![
+            ButtonSpec::callback(rerun_label, &rerun.token, ""),
+            ButtonSpec::callback("📅 Voir la planification", &show.token, ""),
+        ]];
+        self.outbox_push(
+            chat_id,
+            topic_id,
+            "sendMessage",
+            json!({
+                "chat_id": chat_id,
+                "text": markdown_to_html(text),
+                "parse_mode": "HTML",
+                "reply_markup": inline_keyboard(&rows),
+                "message_thread_id": topic_id,
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 }
 

@@ -6,7 +6,8 @@
 //!   ├─ schedules dus (cron, interval) ─► cible
 //!   ├─ mcp_poll dus ──► outil MCP en lecture ─► éléments nouveaux ou modifiés ─► cible
 //!   ├─ watch_file ────► fichier modifié ────────────────────────────────────────► cible
-//!   └─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
+//!   ├─ event ─────────► événement du journal apparu depuis le dernier passage ──► cible
+//!   └─ mcp_subscribe ─► ressource MCP abonnée, relue sur notification (fenêtre) ─► cible
 //!
 //! hors du battement
 //!   webhook ─► POST signé reçu par `webhook_server` (127.0.0.1 par défaut, #294) ──► cible
@@ -181,7 +182,10 @@ pub async fn tick_after(
     let mut still_held = false;
     for sched in s.schedules.list().await? {
         if sched.state != "active"
-            || !matches!(sched.kind, TriggerKind::WatchFile | TriggerKind::Event)
+            || !matches!(
+                sched.kind,
+                TriggerKind::WatchFile | TriggerKind::Event | TriggerKind::McpSubscribe
+            )
         {
             continue;
         }
@@ -214,6 +218,18 @@ pub async fn tick_after(
                     _ => &events,
                 };
                 event(d, ports, &sched, window, &vars, Some(&mut batch)).await
+            }
+            TriggerKind::McpSubscribe => {
+                let window = match pushed_from {
+                    Some(start) if held && start < from => {
+                        if catch_up.is_none() {
+                            catch_up = Some(events_between(d, start, to).await?);
+                        }
+                        catch_up.as_deref().unwrap_or_default()
+                    }
+                    _ => &events,
+                };
+                subscribe(d, ports, &sched, window, false, &vars, Some(&mut batch)).await
             }
             _ => continue,
         };
@@ -249,6 +265,9 @@ pub async fn run_now(d: &Context, ports: &Ports, id: &str) -> anyhow::Result<Val
     .collect();
     let result = match sched.kind {
         TriggerKind::McpPoll => poll(d, ports, &sched, &manual, None).await,
+        // « Relire maintenant » : la ressource est relue sans attendre une notification ;
+        // seuls ses éléments nouveaux tirent.
+        TriggerKind::McpSubscribe => subscribe(d, ports, &sched, &[], true, &manual, None).await,
         _ => fire(d, ports, &sched, &[], &manual, None)
             .await
             .map(|_| true),
@@ -333,8 +352,10 @@ use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
 use quiet::Batch;
 use templating::{items_lines, substitute, template_params, tool_payload};
+pub use triggers::mcp_subscribe::{SubscribeState, resource_payload, subscription_state};
 use triggers::{
-    event, event_cursor, events_between, last_event_id, poll, watch_file, watch_file_seed,
+    event, event_cursor, events_between, last_event_id, poll, subscribe, watch_file,
+    watch_file_seed,
 };
 use wake::LATE;
 pub use wake::{Late, Wake, WakeWatch, health, held_text, late_of, late_text, wake_check};

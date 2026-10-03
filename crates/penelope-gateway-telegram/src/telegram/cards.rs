@@ -334,6 +334,11 @@ pub(super) fn schedules_text(v: &Value) -> String {
             ),
             "watch_file" => format!("fichier `{}`", spec["path"].as_str().unwrap_or("?")),
             "webhook" => format!("webhook `POST {}`", spec["path"].as_str().unwrap_or("?")),
+            "mcp_subscribe" => format!(
+                "abonnement `{}` {}",
+                spec["server"].as_str().unwrap_or("?"),
+                spec["uri"].as_str().unwrap_or("?")
+            ),
             other => format!("{other} `{}`", spec["event"].as_str().unwrap_or("?")),
         };
         let target = &sc["target"];

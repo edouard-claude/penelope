@@ -515,7 +515,9 @@ impl Server {
                 value: body,
             }]
         };
-        let result = fire(&self.d, &self.ports, &sched, &items, &vars)
+        // Hors fournée des heures calmes (#296) : la livraison est servie dans la requête,
+        // son corps n'est gardé nulle part pour partir plus tard.
+        let result = fire(&self.d, &self.ports, &sched, &items, &vars, None)
             .await
             .map(|_| true);
         let failed = result.as_ref().err().map(|e| e.to_string());

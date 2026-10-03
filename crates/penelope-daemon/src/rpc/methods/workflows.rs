@@ -170,7 +170,8 @@ impl Rpc {
                 let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "kind inconnu : cron, interval, mcp_poll, watch_file, event ou webhook"
+                            "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook \
+                             ou mcp_subscribe"
                         )
                     })?;
                 penelope_orchestrator::scheduler::create(

@@ -23,11 +23,19 @@ impl McpSupervisor {
         let mut running: Vec<(Arc<Slot>, i64)> = Vec::new();
         for slot in &slots {
             let c = slot.config();
-            let is_live = slot.live.lock().await.is_some();
+            // Un serveur dont une ressource est suivie par abonnement (#293) n'est jamais
+            // « inactif » : l'arrêter perdrait l'abonnement, qu'il faudrait reposer.
+            let (is_live, subscribed) = {
+                let live = slot.live.lock().await;
+                (
+                    live.is_some(),
+                    live.as_ref().is_some_and(|l| l.has_subscriptions()),
+                )
+            };
             let last_used = slot.info(|i| i.last_used_ms);
             if is_live {
                 let idle = (now - last_used) as u128 >= c.idle_duration().as_millis();
-                if c.lazy_start && !c.eager_schemas && idle {
+                if c.lazy_start && !c.eager_schemas && idle && !subscribed {
                     tracing::debug!(server = %slot.name, "serveur MCP inactif arrêté");
                     self.stop_slot(slot).await;
                     self.persist(slot).await;

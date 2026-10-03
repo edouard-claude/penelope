@@ -33,6 +33,7 @@ impl NativeToolExecutor {
             "schedule_create" | "schedule_list" | "schedule_move" | "schedule_delete" => {
                 self.schedule_tools(name, args, cancel).await
             }
+            "mcp_resource_read" => self.mcp_resource_read(args).await,
             "send_message" | "send_voice" | "send_file" => {
                 self.message_tools(name, args, cancel).await
             }

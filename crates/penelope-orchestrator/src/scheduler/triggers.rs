@@ -204,3 +204,6 @@ pub(super) async fn last_event_id(d: &Context) -> anyhow::Result<i64> {
         .read(|c| Ok(c.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |r| r.get(0))?))
         .await?)
 }
+
+pub(super) mod mcp_subscribe;
+pub(super) use mcp_subscribe::subscribe;

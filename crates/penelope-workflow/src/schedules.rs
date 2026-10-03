@@ -1,6 +1,6 @@
 //! Déclencheurs et jobs planifiés (§12.9).
 //!
-//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`, `webhook`.
+//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`, `webhook`, `mcp_subscribe`.
 //! Cibles : `prompt`, `workflow`, `notify`.
 //!
 //! `webhook` (#294) : un service extérieur pousse un corps JSON sur `POST /hook/<jeton>`,
@@ -10,6 +10,13 @@
 //! Déduplication `mcp_poll` : un élément nouveau **ou modifié** (empreinte) déclenche la
 //! cible, une seule fois par élément. À la création, les éléments existants sont marqués
 //! vus sans déclenchement, sauf option `backfill`.
+//!
+//! `mcp_subscribe` (#293) : une ressource d'un serveur MCP (`server`, `uri`) suivie par
+//! abonnement (`resources/subscribe`) ; la ressource est relue à chaque notification
+//! `resources/updated`, groupée sur une fenêtre, et dédoublonnée comme `mcp_poll`
+//! (`item_path`, `id_path`, `filter`). Sans `id_path`, la ressource entière est l'élément
+//! et chaque changement de contenu déclenche. Un serveur qui ne sait pas s'abonner est
+//! sondé toutes les `every_ms` (60 s au moins), sans que l'utilisateur ait à choisir.
 
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::cron::Cron;
@@ -26,6 +33,8 @@ pub enum TriggerKind {
     WatchFile,
     Event,
     Webhook,
+    /// Ressource MCP suivie par abonnement, sondée à défaut (#293).
+    McpSubscribe,
 }
 
 impl TriggerKind {
@@ -37,6 +46,7 @@ impl TriggerKind {
             TriggerKind::WatchFile => "watch_file",
             TriggerKind::Event => "event",
             TriggerKind::Webhook => "webhook",
+            TriggerKind::McpSubscribe => "mcp_subscribe",
         }
     }
     pub fn parse(s: &str) -> Option<TriggerKind> {
@@ -47,6 +57,7 @@ impl TriggerKind {
             "watch_file" => TriggerKind::WatchFile,
             "event" => TriggerKind::Event,
             "webhook" => TriggerKind::Webhook,
+            "mcp_subscribe" => TriggerKind::McpSubscribe,
             _ => return None,
         })
     }
@@ -62,6 +73,16 @@ pub fn webhook_token_ok(token: &str) -> bool {
         && token
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+/// Réglages d'un `mcp_subscribe` et leurs défauts (#293).
+pub mod subscribe {
+    /// Sondage de repli, et minimum accepté pour `every_ms`.
+    pub const DEFAULT_EVERY_MS: u64 = 60_000;
+    /// Fenêtre de regroupement des notifications.
+    pub const DEFAULT_WINDOW_MS: u64 = 30_000;
+    /// Tirs d'un `prompt` ou d'un `workflow` par heure glissante ; le surplus est notifié.
+    pub const DEFAULT_MAX_PER_HOUR: u64 = 20;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +243,25 @@ impl Schedule {
                     return Err("`filter` d'un webhook : un objet `{chemin: valeur}`".into());
                 }
             }
+            TriggerKind::McpSubscribe => {
+                for k in ["server", "uri"] {
+                    if self.spec.get(k).and_then(|v| v.as_str()).is_none() {
+                        return Err(format!("`{k}` est obligatoire pour un mcp_subscribe"));
+                    }
+                }
+                let bounded = |key: &str, min: u64| -> Result<(), String> {
+                    match self.spec.get(key) {
+                        None => Ok(()),
+                        Some(v) => match v.as_u64() {
+                            Some(n) if n >= min => Ok(()),
+                            _ => Err(format!("`{key}` d'un mcp_subscribe : entier ≥ {min}")),
+                        },
+                    }
+                };
+                bounded("every_ms", subscribe::DEFAULT_EVERY_MS)?;
+                bounded("window_ms", 1_000)?;
+                bounded("max_per_hour", 1)?;
+            }
         }
 
         match self.target_kind() {
@@ -267,8 +307,12 @@ impl Schedule {
                 let ms = self.spec.get("every_ms")?.as_u64()? as i64;
                 Some(now_ms + ms)
             }
-            // Ces déclencheurs sont poussés par un événement externe.
-            TriggerKind::WatchFile | TriggerKind::Event | TriggerKind::Webhook => None,
+            // Ces déclencheurs sont poussés par un événement externe ; le sondage de repli
+            // d'un `mcp_subscribe` tient sa propre horloge (`scheduler.mcp_subscribe.<id>`).
+            TriggerKind::WatchFile
+            | TriggerKind::Event
+            | TriggerKind::Webhook
+            | TriggerKind::McpSubscribe => None,
         }
     }
 }

@@ -1790,6 +1790,7 @@ et `/stop` interrompt tout le lot.
 | `job_list` | read | Jobs d'outils de cette session : ceux qui tournent encore, leur outil et leur âge. (à la demande) |
 | `job_status` | read | État d'un job lancé en arrière-plan : `working`, `completed`, `failed` ou `cancelled`, et son résultat s'il est terminé. (à la demande) |
 | `job_wait` | read | Attend la fin d'un job, au plus `timeout_ms` (120 s au maximum, 30 s par défaut). (à la demande) |
+| `mcp_resource_read` | read | Lit une ressource d'un serveur MCP (`resources/read`) : son texte, ou son JSON décodé. (à la demande) |
 | `mem_forget` | destructive | Retire une entrée de mémoire. (à la demande) |
 | `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. (à la demande) |
 | `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). (à la demande) |
@@ -2125,15 +2126,36 @@ suivante reprenne les mêmes éléments. Sans livrable déclaré, rien ne change
 
 Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
 lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier
-passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié), `event`
-(un événement du journal, `run.done` par exemple) et `webhook` (un `POST` signé venu de
+passage ne fait que mémoriser l'existant), `mcp_subscribe` (une ressource d'un serveur MCP
+suivie par abonnement, voir ci-dessous), `watch_file` (un fichier modifié), `event` (un
+événement du journal, `run.done` par exemple) et `webhook` (un `POST` signé venu de
 l'extérieur, section suivante). La création passe par une approbation.
+
+**Réagir à un serveur MCP sans le sonder (`mcp_subscribe`, 1.0.35, #293).** Un serveur qui
+déclare `resources.subscribe` (un pont de messagerie, un tracker) prévient Pénélope quand
+une ressource change ; elle la relit alors et déclenche la cible pour ce qui est nouveau,
+au lieu d'interroger un outil toutes les minutes. La spécification nomme le serveur et la
+ressource (`server`, `uri`) ; `item_path`, `id_path` et `filter` découpent la ressource en
+éléments comme pour `mcp_poll` (sans `id_path`, la ressource entière est l'élément et
+chaque changement de contenu déclenche). L'abonnement est posé au démarrage du serveur et
+reposé après chaque reconnexion ; les notifications sont groupées sur une fenêtre de 30 s
+(`window_ms`), et un `prompt` ou un `workflow` ne part pas plus de 20 fois par heure
+(`max_per_hour`) : au-delà, les éléments sont notifiés sans modèle. Si le serveur ne sait
+pas s'abonner, le déclencheur le sonde toutes les `every_ms` (60 s au moins) sans rien
+demander. Un abonnement perdu plus d'une heure (serveur arrêté, en panne) apparaît dans le
+digest du matin ; le déclencheur repart seul au retour du serveur et relit ce qui a bougé
+pendant la coupure. Avec une cible `notify` et un gabarit du catalogue (`ticket_detected`),
+la notification arrive en carte, avec « ⚡ Relire maintenant ». Le modèle réveillé relit la
+ressource avec `mcp_resource_read` (à la demande).
 
 Sur Telegram, `/schedules` liste les déclencheurs et `/schedules pause|resume|rm|run <id>`
 les gère. En ligne de commande :
 
 ```bash
 penelope schedule list
+penelope schedule add mcp_subscribe \
+  --spec '{"server":"pont","uri":"mail://inbox","id_path":"id"}' \
+  --target '{"type":"notify","template":"ticket_detected"}'
 ```
 
 **Où livre une planification.** Chacune livre dans la conversation où elle est née : la

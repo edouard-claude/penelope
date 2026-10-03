@@ -51,7 +51,11 @@ et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement
 un créneau parti plus de cinq minutes après son heure y ajoute `planned` (l'heure prévue)
 et `late` (la phrase qui l'annonce au propriétaire). `schedule.failed` suit chaque exécution
 ratée (`alerted` : l'alerte est partie ou s'est tue, série en cours au même motif) et
-`schedule.recovered` le succès qui clôt une série alertée (#229).
+`schedule.recovered` le succès qui clôt une série alertée (#229). Un `mcp_subscribe`
+(#293) ajoute `mcp.resource_updated` (le serveur a prévenu : `server`, `uri`),
+`schedule.subscription_lost` et `schedule.subscription_restored` (l'abonnement, avec
+`lasted_ms` au retour) et `schedule.capped` (plafond horaire atteint : `items`,
+`max_per_hour`).
 
 `host.woke` dit que la machine sort de veille : l'horloge murale a avancé de plus de 60 s
 de plus que l'horloge monotone entre deux passages de l'ordonnanceur. Il porte `slept_ms`

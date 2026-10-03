@@ -17,10 +17,27 @@ pub async fn digest_inputs_with(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) ->
     // Planifications dont la dernière exécution a échoué, ou n'a rien livré (#39, #120).
     let mut failing = Vec::new();
     for sched in s.schedules.list().await.unwrap_or_default() {
-        if sched.state == "active"
-            && let Some(err) = &sched.last_error
-        {
+        if sched.state != "active" {
+            continue;
+        }
+        if let Some(err) = &sched.last_error {
             failing.push(format!("- {} : {err}", label(s, &sched).await));
+        }
+        // Un abonnement MCP perdu depuis plus d'une heure (#293) : le déclencheur est
+        // éteint sans qu'aucune exécution ait échoué, le digest le dit.
+        if sched.kind == TriggerKind::McpSubscribe
+            && let Some((since, err)) = triggers::mcp_subscribe::lost_for(s, &sched).await
+        {
+            let hours = (s.clock.now_ms() - since) / 3_600_000;
+            failing.push(format!(
+                "- {} : abonnement MCP perdu depuis {hours} h, le déclencheur ne réagit plus{}",
+                label(s, &sched).await,
+                if err.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({err})")
+                }
+            ));
         }
     }
     // Les départs du jour et les rendez-vous, rangés par heure, journées entières en tête.

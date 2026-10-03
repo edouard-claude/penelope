@@ -64,7 +64,7 @@ variables = ["intention", "action"]
 | `run_done` | Run terminé | Trace, Relancer |
 | `run_blocked` | Run bloqué | Réessayer, Passer l'étape, Annuler |
 | `incident` | Incident pendant un run | Rollback, Réessayer, Laisser |
-| `ticket_detected` | Un ticket est détecté | Lancer le workflow, Ignorer, Plus tard |
+| `ticket_detected` | Un ticket est détecté ; émis par une planification `notify` (`mcp_subscribe`, #293) avec les boutons de planification : Relire maintenant, Voir la planification | Lancer le workflow, Ignorer, Plus tard |
 | `question` | Question libre au propriétaire | Répondre |
 | `form` | Un champ de formulaire | Précédent, Suivant, Envoyer, Renoncer |
 | `mcp_oauth_required` | Un serveur MCP demande une autorisation | Ouvrir, Coller l'URL, Annuler |
