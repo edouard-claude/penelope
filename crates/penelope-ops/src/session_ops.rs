@@ -345,10 +345,42 @@ async fn session_lines(s: &Services, session_id: &str) -> anyhow::Result<Vec<Val
     Ok(lines)
 }
 
+/// Marque posée par la migration 0026 (#300) : l'index plein texte des messages n'a que le
+/// texte des lignes écrites avant que les appels d'outils y entrent. La passe de
+/// maintenance la lève par [`reindex_fts_if_pending`], `penelope store rebuild` aussi.
+pub const FTS_REINDEX_PENDING_KEY: &str = "store.messages_fts_pending";
+
+/// Index plein texte des messages à refaire après une migration
+/// ([`FTS_REINDEX_PENDING_KEY`]) : le refait depuis `messages`, appels d'outils compris,
+/// lignes scellées comprises, et retire la marque. Le journal n'est pas touché, et
+/// `history verify` ne lit pas l'index. `None` : rien à faire.
+pub async fn reindex_fts_if_pending(s: &Services) -> anyhow::Result<Option<Value>> {
+    let Some(pending) = s.kv_get(FTS_REINDEX_PENDING_KEY).await? else {
+        return Ok(None);
+    };
+    let started = std::time::Instant::now();
+    let messages = s.context.history.rebuild_fts().await?;
+    s.kv_delete(FTS_REINDEX_PENDING_KEY).await?;
+    let report = json!({
+        "pending": pending,
+        "messages_fts": messages,
+        "duration_ms": started.elapsed().as_millis() as u64,
+    });
+    tracing::info!(report = %report, "index plein texte des messages refait après migration");
+    let mut payload = report.clone();
+    payload["reason"] = json!("migration");
+    s.events
+        .append(EventDraft::new("store.rebuilt", payload))
+        .await?;
+    Ok(Some(report))
+}
+
 /// Reconstruit ce qui se reconstruit (§4.4) : index plein texte des messages, index de la
-/// mémoire depuis le vault ; vérifie la chaîne d'audit au passage.
+/// mémoire depuis le vault ; vérifie la chaîne d'audit au passage. Une reconstruction
+/// demandée vaut la passe de [`reindex_fts_if_pending`] : la marque est levée.
 pub async fn rebuild(s: &Services) -> anyhow::Result<Value> {
     let messages = s.context.history.rebuild_fts().await?;
+    s.kv_delete(FTS_REINDEX_PENDING_KEY).await?;
     let vault = crate::helpers::vault_dir(s);
     let memory = crate::vault_ops::reindex(s, &vault)
         .await
@@ -405,6 +437,58 @@ mod tests {
         h.append(sid, &ChatMessage::assistant(answer), 5, 0, false, None)
             .await
             .unwrap();
+    }
+
+    /// #300 : la marque de la migration 0026 fait refaire l'index une fois, appels d'outils
+    /// compris, sans écrire le journal de la conversation ; sans marque, rien ne bouge.
+    #[tokio::test]
+    async fn the_pending_mark_reindexes_tool_calls_once() {
+        let (_dir, s) = services().await;
+        let sid = chat(&s).await;
+        let h = &s.context.history;
+        let call = ChatMessage::assistant("").with_tool_calls(vec![penelope_llm::types::ToolCall {
+            id: "c1".into(),
+            name: "shell_exec".into(),
+            arguments: json!({"command": "ffmpeg -i in.wav -af acompressor=threshold=-18dB out.wav"}),
+        }]);
+        h.append(&sid, &call, 20, 0, false, None).await.unwrap();
+        // L'index d'avant #300 : le texte seul, vide pour ce message.
+        s.store
+            .write(|tx| {
+                tx.execute("UPDATE messages_fts SET content = ''", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            h.grep("acompressor", Some(&sid), 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(reindex_fts_if_pending(&s).await.unwrap().is_none());
+        assert!(
+            h.grep("acompressor", Some(&sid), 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        s.kv_set(FTS_REINDEX_PENDING_KEY, "test").await.unwrap();
+        let conv_events = s.events.session_events(&sid, 0).await.unwrap().len();
+        let r = reindex_fts_if_pending(&s).await.unwrap().unwrap();
+        assert_eq!(r["messages_fts"], 1);
+        assert_eq!(r["pending"], "test");
+        let hits = h.grep("acompressor", Some(&sid), 5).await.unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].role, "assistant");
+        assert_eq!(
+            s.events.session_events(&sid, 0).await.unwrap().len(),
+            conv_events,
+            "le journal de la conversation n'a pas bougé"
+        );
+        assert!(s.kv_get(FTS_REINDEX_PENDING_KEY).await.unwrap().is_none());
+        assert!(reindex_fts_if_pending(&s).await.unwrap().is_none());
     }
 
     #[tokio::test]

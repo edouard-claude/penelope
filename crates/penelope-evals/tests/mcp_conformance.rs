@@ -3,11 +3,13 @@
 //! Chaque ligne du tableau §8.4 a au moins un test vert par version concernée, contre des
 //! serveurs simulés, sans réseau.
 
-use penelope_evals::mcp_servers::{MockAuthServer, conformance_matrix, server};
+use penelope_evals::mcp_servers::{
+    MockAuthServer, conformance_matrix, push_resource_update, server,
+};
 use penelope_mcp::client::McpClient;
 use penelope_mcp::error::McpError;
 use penelope_mcp::oauth::*;
-use penelope_mcp::protocol::{ClientFeatures, ContentBlock, ProtocolVersion};
+use penelope_mcp::protocol::{ClientFeatures, ContentBlock, Incoming, ProtocolVersion};
 use serde_json::json;
 use std::time::Duration;
 
@@ -149,6 +151,45 @@ async fn resources_and_templates_are_reachable() {
             other => panic!("{other:?}"),
         }
         c.subscribe_resource("tracker://projets").await.unwrap();
+    }
+}
+
+/// #293 : un client abonné reçoit la notification `resources/updated` que le serveur
+/// pousse, avec l'URI, et relit la ressource ; quelle que soit la version.
+#[tokio::test]
+async fn resource_updates_are_pushed_to_a_subscribed_client() {
+    for v in [ProtocolVersion::V20241105, ProtocolVersion::V20260728] {
+        let t = server(v, "stdio");
+        let c = McpClient::connect(
+            "tracker",
+            t.clone(),
+            ProtocolVersion::V20260728,
+            TIMEOUT,
+            4,
+            ClientFeatures::default(),
+        )
+        .await
+        .unwrap();
+        assert!(c.capabilities().resources_subscribe, "{v}");
+        let mut rx = c.transport().incoming();
+        c.subscribe_resource("tracker://projets").await.unwrap();
+        push_resource_update(&t, "tracker://projets");
+        let got = tokio::time::timeout(TIMEOUT, rx.recv())
+            .await
+            .expect("notification attendue")
+            .unwrap();
+        match got {
+            Incoming::Notification(n) => {
+                assert_eq!(n.method, "notifications/resources/updated", "{v}");
+                assert_eq!(n.params.unwrap()["uri"], "tracker://projets", "{v}");
+            }
+            other => panic!("{v} : {other:?}"),
+        }
+        let contents = c.read_resource("tracker://projets").await.unwrap();
+        assert!(
+            matches!(&contents[0], ContentBlock::Resource { text: Some(t), .. } if t.contains("Pénélope")),
+            "{v} : {contents:?}"
+        );
     }
 }
 

@@ -103,11 +103,15 @@ exclus), mesurées à la 1.0.22 :
 | `penelope-daemon` | composition, moteur des tours, coureurs, supervision, RPC | toutes les crates ci-dessus sauf telegram | 14 730 |
 | `penelope-gateway-telegram` | la passerelle Telegram, adaptateur pilotant, trace des outils (`telegram/trace.rs`) | agent, app, context, conversation, daemon, dream, executor, hitl, kernel, llm, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, vault, workflow | 22 970 |
 | `penelope-evals` | suites déterministes, scénarios rejouables, rejeu | agent, app, context, conversation, daemon, dream, executor, gateway-telegram, hitl, kernel, llm, mcp, mcp-host, memory, observe, ops, orchestrator, platform, skills, store, telegram, tools, vault, workflow | 7 184 |
-| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition, `dataset export` et `local install` sans daemon | agent, daemon, evals, gateway-telegram, hitl, kernel, observe, ops, platform, store, telegram, tools, workflow | 4 846 |
+| `penelope-agenda-mcp` | le serveur MCP d'agenda CalDAV en lecture (iCalendar, récurrences, `PROPFIND` et `REPORT`), servi par `penelope agenda-mcp` et par son propre binaire | mcp | 3 375 |
+| `penelope-cli` | le binaire `penelope` : CLI, client RPC, composition, `dataset export`, `local install` et `agenda-mcp` sans daemon | agenda-mcp, agent, daemon, evals, gateway-telegram, hitl, kernel, observe, ops, platform, store, telegram, tools, workflow | 4 846 |
 | `penelope-archtest` | les règles d'architecture et le gel | aucune | 4 024 |
 
 `penelope-cli` dépend de `penelope-hitl` depuis la 1.0.13 (#233) : la lecture des
-échantillons du juge (`penelope dataset export`) vit à côté de leur écriture.
+échantillons du juge (`penelope dataset export`) vit à côté de leur écriture. Elle dépend
+de `penelope-agenda-mcp` depuis la 1.0.37 (#295, décision
+[0018](decisions/0018-agenda-caldav-en-lecture.md)) : le serveur d'agenda entre dans la
+release sans second binaire à emballer.
 
 221 679 lignes en tout (`find crates/*/src -name '*.rs' | xargs cat | wc -l`). Hors
 fichiers de tests, le plus gros fichier fait 956 lignes

@@ -251,15 +251,26 @@ pub(super) fn time() -> Vec<ToolSpec> {
              `{\"type\": \"prompt\", \"prompt\": \"…\"}` pour travailler à l'heure dite. \
              Autres kinds : `interval` (`every_ms`), `mcp_poll` (`server`, `tool` en lecture, \
              `args`, `every_ms` ≥ 60000, `item_path`, `id_path`, `filter`), `watch_file` \
-             (`path`), `event` (`event`). Le retour arrive dans ce chat, chaque exécution \
+             (`path`), `event` (`event`), `webhook` (spec `{}` ou `{\"filter\": {…}}` : \
+             Pénélope attribue le chemin `/hook/<jeton>` et un secret HMAC rangé dans le \
+             magasin, jamais montré au modèle ; le corps JSON reçu passe à la cible, encadré \
+             comme non fiable dans un prompt), `mcp_subscribe` (`server`, `uri` d'une ressource \
+             MCP suivie par abonnement, relue à chaque notification ; `item_path`, \
+             `id_path`, `filter` comme `mcp_poll`, `window_ms` de regroupement, \
+             `max_per_hour` ; sondage de repli `every_ms` si le serveur ne sait pas \
+             s'abonner). Le retour arrive dans ce chat, chaque exécution \
              d'un prompt dans sa propre session (`label` dans target pour la nommer) ; une \
              planification identique déjà active est signalée (`doublons`). Un prompt peut \
              déclarer dans target son `livrable` (`message`, `fichier:<chemin>`, `run`) : sans \
              lui, l'exécution compte comme un échec ; et son `etat` (chemin du fichier « déjà \
-             vu »), remis tel qu'avant si rien n'est livré.",
+             vu »), remis tel qu'avant si rien n'est livré. Pendant les heures calmes du \
+             propriétaire, une planification attend la fin de la plage, sauf `\"urgent\": \
+             true` dans spec (un réveil, un train) : la réponse de création le dit \
+             (`heures_calmes`) quand le premier passage tombe dedans, propose `urgent` au \
+             propriétaire.",
             obj(
                 json!({
-                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event"]},
+                    "kind": {"type":"string","enum":["cron","interval","mcp_poll","watch_file","event","webhook","mcp_subscribe"]},
                     "spec": {"type":"object"},
                     "target": {"type":"object"},
                     "dedup": {"type":"object"}

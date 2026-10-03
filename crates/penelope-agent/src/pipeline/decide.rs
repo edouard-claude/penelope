@@ -114,6 +114,15 @@ fn not_run(why: &str) -> String {
     format!("Non exécuté : {why}. Propose une autre approche ou demande.")
 }
 
+/// La réponse au propriétaire quand le tour s'arrête sur un refus répété (#302) : l'état
+/// que l'exécuteur a donné, tel quel.
+pub(crate) fn halt_answer(tool: &str, reason: &str) -> String {
+    format!(
+        "⏹ Tour arrêté : `{tool}` a été refusé deux fois depuis cette conversation, où seul \
+         le bouton de la carte lance un run. État : {reason}."
+    )
+}
+
 /// Le tour s'arrête sur une demande d'approbation.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Suspension {
@@ -128,6 +137,13 @@ pub(crate) enum GuardStop {
     Suspend(Suspension),
     /// La garde de boucle arrête le tour : le message du détecteur.
     LoopAbort(String),
+    /// L'exécuteur a refusé le même outil deux fois dans le tour, avant toute carte
+    /// (#302) : `result` revient à l'appel, `answer` au propriétaire, et le tour s'arrête
+    /// sans autre appel au modèle.
+    Halt {
+        result: String,
+        answer: String,
+    },
     /// Le propriétaire a déjà approuvé cet appel : il s'exécute sans redemander, ni
     /// garde de boucle, ni politique.
     Approved,
@@ -279,6 +295,20 @@ impl CallGuard for Precheck {
         let Err(e) = cx.execute.precheck(&d.call.name, &d.call.arguments).await else {
             return Ok(None);
         };
+        // Refusé par l'exécuteur avant toute carte (le gate « vas-y » de
+        // `workflow_start`, #302) : le texte dit l'état réel, et le propriétaire n'a
+        // pas de carte à valider pour rien. Au deuxième refus du même outil dans le
+        // tour, le tour s'arrête et le propriétaire reçoit cet état.
+        if let penelope_tools::ToolError::Denied(reason) = &e {
+            let result = e.for_model();
+            if cx.detector.observe_refused(&d.info.effective_name) >= 2 {
+                return Ok(Some(GuardStop::Halt {
+                    result,
+                    answer: halt_answer(&d.info.effective_name, reason),
+                }));
+            }
+            return Ok(Some(GuardStop::Refuse(Refusal::Invalid(result))));
+        }
         let mut text = e.for_model();
         match cx.detector.observe_invalid(&d.info.effective_name) {
             LoopVerdict::Ok => {}

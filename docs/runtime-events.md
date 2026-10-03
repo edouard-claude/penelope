@@ -51,7 +51,11 @@ et erreurs. L'ordonnanceur émet aussi `schedule.fired` après un déclenchement
 un créneau parti plus de cinq minutes après son heure y ajoute `planned` (l'heure prévue)
 et `late` (la phrase qui l'annonce au propriétaire). `schedule.failed` suit chaque exécution
 ratée (`alerted` : l'alerte est partie ou s'est tue, série en cours au même motif) et
-`schedule.recovered` le succès qui clôt une série alertée (#229).
+`schedule.recovered` le succès qui clôt une série alertée (#229). Un `mcp_subscribe`
+(#293) ajoute `mcp.resource_updated` (le serveur a prévenu : `server`, `uri`),
+`schedule.subscription_lost` et `schedule.subscription_restored` (l'abonnement, avec
+`lasted_ms` au retour) et `schedule.capped` (plafond horaire atteint : `items`,
+`max_per_hour`).
 
 `host.woke` dit que la machine sort de veille : l'horloge murale a avancé de plus de 60 s
 de plus que l'horloge monotone entre deux passages de l'ordonnanceur. Il porte `slept_ms`
@@ -59,6 +63,12 @@ et `slept` (« 3 h 02 »). `host.health` le suit : `channel` (`ok`, `absent` ou 
 après quelques essais de la sonde du canal) et `mcp_restarted` (les serveurs dégradés, en
 échec ou en attente de reprise, relancés avec leur nouvel état). Les créneaux en retard
 partent après cette passe, une fois chacun (#228).
+
+`schedule.held` dit qu'un créneau dû attend la fin des heures calmes (#296) : `schedule`,
+`planned` (le créneau) et `until` (la fin de la plage, « 07:00 ») ; une fois par créneau
+retenu, pas à chaque passage. À la sortie, `schedule.fired` et `schedule.notified`
+portent `quiet: true` pour ce qui a attendu, et `quiet.delivered` compte les éléments du
+message groupé (`items`) dont ceux venus de la file persistée (`queued`).
 
 `tool.job.started` et `tool.job.completed` encadrent un appel d'outil sorti de son tour
 (un `shell_exec` ou un `sub_agent_spawn` lancé avec `background: true`). Le premier porte
@@ -106,6 +116,7 @@ du tour (sauf `approval.decided`, qui ne l'est pas) :
 | `turn.merged` | des messages du propriétaire rejoignent le tour : avant qu'il parte (`phase: queued`) ou pendant, avant un appel au modèle ou entre deux appels d'outils (`phase: running`) | `turn`, `count`, `phase` |
 | `turn.empty_answer` | le modèle n'a rendu ni texte ni appel d'outil ; relancé une fois, sauf si le raisonnement a mangé la sortie | `model`, `upstream`, `generation_id`, `finish`, `native_finish`, `completion_tokens`, `reasoning_tokens`, `retried` |
 | `turn.loop_aborted` | le détecteur de boucles arrête les outils du tour | `report` |
+| `turn.halted` | l'exécuteur a refusé le même outil deux fois dans le tour, avant toute carte (le gate « vas-y » de `workflow_start`, #302) : le tour s'arrête sur l'état connu, sans autre appel au modèle | `tool`, `answer` |
 | `tool.result` | un appel d'outil a rendu son résultat | `tool`, `ok`, `shape` (la forme de la ligne de commande, jamais la commande) ; `nudge_style` (`classique` ou `doux`, #291) quand le résultat porte le rappel de délégation |
 | `tool.call_id_reused` | un appel en attente porte un identifiant que la session a déjà vu (#266) : pour la carte d'approbation et le ledger d'effets, il est renuméroté sous une identité ancrée au message qui le porte ; le transcript garde l'identifiant émis | `call_id`, `identity`, `tool` |
 | `llm.retried` | nouvel essai du même modèle après une erreur d'avant flux | `model`, `attempt`, `wait_s`, `error` |

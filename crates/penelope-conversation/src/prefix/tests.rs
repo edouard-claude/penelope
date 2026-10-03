@@ -238,3 +238,29 @@ async fn a_loaded_skill_whose_body_changed_is_named_once() {
         "une seule fois"
     );
 }
+
+/// #302 : une note laissée hors tour (un run lancé depuis la carte de plan) part dans le
+/// contexte volatil du message suivant, une seule fois.
+#[tokio::test]
+async fn a_pending_notice_is_sent_once_with_the_next_message() {
+    let w = world().await;
+    penelope_app::notices::push(&w.s, &w.sid, "Run `r_plan_1` lancé.")
+        .await
+        .unwrap();
+    w.turn("un", tiers("idx", "")).await;
+    let blocks = w.blocks().await;
+    assert!(
+        blocks[0].contains("<evenements>") && blocks[0].contains("- Run `r_plan_1` lancé."),
+        "{}",
+        blocks[0]
+    );
+    assert!(
+        penelope_app::notices::peek(&w.s, &w.sid)
+            .await
+            .unwrap()
+            .is_empty(),
+        "retirée une fois partie"
+    );
+    w.turn("deux", tiers("idx", "")).await;
+    assert!(!w.blocks().await[1].contains("<evenements>"));
+}

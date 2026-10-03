@@ -88,7 +88,12 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
         target: Value,
         dedup: Value,
     ) -> Result<Value, String> {
-        crate::scheduler::create(&self.context.services, kind, spec, target, dedup).await
+        let mut v =
+            crate::scheduler::create(&self.context.services, kind, spec, target, dedup).await?;
+        // Le secret d'un webhook (#294) ne passe pas par le modèle : la réponse d'un outil
+        // entre dans le journal de la conversation.
+        crate::scheduler::withhold_secret(&mut v);
+        Ok(v)
     }
 
     async fn schedule_list(&self) -> Result<Vec<Value>, String> {
@@ -102,11 +107,8 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
     }
 
     async fn schedule_delete(&self, id: &str) -> Result<(), String> {
-        let found = self
-            .context
-            .services
-            .schedules
-            .set_state(id, "deleted")
+        // Le secret d'un webhook part avec sa planification (#294).
+        let found = crate::scheduler::remove(&self.context.services, id)
             .await
             .map_err(|e| e.to_string())?;
         // Un identifiant inconnu n'est pas une suppression réussie : même refus que la

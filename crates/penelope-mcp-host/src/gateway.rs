@@ -65,6 +65,14 @@ impl penelope_app::ports::McpGateway for McpSupervisor {
         let schemas = self.services.mcp_tools.promoted_schemas(&names).await;
         tool_defs(schemas.unwrap_or_default())
     }
+
+    async fn subscribe_resource(&self, server: &str, uri: &str) -> Result<bool, String> {
+        McpSupervisor::subscribe_resource(self, server, uri).await
+    }
+
+    async fn read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
+        McpSupervisor::read_resource(self, server, uri).await
+    }
 }
 
 impl McpSupervisor {

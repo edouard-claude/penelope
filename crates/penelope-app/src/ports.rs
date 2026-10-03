@@ -353,6 +353,19 @@ pub trait McpGateway: Send + Sync {
     async fn promoted_tools(&self) -> Vec<penelope_llm::ToolDef> {
         Vec::new()
     }
+    /// Abonne Pénélope aux mises à jour d'une ressource (`resources/subscribe`, #293).
+    /// Idempotent sur une connexion vivante ; après une reconnexion, l'abonnement est
+    /// reposé par l'appel suivant. `Ok(false)` : le serveur ne déclare pas
+    /// `resources.subscribe`, l'appelant sonde à la place. `Err` : serveur injoignable.
+    async fn subscribe_resource(&self, server: &str, uri: &str) -> Result<bool, String> {
+        let _ = (server, uri);
+        Err("abonnement aux ressources MCP indisponible ici".into())
+    }
+    /// Lit une ressource (`resources/read`) : `{"contents": [{uri, mimeType, text|blob}]}`.
+    async fn read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
+        let _ = (server, uri);
+        Err("lecture de ressource MCP indisponible ici".into())
+    }
 }
 
 /// Capacités qui dépendent du moteur de workflows et des sous-agents.

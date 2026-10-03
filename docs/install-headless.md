@@ -258,8 +258,10 @@ nommément : rôle ou palier de routage vers un alias absent, repli vers soi-mê
 `tools.http_block_private_ips` la bloque. Un réglage qui en rend un autre inutile passe
 avec un avertissement : plafond de session au-delà du plafond du jour, alias vers un
 provider désactivé, action destructive moins protégée qu'une écriture, déclencheur
-planifié pendant `telegram.quiet_hours`. `penelope config validate` et `penelope doctor`
-listent ces contradictions, et le daemon les signale au démarrage.
+planifié sans `urgent` pendant `telegram.quiet_hours` (il sera retenu jusqu'à la fin de la
+plage, voir [Rappels et tâches planifiées](#rappels-et-tâches-planifiées)). `penelope
+config validate` et `penelope doctor` listent ces contradictions, et le daemon les signale
+au démarrage.
 
 ```bash
 penelope config set context.compaction_threshold 0.66
@@ -292,10 +294,10 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `telegram.token` | `"${SECRET:telegram_bot_token}"` | Jeton du bot, par référence au magasin de secrets. |
-| `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling) ou `webhook` (pas encore servi). |
+| `telegram.mode` | `"polling"` | Réception des messages : `polling` (long polling), la seule valeur servie ; `webhook` est refusé à la validation (#294). |
 | `telegram.topics` | `true` | Sujets de forum Telegram. Sans effet dans cette version. |
 | `telegram.rich_messages` | `false` | Rendu riche natif de la Bot API plutôt que HTML. |
-| `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM` : les notifications non urgentes attendent la fin de la plage. |
+| `telegram.quiet_hours` | `"22:00-07:00"` | Heures calmes `HH:MM-HH:MM`, à l'heure du propriétaire : les livraisons proactives (planifications sans `urgent`, alertes MCP, relances d'approbation) attendent la fin de la plage, puis partent groupées sous « Pendant les heures calmes » ; une réponse à un message du propriétaire et le digest partent toujours (#296). Vide : jamais d'attente. |
 | `telegram.api_base` | `"https://api.telegram.org"` | Adresse de la Bot API. |
 | `telegram.poll_timeout_s` | `50` | Attente d'un appel `getUpdates` en long polling, en secondes. |
 | `telegram.rate_per_chat_per_s` | `1.0` | Messages envoyés au plus par seconde, par chat. |
@@ -303,7 +305,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `telegram.caption_limit` | `1024` | Taille maximale d'une légende. Sans effet dans cette version. |
 | `telegram.max_fragments` | `3` | Fragments au-delà desquels un avis interne (digest du matin, rapport de veille) part en document plutôt qu'en chapelet de messages (issue #145). 0 : jamais. |
 | `telegram.draft_interval_ms` | `700` | Intervalle entre deux mises à jour du brouillon de réponse, en millisecondes (300 au moins). |
-| `telegram.webhook_url` | `""` | Adresse du webhook. Sans effet dans cette version. |
+| `telegram.webhook_url` | `""` | Sans effet : le mode `webhook` n'est pas servi (#294) ; les webhooks entrants de Pénélope sont la section `[webhooks]`. |
 | `telegram.allow_groups` | `false` | Ancien interrupteur des groupes, sans effet depuis 0.17.4 : un groupe s'ouvre en ajoutant son identifiant à `telegram.allowed_chats`. |
 | `telegram.allowed_chats` | `[]` | Conversations de groupe autorisées, par identifiant (`-100…` pour un supergroupe) : le propriétaire y parle, y compris en administrateur anonyme ; un sujet donne une session. `penelope doctor` liste les conversations refusées récemment avec leur identifiant. |
 | `telegram.text_group_window_ms` | `2000` | Attente après un morceau qui ressemble à une coupure de Telegram (4 000 caractères ou plus) ou un message transféré, en millisecondes : les morceaux d'un même envoi forment un seul tour. Un message court tapé part tout de suite. 0 : un message, un tour. |
@@ -478,6 +480,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.prune_episodic_days` | `180` | Âge d'élagage du journal. Sans effet dans cette version. |
 | `memory.expire_ecart_days` | `90` | Âge au-delà duquel un écart jamais promu est abandonné, en jours. |
 
+**[digest]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `digest.agenda` | `""` | Outil MCP qui rend les rendez-vous du jour, par son nom qualifié `mcp__<serveur>__<outil>` (`mcp__agenda__events_today` avec le serveur livré) ; vide : l'« Aujourd'hui » du digest ne liste que les planifications. L'outil doit être en lecture ; il est appelé avec `{"timezone": owner.timezone}` et doit rendre `events[]` avec `summary`, `start`, `end`, `all_day`, `calendar` et `location`. |
+
 **[mcp]**
 
 | Clé | Défaut | Rôle |
@@ -588,6 +596,16 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
 | `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
 | `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
+| `voice.postprocess.enabled` | `false` | Appliquer le post-traitement à chaque `send_voice`. Éteint : comportement d'origine. |
+| `voice.postprocess.engine` | `"resemble_enhance"` | Moteur de restauration : `resemble_enhance` (Resemble Enhance, local), ou `none` (filtres FFmpeg seuls). |
+| `voice.postprocess.timeout` | `"180s"` | Délai maximal du post-traitement complet (moteur puis filtres) ; au-delà, le vocal brut part. |
+| `voice.postprocess.ffmpeg_bin` | `""` | Chemin de `ffmpeg` ; vide : trouvé dans le PATH et les emplacements Homebrew. |
+| `voice.postprocess.ffmpeg_filters` | `"highpass=f=70,lowpass=f=16000,equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,loudnorm=I=-16:LRA=7:TP=-1.5"` | Chaîne de filtres FFmpeg (`-af`) appliquée après le moteur ; défaut : preset « studio doux » ; vide : pas de filtres. |
+| `voice.postprocess.ffmpeg_output_args` | `"-ac 1 -ar 24000"` | Options FFmpeg de sortie du preset, avant le fichier (`-ac 1 -ar 24000` : mono à 24 kHz) ; vide : format d'entrée conservé. |
+| `voice.postprocess.opus_bitrate` | `"48k"` | Débit Opus du vocal post-traité (`48k`) ; un vocal brut garde le débit d'origine (32k). |
+| `voice.postprocess.resemble_bin` | `""` | Chemin de `resemble-enhance` ; vide : trouvé dans le PATH (`uv tool install` le pose dans `~/.local/bin`). |
+| `voice.postprocess.resemble_run_dir` | `""` | Répertoire des poids de Resemble Enhance (`hparams.yaml`, `ds/G/…`), préparé à l'installation et vérifié par `doctor`, jamais téléchargé pendant un envoi ; vide : `<données>/models/resemble-enhance/enhancer_stage2`. |
+| `voice.postprocess.resemble_device` | `"cpu"` | Périphérique de calcul de Resemble Enhance : `cpu` (sûr sur Apple Silicon) ou `mps` (avec repli des opérations non portées vers le CPU). |
 
 **[retention]**
 
@@ -620,6 +638,15 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `approval.judge` | `"explain"` | Juge des lignes `shell_exec` sans motif possible (issue #203), sous les planchers déterministes : `off` (aucun appel), `explain` (la carte dit ce que la ligne fait réellement et propose une règle sur les pouvoirs reconnus ; rien n'est autorisé seul), `auto_read` (comme `explain`, et une lecture pure dans les workspaces, sans réseau ni écriture ni processus détaché, passe sans carte). Modèle : rôle `approval_judge`. |
+
+**[webhooks]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `webhooks.listen` | `"127.0.0.1:7778"` | Adresse d'écoute `hôte:port` des webhooks entrants ; `127.0.0.1` par défaut, pour qu'un tunnel ou un réseau privé décide seul de l'exposition. Vide : aucun serveur. Prise en compte au redémarrage. |
+| `webhooks.max_body_bytes` | `65536` | Taille maximale d'un corps reçu, en octets ; au-delà, la requête est refusée (413) sans être lue. |
+| `webhooks.rate_per_minute` | `60` | Réceptions admises par minute et par hook ; au-delà, 429 avec `Retry-After`. |
+| `webhooks.prompt_turns_per_hour` | `20` | Tours `prompt` déclenchés par webhook admis par heure, tous hooks confondus : une source bavarde ne fait pas travailler le modèle sans fin. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
@@ -1493,6 +1520,81 @@ penelope model set tts openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit
 `penelope doctor` vérifie `ffmpeg` et lit une phrase d'essai ; `self_status` (inventaire
 `install`) dit si la réponse vocale est disponible et avec quelle voix.
 
+### Post-traitement du vocal
+
+Le WAV de Voxtral peut passer par une finition locale avant l'encodage OGG/Opus (#299) :
+Resemble Enhance (restauration de la voix), puis le preset FFmpeg « studio doux » validé sur
+l'instance (passe-haut à 70 Hz, passe-bas à 16 kHz, deux égaliseurs doux à 180 Hz et
+3,2 kHz, compression douce, normalisation à −16 LUFS ; sortie mono à 24 kHz, encodée en
+Opus à 48 kb/s). Éteint par défaut. Allumé, il s'applique à chaque `send_voice` ; tout ce qui l'empêche de tourner
+(binaire absent, poids manquants, erreur, délai dépassé) est un avertissement dans le
+journal, et le vocal brut part quand même. Rien n'est téléchargé pendant un envoi : les
+poids sont en place ou le moteur est écarté avant de lancer quoi que ce soit.
+
+Installation durable, une fois (Python 3.11 et Git LFS ; `uvx` ne suffit pas, son cache
+est éphémère) :
+
+```bash
+brew install uv git-lfs ffmpeg
+```
+
+```bash
+uv tool install --python 3.11 resemble-enhance    # pose `resemble-enhance` dans ~/.local/bin
+```
+
+Les poids (`enhancer_stage2`, de l'ordre du gigaoctet) vont sous le répertoire de données,
+là où Pénélope les cherche par défaut (`penelope paths` donne le chemin) :
+
+```bash
+git lfs install
+```
+
+```bash
+git clone https://huggingface.co/ResembleAI/resemble-enhance "$HOME/Library/Application Support/Penelope/models/resemble-enhance"
+```
+
+Un clone sans Git LFS laisse des pointeurs de 130 octets à la place des poids : `doctor` le
+dit en clair (« pointeur Git LFS »), et `git lfs pull` dans ce dépôt répare. Puis :
+
+```bash
+penelope config set voice.postprocess.enabled true
+```
+
+```bash
+penelope doctor    # `voice.postprocess` : binaire, poids, ffmpeg, délai ; `voice` : la synthèse
+```
+
+Sur Apple Silicon, le calcul se fait sur CPU (`voice.postprocess.resemble_device = "cpu"`) :
+MPS échoue sur `aten::_weight_norm_interface`. `mps` est accepté, avec repli automatique
+des opérations non portées vers le CPU (`PYTORCH_ENABLE_MPS_FALLBACK=1`). Compter de
+l'ordre de la minute pour un vocal de trente secondes sur un M1 Pro ;
+`voice.postprocess.timeout` (180 s par défaut) borne la chaîne complète, moteur et filtres,
+et au-delà le vocal brut part.
+
+Réglages : `engine` (`resemble_enhance`, ou `none` pour les filtres FFmpeg seuls),
+`ffmpeg_filters` (la chaîne `-af`, remplaçable ; vide : pas de filtres),
+`ffmpeg_output_args` (options de sortie du preset, `-ac 1 -ar 24000`), `opus_bitrate`
+(débit du vocal fini, `48k` ; un vocal brut garde 32k), `ffmpeg_bin` et `resemble_bin`
+(chemins, sinon le PATH étendu aux emplacements Homebrew et `~/.local/bin`),
+`resemble_run_dir` (poids rangés ailleurs), `resemble_device`. Exemple :
+
+```toml
+[voice.postprocess]
+enabled = true
+engine = "resemble_enhance"
+timeout = "180s"
+resemble_device = "cpu"
+# Le preset livré ; à retoucher ici, pas ailleurs.
+ffmpeg_filters = "highpass=f=70,lowpass=f=16000,equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,loudnorm=I=-16:LRA=7:TP=-1.5"
+ffmpeg_output_args = "-ac 1 -ar 24000"
+opus_bitrate = "48k"
+```
+
+L'événement `voice.sent` et le résultat de l'outil portent `postprocess` : `status`
+(`disabled`, `applied`, `skipped`, `failed`, `timed_out`), `engine`, `seconds` (durée du
+traitement) et `reason` quand il y en a une. Les fichiers temporaires (`<id>.wav`,
+`<id>.work/`) disparaissent dans tous les cas ; seul l'OGG envoyé reste dans `media/voice`.
+
 ### Ce que Pénélope sait d'elle-même
 
 L'outil `self_status` lui donne son état complet : version et durée de fonctionnement,
@@ -1675,9 +1777,9 @@ et `/stop` interrompt tout le lot.
 | `git_push` | external | Pousse une branche vers le dépôt distant. (à la demande) |
 | `git_status` | read | État du dépôt : branche, fichiers modifiés. (à la demande) |
 | `history_describe` | read | Manifeste d'un nœud de résumé : tokens, intervalle, enfants. (à la demande) |
-| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut. (à la demande) |
+| `history_expand` | read | Contenu paginé d'un nœud ou d'un intervalle brut : chaque message avec son texte et, pour un message assistant, ses appels d'outils (`appels` : outil et arguments, longues valeurs tronquées). (à la demande) |
 | `history_expand_query` | read | Retrouve, dans toutes les sessions y compris fermées, les passages liés à une question en langage naturel : recherche mot significatif par mot significatif, extraits classés par nombre de mots trouvés, avec le titre et la date de leur session. (à la demande) |
-| `history_grep` | read | Recherche plein texte dans les messages bruts et les résumés. |
+| `history_grep` | read | Recherche plein texte dans les messages bruts (texte et appels d'outils : nom, commande, chemin, requête) et les résumés. |
 | `http_fetch` | external | Récupère une URL. |
 | `image_generate` | external | Génère une image et la stocke en artefact. (à la demande) |
 | `image_inspect` | read | Pose une question au modèle de vision sur une image : photo reçue (son chemin est dans le message) ou capture d'écran du workspace. (à la demande) |
@@ -1688,6 +1790,7 @@ et `/stop` interrompt tout le lot.
 | `job_list` | read | Jobs d'outils de cette session : ceux qui tournent encore, leur outil et leur âge. (à la demande) |
 | `job_status` | read | État d'un job lancé en arrière-plan : `working`, `completed`, `failed` ou `cancelled`, et son résultat s'il est terminé. (à la demande) |
 | `job_wait` | read | Attend la fin d'un job, au plus `timeout_ms` (120 s au maximum, 30 s par défaut). (à la demande) |
+| `mcp_resource_read` | read | Lit une ressource d'un serveur MCP (`resources/read`) : son texte, ou son JSON décodé. (à la demande) |
 | `mem_forget` | destructive | Retire une entrée de mémoire. (à la demande) |
 | `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. (à la demande) |
 | `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). (à la demande) |
@@ -1719,7 +1822,7 @@ et `/stop` interrompt tout le lot.
 | `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. (à la demande) |
 | `workflow_list` | read | Liste les workflows disponibles. (à la demande) |
 | `workflow_plan` | write | Propose ou révise un plan de workflow avant tout lancement. (à la demande) |
-| `workflow_start` | write | Lancement direct réservé aux contextes internes et CLI ; depuis Telegram, propose d'abord `workflow_plan` et attends le gate « vas-y ». (à la demande) |
+| `workflow_start` | write | Lancement direct réservé aux contextes internes, à la CLI et aux runs ; depuis une conversation, propose d'abord `workflow_plan` : seul le clic « vas-y » du propriétaire sur la carte lance le run, et un appel ici est refusé avant toute carte, avec l'état du plan et de son run (déjà lancé : `workflow_status`). (à la demande) |
 | `workflow_status` | read | État d'un run. (à la demande) |
 <!-- reference:outils:fin -->
 
@@ -1826,6 +1929,41 @@ carte arrive sur Telegram (Accepter, Refuser, Annuler) ; sans réponse avant
 `elicitation_timeout` (10 min par défaut), la demande est annulée. Sans Telegram
 configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 
+### Agenda CalDAV
+
+Pénélope lit l'agenda du propriétaire par CalDAV, en lecture seule, sans permission à
+cliquer sur la machine (1.0.37, #295) : un serveur MCP livré dans le binaire, `penelope
+agenda-mcp`, que `mcp.d/agenda.toml` déclare. Chez iCloud, créer un mot de passe
+d'application (appleid.apple.com, « Mots de passe d'application ») ; chez Fastmail ou
+Nextcloud, un mot de passe d'application de même. Puis :
+
+```bash
+penelope secret set agenda_password
+cat > "$(penelope paths --json | jq -r .config)/mcp.d/agenda.toml" <<'EOF'
+command = "penelope"
+args = ["agenda-mcp"]
+timeout = "45s"
+
+[env]
+AGENDA_URL = "https://caldav.icloud.com"
+AGENDA_USER = "prenom@icloud.com"
+AGENDA_PASSWORD = "${SECRET:agenda_password}"
+AGENDA_TIMEZONE = "Indian/Reunion"
+EOF
+penelope mcp test agenda
+penelope config set digest.agenda mcp__agenda__events_today
+```
+
+`penelope mcp test agenda` découvre le compte, liste les calendriers et appelle un outil
+en lecture ; une erreur nomme l'étape (« identifiants refusés par le serveur CalDAV (HTTP
+401) ») sans jamais répéter le mot de passe. Le modèle atteint ensuite `calendar_list`,
+`events_today`, `events_range` et `event_search` par `tool_call`, comme tout serveur MCP ;
+`AGENDA_CALENDARS = "Perso, Famille"` restreint les calendriers servis. Avec
+`digest.agenda`, l'« Aujourd'hui » du digest mêle les rendez-vous du jour aux
+planifications, dans `owner.timezone` ; un agenda injoignable est dit en une ligne, sans
+retenir le digest. Le détail des variables, des outils, des récurrences servies et de ce
+qui n'est pas encore là est dans [mcp.md](mcp.md#lagenda-caldav-un-serveur-livré).
+
 ### Déposer une skill
 
 Une skill est un dossier avec un `SKILL.md` dans `{data}/skills/` : il suffit de le
@@ -1931,6 +2069,29 @@ en tête de la notification ou dans le prompt, « ⏰ Exécution en retard : pr�
 lancée à 10h02 après une veille de 3 h 32. » ; plusieurs créneaux manqués d'une même
 planification sont comptés et partent en un seul run.
 
+**Heures calmes** (1.0.37, #296). Pendant `telegram.quiet_hours` (`22:00-07:00` par
+défaut, à l'heure du propriétaire, réglable par `/quiet`), une planification qui tombe
+dans la plage n'est pas tirée : elle reste due et part au premier passage après la plage,
+par le même chemin que le rattrapage après veille, donc **une fois**, créneaux manqués
+comptés. Les tirs retenus d'un même passage, et les alertes du superviseur MCP retenues
+entre-temps (file dans la base, qui survit à un redémarrage), partent en **un seul
+message par conversation**, sous l'en-tête « 🌙 Pendant les heures calmes : », chaque
+notification suivie de son heure prévue ; un prompt y est annoncé (« elle part maintenant,
+sa réponse suivra ») et son texte commence par la mention. Les relances d'approbation
+(T+1 h, T+6 h) échues pendant la plage partent de même, en une seule relance groupée qui
+nomme les demandes, puis leurs cartes ; jamais une rafale. Un déclencheur `event` ou
+`watch_file` retenu rattrape à la sortie ce que la nuit a produit (journal relu depuis le
+curseur d'avant, empreinte du fichier comparée à celle d'avant). Exceptions : une réponse
+à un message du propriétaire, le digest du matin (son propre cron), et toute
+planification dont la spécification porte `"urgent": true` (un réveil, un train à 6 h 30) ;
+la création d'une planification dont le premier passage tombe dans la plage le dit dans
+sa réponse (`heures_calmes`) et propose `urgent`. Le lien d'autorisation OAuth d'un
+serveur MCP, qui expire, n'est pas mis en file : il est produit et envoyé au premier
+passage après la plage. `penelope doctor` nomme les déclencheurs non urgents qui tombent
+dans la plage et, pendant la plage, ce qui attend (« heures calmes jusqu'à 07:00 : 2
+retenue(s), 1 livraison(s) en file ») ; le journal porte `schedule.held` (une fois par
+créneau retenu) et `quiet.delivered`.
+
 **Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
 son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :
 <raison> » avec « 🔁 Relancer maintenant » et « 📅 Voir la planification ». Une
@@ -1965,14 +2126,36 @@ suivante reprenne les mêmes éléments. Sans livrable déclaré, rien ne change
 
 Les autres déclencheurs : `interval` (toutes les N minutes), `mcp_poll` (un outil MCP en
 lecture interrogé à intervalle ; seuls les éléments nouveaux déclenchent, le premier
-passage ne fait que mémoriser l'existant), `watch_file` (un fichier modifié) et `event`
-(un événement du journal, `run.done` par exemple). La création passe par une approbation.
+passage ne fait que mémoriser l'existant), `mcp_subscribe` (une ressource d'un serveur MCP
+suivie par abonnement, voir ci-dessous), `watch_file` (un fichier modifié), `event` (un
+événement du journal, `run.done` par exemple) et `webhook` (un `POST` signé venu de
+l'extérieur, section suivante). La création passe par une approbation.
+
+**Réagir à un serveur MCP sans le sonder (`mcp_subscribe`, 1.0.37, #293).** Un serveur qui
+déclare `resources.subscribe` (un pont de messagerie, un tracker) prévient Pénélope quand
+une ressource change ; elle la relit alors et déclenche la cible pour ce qui est nouveau,
+au lieu d'interroger un outil toutes les minutes. La spécification nomme le serveur et la
+ressource (`server`, `uri`) ; `item_path`, `id_path` et `filter` découpent la ressource en
+éléments comme pour `mcp_poll` (sans `id_path`, la ressource entière est l'élément et
+chaque changement de contenu déclenche). L'abonnement est posé au démarrage du serveur et
+reposé après chaque reconnexion ; les notifications sont groupées sur une fenêtre de 30 s
+(`window_ms`), et un `prompt` ou un `workflow` ne part pas plus de 20 fois par heure
+(`max_per_hour`) : au-delà, les éléments sont notifiés sans modèle. Si le serveur ne sait
+pas s'abonner, le déclencheur le sonde toutes les `every_ms` (60 s au moins) sans rien
+demander. Un abonnement perdu plus d'une heure (serveur arrêté, en panne) apparaît dans le
+digest du matin ; le déclencheur repart seul au retour du serveur et relit ce qui a bougé
+pendant la coupure. Avec une cible `notify` et un gabarit du catalogue (`ticket_detected`),
+la notification arrive en carte, avec « ⚡ Relire maintenant ». Le modèle réveillé relit la
+ressource avec `mcp_resource_read` (à la demande).
 
 Sur Telegram, `/schedules` liste les déclencheurs et `/schedules pause|resume|rm|run <id>`
 les gère. En ligne de commande :
 
 ```bash
 penelope schedule list
+penelope schedule add mcp_subscribe \
+  --spec '{"server":"pont","uri":"mail://inbox","id_path":"id"}' \
+  --target '{"type":"notify","template":"ticket_detected"}'
 ```
 
 **Où livre une planification.** Chacune livre dans la conversation où elle est née : la
@@ -1995,6 +2178,93 @@ penelope schedule move <id> --chat -1001234567890 --topic 21
 Une « intention » est l'autre mémoire prospective : « quand on reparle du déploiement,
 rappelle-moi le changelog » reste armée et revient dans le contexte du premier message
 qui en parle (trois fois au plus, une fois par jour au plus).
+
+### Webhooks entrants
+
+Un service qui sait appeler une URL (forge, suivi de tickets, formulaire, domotique, un
+script sur une autre machine) peut pousser un événement dans Pénélope : c'est le
+déclencheur `webhook` (1.0.37, #294), sa première porte entrante, fermée par défaut sur
+`127.0.0.1`.
+
+```bash
+penelope schedule add webhook --spec '{}' \
+  --target '{"type":"notify","template":"🔔 {{title}} ({{action}})"}'
+```
+
+La réponse donne le chemin attribué (`/hook/<jeton>`, 24 caractères tirés au sort),
+l'adresse locale (`http://127.0.0.1:7778/hook/<jeton>`) et, **une seule fois**, le
+secret. Il est rangé dans le magasin de secrets sous `webhook_<jeton>` (`secret_ref` de
+la spécification) ; ni le store ni le journal ne le portent. Pour le remplacer par le
+vôtre : `penelope secret set webhook_<jeton>`. Demandé à Pénélope dans la conversation
+(`schedule_create`, soumis à approbation), le hook est créé de même, mais le secret n'est
+pas montré au modèle, dont la réponse entre dans le journal : posez le vôtre avec cette
+commande.
+
+L'appelant envoie un `POST` dont le corps est du JSON, horodaté et signé : l'en-tête
+`X-Penelope-Timestamp` porte l'instant de l'envoi en secondes Unix, et
+`X-Penelope-Signature` le HMAC-SHA256, par le secret, de l'horodatage, d'un point et du
+corps brut (`<horodatage>.<corps>`) :
+
+```bash
+body='{"title":"PR #12 ouverte","action":"opened"}'
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+curl -X POST "http://127.0.0.1:7778/hook/<jeton>" \
+  -H "Content-Type: application/json" \
+  -H "X-Penelope-Timestamp: $ts" \
+  -H "X-Penelope-Signature: sha256=$sig" \
+  --data "$body"
+```
+
+L'horodatage rend une requête capturée inutilisable : à plus de cinq minutes de
+l'horloge de la machine, dans un sens ou dans l'autre, elle est refusée (401) ; et dans
+ces cinq minutes, la même signature n'est admise qu'une fois (409). Un appelant qui
+réessaie signe à nouveau, avec un nouvel horodatage. L'horloge de l'appelant doit donc
+être à l'heure (NTP).
+
+Réponses : `202 {"accepted": true, "delivery": …}` quand la cible a tiré ;
+`202 {"accepted": false, "reason": "filtre"}` quand le `filter` de la spécification
+écarte le corps (`{"filter": {"action": "opened"}}`, même forme que pour `mcp_poll`) ;
+`401` signature absente ou fausse, horodatage absent ou hors de la fenêtre ; `409` même
+livraison déjà reçue (rejeu) ; `400` requête illisible ou ambiguë (CR ou LF nus, ligne
+repliée, `Content-Length` répété, `Transfer-Encoding` avec `Content-Length`) ; `411`
+transfert par morceaux ; `404` chemin inconnu, hook en pause ou supprimé ;
+`405` toute méthode autre que `POST` (un `GET` ne déclenche jamais) ; `413` corps au-delà
+de `webhooks.max_body_bytes` (64 Ko), refusé avant d'être lu ; `429` avec `Retry-After`
+au-delà de `webhooks.rate_per_minute` réceptions par hook (60) ou de
+`webhooks.prompt_turns_per_hour` tours `prompt` déclenchés par l'ensemble des hooks (20).
+Chaque réception, acceptée ou non, est un événement `webhook.received` du journal
+d'audit : statut, motif, taille, empreinte SHA-256 du corps, adresse de l'appelant ;
+jamais le corps ni les en-têtes.
+
+Les cibles sont celles des autres déclencheurs. `notify` : le gabarit reçoit
+`{{payload}}` (le corps en JSON compact) et chaque champ de premier niveau (`{{title}}`).
+`workflow` : `{{item}}` dans `params` est le corps entier. `prompt` : le corps n'est
+**jamais** substitué dans le texte du prompt ; il arrive après, encadré comme données non
+fiables, avec l'alerte du détecteur local s'il ressemble à une consigne, comme un message
+transféré ou une description MCP (#92). Chaque réception ouvre son propre tour.
+
+**Exposer sans rien ouvrir.** Le serveur n'écoute que `webhooks.listen`
+(`127.0.0.1:7778`), et Pénélope n'ouvre ni port ni pare-feu. Pour qu'un service distant
+l'atteigne : un tunnel sortant depuis la machine (`cloudflared tunnel --url
+http://127.0.0.1:7778`, `ssh -R 7778:127.0.0.1:7778 bastion`, ou l'équivalent chez ngrok
+ou Tailscale Funnel), qui donne une adresse publique en HTTPS à mettre chez l'appelant ;
+ou un réseau privé (Tailscale, WireGuard), avec `webhooks.listen = "100.x.y.z:7778"` sur
+l'adresse de ce réseau. Dans les deux cas la signature reste obligatoire : l'adresse
+n'est pas un secret, le secret l'est. `webhooks.listen = ""` n'ouvre rien ; la clé
+demande un redémarrage, et `penelope logs` dit « webhooks entrants à l'écoute ».
+
+Les compteurs de débit et les signatures déjà vues sont en mémoire : un redémarrage les
+remet à zéro, et une requête capturée dans les cinq minutes qui le précèdent passerait
+alors une fois de plus. Un même corps envoyé deux fois avec deux horodatages déclenche
+deux fois : un appelant qui réessaie sur un `5xx` peut doubler une notification, jamais
+au-delà des plafonds. Une livraison refusée en `429` peut être renvoyée telle quelle
+tant que son horodatage est dans la fenêtre.
+
+**Le mode webhook de Telegram** (`telegram.mode = "webhook"`, `telegram.webhook_url`),
+promis depuis la 0.17, n'a jamais été servi : la validation le refuse désormais en le
+disant (seul `polling` l'est), au lieu de laisser un bot sourd. Ce listener n'est pas une
+passerelle Telegram.
 
 ### Photos et documents
 
@@ -2137,7 +2407,8 @@ longues avec la commande qui en propose le
 découpage, les entrées jamais rappelées depuis soixante jours (trois exemples), les
 motifs d'écart regroupés par famille avec leur compte (« imprécis : 18 »,
 « retrouvable ailleurs : 4 », cinq familles au plus, les autres additionnées), la
-dépense de la veille et l'agenda du jour. Deux nuits de suite ou plus sans rien promouvoir
+dépense de la veille et l'agenda du jour (les planifications et, avec `digest.agenda`, les
+rendez-vous du calendrier). Deux nuits de suite ou plus sans rien promouvoir
 ajoutent une ligne explicite, avec le motif dominant : un motif qui revient vingt fois est
 un réglage à revoir.
 
@@ -2697,9 +2968,11 @@ modèle, comme le premier tour d'un fork. Chaque décision laisse un événement
 après échec, rien à compacter, réserve épuisée) et `context.compacted`, aussi en INFO dans
 les journaux. `/status`, `/budget` et `self_status` donnent la taille réelle du contexte,
 le seuil de fond et la date de la dernière compaction. Les derniers échanges restent mot pour mot, les identifiants
-(chemins, tickets, SHA, URLs) sont conservés tels quels, et un résumé existant est mis à
-jour plutôt que refait. Rien n'est effacé : les échanges résumés restent consultables par
-`history_grep` et `history_expand`.
+(chemins, tickets, SHA, URLs, première ligne des commandes `shell_exec`) sont conservés
+tels quels, et un résumé existant est mis à jour plutôt que refait. Rien n'est effacé : les
+échanges résumés restent consultables par `history_grep` et `history_expand`, appels
+d'outils compris (nom et arguments indexés et rendus, secrets masqués) : une commande
+lancée la veille se retrouve par un mot de ses arguments, même après compaction (#300).
 
 **Notes de travail.** Pour une tâche longue, le modèle tient les notes de la session avec
 l'outil `session_notes` : objectif, plan, décisions, fichiers touchés, points ouverts,
@@ -2999,6 +3272,14 @@ caches se rattrapent aussi seuls : à l'ouverture de chaque tour, ce qu'une écr
 interrompue a laissé derrière le journal est refait ; un rattrapage en échec apparaît
 dans `penelope doctor`.
 
+L'index plein texte seul (`messages_fts`) se refait depuis les lignes de `messages`, lignes
+scellées comprises, par `penelope store rebuild`. Depuis la 1.0.37, il porte aussi les
+appels d'outils de chaque message (#300) ; la migration qui l'introduit ne réécrit pas
+l'index : elle pose la clé `store.messages_fts_pending` dans `kv`, que la passe de
+maintenance du daemon lève au premier passage en refaisant l'index (événement
+`store.rebuilt`, `reason: migration`). `penelope store rebuild` lève la clé aussi. Le
+journal n'est jamais touché, et `penelope history verify` ne lit pas l'index.
+
 ### Relire une requête envoyée
 
 ```bash
@@ -3272,7 +3553,9 @@ penelope approve <id> --effect done
 
 ## 11. Ce qui n'est pas encore branché
 
-Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram,
+Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram
+(`telegram.mode = "webhook"`, refusé à la validation depuis la 1.0.37 ; les webhooks
+entrants de Pénélope sont une autre porte, section « Webhooks entrants »),
 l'interprétation de `.penelope/deploy.toml` (le déploiement passe par les cibles `make`),
 et l'OCR des pages scannées d'un PDF qui a aussi du texte. Le gate de production d'un
 plan livré ne fusionne pas la PR et ne déploie rien : la fusion et le déploiement suivent

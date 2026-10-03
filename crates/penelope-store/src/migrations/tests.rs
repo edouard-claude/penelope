@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::OptionalExtension;
 
 fn fresh() -> Connection {
     let mut c = Connection::open_in_memory().unwrap();
@@ -300,6 +301,56 @@ fn sealing_drops_the_dead_projections_and_indexes_unsealed_rows() {
         )
         .unwrap();
     assert!(plan.contains("messages_unsealed"), "{plan}");
+}
+
+/// #300 : une base qui a déjà des messages est marquée pour que la passe de maintenance
+/// remette leurs appels d'outils dans l'index plein texte ; une base neuve ne l'est pas, et
+/// la marque ne revient pas une fois retirée. Le journal n'est pas touché.
+#[test]
+fn a_base_with_messages_is_marked_for_a_tool_call_reindex_once() {
+    let fresh_key = |c: &Connection| {
+        c.query_row(
+            "SELECT v FROM kv WHERE k = 'store.messages_fts_pending'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap()
+    };
+    assert_eq!(
+        fresh_key(&fresh()),
+        None,
+        "rien à refaire sur une base vide"
+    );
+
+    let mut c = Connection::open_in_memory().unwrap();
+    migrate(&mut c).unwrap();
+    c.execute_batch(
+        "DELETE FROM schema_migrations WHERE version = '0026_messages_fts_tool_calls';
+         INSERT INTO sessions(id, kind, created_at, updated_at) VALUES('s1','chat','t','t');
+         INSERT INTO messages(session_id, seq, role, content, tokens_est, ts)
+           VALUES('s1', 1, 'assistant', '{\"blocks\":[],\"tool_calls\":[]}', 1, 't');",
+    )
+    .unwrap();
+    let events: i64 = c
+        .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+        .unwrap();
+    migrate(&mut c).unwrap();
+    assert_eq!(fresh_key(&c).as_deref(), Some("appels d'outils (#300)"));
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        events,
+        "la migration n'écrit pas le journal"
+    );
+    c.execute("DELETE FROM kv WHERE k = 'store.messages_fts_pending'", [])
+        .unwrap();
+    migrate(&mut c).unwrap();
+    assert_eq!(
+        fresh_key(&c),
+        None,
+        "une migration appliquée ne se rejoue pas"
+    );
 }
 
 /// #229 : une planification d'avant la série part d'une série vide, sans alerte en cours.

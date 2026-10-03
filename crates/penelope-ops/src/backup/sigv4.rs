@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use penelope_kernel::canonical::hex;
+use penelope_kernel::hmac::hmac_sha256 as hmac;
 use sha2::{Digest, Sha256};
 
 /// Identifiants d'accès.
@@ -92,26 +93,6 @@ pub fn sign(req: &Request<'_>, creds: &Credentials) -> Vec<(String, String)> {
             ),
         ),
     ]
-}
-
-/// HMAC-SHA256 (RFC 2104) : blocs de 64 octets, clé longue hachée d'abord.
-fn hmac(key: &[u8], message: &[u8]) -> [u8; 32] {
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        k[..32].copy_from_slice(&Sha256::digest(key));
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let inner: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
-    let outer: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
-    let mut h = Sha256::new();
-    h.update(&inner);
-    h.update(message);
-    let inner_hash = h.finalize();
-    let mut h = Sha256::new();
-    h.update(&outer);
-    h.update(inner_hash);
-    h.finalize().into()
 }
 
 /// Espaces en tête, en queue et en série réduits, comme la norme le demande.

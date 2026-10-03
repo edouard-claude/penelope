@@ -93,6 +93,8 @@ scenario_cases! {
     outils_git => "outils-git",
     outils_planification => "outils-planification",
     outils_historique_resumes => "outils-historique-resumes",
+    // Une commande lancée avant un résumé se retrouve par un mot de ses arguments (#300).
+    outils_historique_appels => "outils-historique-appels",
     outils_jobs => "outils-jobs",
     outils_workflow_run => "outils-workflow-run",
     outils_images => "outils-images",
@@ -120,6 +122,12 @@ scenario_cases! {
     // Expérience persévérance (#291) : l'indice `developer` est dans la surface, pas dans
     // le monde.
     indice_perseverance_codex => "indice-perseverance-codex",
+    // Lecture d'une ressource MCP par le modèle (#293), le geste d'un tour réveillé par un
+    // `mcp_subscribe`.
+    outils_ressource_mcp => "outils-ressource-mcp",
+    // Le gate « vas-y » vu depuis la conversation (#302) : clic, « vas-y » tapé, refus
+    // de `workflow_start` avant toute carte, arrêt du tour au deuxième.
+    plan_clic_puis_vas_y_tape => "plan-clic-puis-vas-y-tape",
 }
 
 #[test]

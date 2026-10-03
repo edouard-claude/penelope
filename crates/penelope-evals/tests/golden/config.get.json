@@ -202,6 +202,9 @@
         "prune_episodic_days": "integer",
         "expire_ecart_days": "integer"
       },
+      "digest": {
+        "agenda": "string"
+      },
       "mcp": {
         "registry_mode": "string",
         "max_processes": "integer",
@@ -290,7 +293,19 @@
       "voice": {
         "tts_voice": "string",
         "max_chars": "integer",
-        "reply_in_kind": "bool"
+        "reply_in_kind": "bool",
+        "postprocess": {
+          "enabled": "bool",
+          "engine": "string",
+          "timeout": "string",
+          "ffmpeg_bin": "string",
+          "ffmpeg_filters": "string",
+          "ffmpeg_output_args": "string",
+          "opus_bitrate": "string",
+          "resemble_bin": "string",
+          "resemble_run_dir": "string",
+          "resemble_device": "string"
+        }
       },
       "retention": {
         "days": "integer",
@@ -316,6 +331,12 @@
       },
       "approval": {
         "judge": "string"
+      },
+      "webhooks": {
+        "listen": "string",
+        "max_body_bytes": "integer",
+        "rate_per_minute": "integer",
+        "prompt_turns_per_hour": "integer"
       }
     }
   }

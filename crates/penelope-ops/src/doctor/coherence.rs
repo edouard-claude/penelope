@@ -22,11 +22,15 @@ pub async fn coherence_checks(s: &Services) -> Vec<DoctorCheck> {
             }
         })
         .collect();
-    // Heures calmes : un déclencheur planifié qui y tombe attend leur fin pour notifier.
-    if let Ok(quiet) = penelope_kernel::config::TimeRange::parse(&cfg.telegram.quiet_hours)
+    // Heures calmes : un déclencheur planifié qui y tombe sans `urgent` est retenu par
+    // l'ordonnanceur jusqu'à la fin de la plage (#296) ; le dire ici, et comment l'éviter.
+    if let Some(quiet) = cfg.quiet_range()
         && let Ok(schedules) = s.schedules.list().await
     {
-        for sc in schedules.iter().filter(|x| x.state == "active") {
+        for sc in schedules
+            .iter()
+            .filter(|x| x.state == "active" && !x.is_urgent())
+        {
             let Some(next) = sc.next_run.as_deref() else {
                 continue;
             };
@@ -44,11 +48,14 @@ pub async fn coherence_checks(s: &Services) -> Vec<DoctorCheck> {
                     "Configuration cohérente",
                     format!(
                         "le déclencheur `{}` part à {:02}:{:02}, pendant les heures calmes \
-                         (`telegram.quiet_hours` = {}) : sa notification attendra",
+                         (`telegram.quiet_hours` = {}) : il sera retenu jusqu'à {}, puis \
+                         livré sous « Pendant les heures calmes » ; `\"urgent\": true` dans \
+                         sa spécification pour qu'il parte à l'heure",
                         sc.id,
                         chrono::Timelike::hour(&local),
                         chrono::Timelike::minute(&local),
-                        cfg.telegram.quiet_hours
+                        quiet.text(),
+                        quiet.end_text()
                     ),
                     Some(format!("penelope schedule pause {}", sc.id)),
                 ));

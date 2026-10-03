@@ -80,6 +80,12 @@ pub(super) fn render_schedule_list(v: &Value) -> String {
                     spec["every_ms"].as_u64().unwrap_or(0) / 60_000
                 ),
                 "watch_file" => spec["path"].as_str().unwrap_or("?").to_string(),
+                "webhook" => format!("POST {}", spec["path"].as_str().unwrap_or("?")),
+                "mcp_subscribe" => format!(
+                    "abonnement {} {}",
+                    spec["server"].as_str().unwrap_or("?"),
+                    spec["uri"].as_str().unwrap_or("?")
+                ),
                 _ => spec["event"].as_str().unwrap_or("?").to_string(),
             };
             let t = &s["target"];

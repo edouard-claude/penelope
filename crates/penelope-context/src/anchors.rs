@@ -4,8 +4,10 @@
 //! L'index accompagne chaque résumé pour que les identifiants exacts (chemins, SHA,
 //! numéros de ticket, URLs, messages d'erreur) survivent à la compaction.
 
+use penelope_llm::types::ChatMessage;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -19,6 +21,8 @@ pub enum AnchorKind {
     Url,
     Error,
     Identifier,
+    /// Première ligne d'une commande `shell_exec` du lot résumé (#300).
+    Command,
 }
 
 impl AnchorKind {
@@ -31,8 +35,46 @@ impl AnchorKind {
             AnchorKind::Url => "url",
             AnchorKind::Error => "erreur",
             AnchorKind::Identifier => "identifiant",
+            AnchorKind::Command => "commande",
         }
     }
+}
+
+/// Longueur gardée d'une ancre, en caractères : la même borne que les ancres extraites du
+/// texte, mais une commande longue est coupée plutôt qu'ignorée (c'est elle qu'on redemande).
+const MAX_ANCHOR_CHARS: usize = 300;
+
+/// Les commandes `shell_exec` d'un lot de messages, première ligne de chaque, telles
+/// quelles, secrets masqués par le rédacteur. Un résumé qui couvre une commande la nomme
+/// ainsi dans son index, et `history_describe` la montre sans relire les messages : le
+/// 02/10, une commande FFmpeg lancée la veille passait pour « irrécupérable » parce que ni
+/// le résumé ni l'index plein texte ne la portaient (#300).
+pub fn commands_of<'a>(messages: impl IntoIterator<Item = &'a ChatMessage>) -> Vec<Anchor> {
+    let mut set: BTreeSet<Anchor> = BTreeSet::new();
+    for m in messages {
+        for call in m.tool_calls.iter().filter(|c| c.name == "shell_exec") {
+            let Some(command) = call.arguments.get("command").and_then(Value::as_str) else {
+                continue;
+            };
+            let first = command
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or_default();
+            if first.is_empty() {
+                continue;
+            }
+            let value: String = penelope_observe::redact::redact(first)
+                .chars()
+                .take(MAX_ANCHOR_CHARS)
+                .collect();
+            set.insert(Anchor {
+                kind: AnchorKind::Command,
+                value,
+            });
+        }
+    }
+    set.into_iter().collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -285,6 +327,7 @@ mod tests {
             AnchorKind::Url,
             AnchorKind::Error,
             AnchorKind::Identifier,
+            AnchorKind::Command,
         ]
         .iter()
         .map(|k| k.as_str())
@@ -298,8 +341,55 @@ mod tests {
                 "pr",
                 "url",
                 "erreur",
-                "identifiant"
+                "identifiant",
+                "commande"
             ]
         );
+    }
+
+    fn shell(command: &str) -> ChatMessage {
+        ChatMessage::assistant("").with_tool_calls(vec![penelope_llm::types::ToolCall {
+            id: "c1".into(),
+            name: "shell_exec".into(),
+            arguments: serde_json::json!({"command": command, "cwd": "/w"}),
+        }])
+    }
+
+    /// #300 : la première ligne de chaque `shell_exec` devient une ancre `commande`, telle
+    /// quelle ; les autres outils, un appel sans `command` et une commande vide n'en
+    /// donnent pas.
+    #[test]
+    fn shell_commands_become_anchors_as_written() {
+        let ffmpeg = "ffmpeg -i in.wav -af \"highpass=f=80,acompressor=threshold=-18dB\" out.wav";
+        let read =
+            ChatMessage::assistant("").with_tool_calls(vec![penelope_llm::types::ToolCall {
+                id: "c2".into(),
+                name: "fs_read".into(),
+                arguments: serde_json::json!({"path": "a.rs"}),
+            }]);
+        let a = commands_of([
+            &shell(&format!("  {ffmpeg}\n  && echo fini")),
+            &read,
+            &shell(""),
+            &ChatMessage::user("ffmpeg ?"),
+        ]);
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert_eq!(a[0].kind, AnchorKind::Command);
+        assert_eq!(a[0].value, ffmpeg);
+        assert!(render(&a).contains("- commande : ffmpeg"));
+    }
+
+    /// Une commande qui porte un jeton est masquée avant d'entrer dans l'index du résumé,
+    /// et une ligne trop longue est coupée, jamais perdue.
+    #[test]
+    fn command_anchors_are_redacted_and_capped() {
+        let a = commands_of([&shell(
+            "curl -H 'Authorization: Bearer ghp_0123456789abcdefghijABCDEFGHIJ012345' https://x.example",
+        )]);
+        assert_eq!(a.len(), 1);
+        assert!(!a[0].value.contains("ghp_0123"), "{}", a[0].value);
+        assert!(a[0].value.starts_with("curl -H"), "{}", a[0].value);
+        let long = commands_of([&shell(&"x".repeat(1_000))]);
+        assert_eq!(long[0].value.chars().count(), MAX_ANCHOR_CHARS);
     }
 }

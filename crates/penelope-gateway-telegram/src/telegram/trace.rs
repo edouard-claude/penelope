@@ -91,6 +91,7 @@ impl Family {
             (Family::Images, _) => &["path"],
             (Family::Himself, _) => &["section", "query", "path"],
             (Family::Tools, _) => &["query", "name"],
+            (Family::Mcp, "mcp_resource_read") => &["uri"],
             (Family::Mcp, _) => &["command", "path", "url", "query", "id"],
         }
     }
@@ -128,6 +129,8 @@ pub(crate) fn family_of(name: &str) -> Option<Family> {
         "image_inspect" | "image_generate" => Family::Images,
         "self_status" | "self_docs" | "env_explore" | "config_set" => Family::Himself,
         "tool_search" | "tool_describe" => Family::Tools,
+        // Lecture d'une ressource d'un serveur (#293) : la prise, comme ses outils.
+        "mcp_resource_read" => Family::Mcp,
         _ => return None,
     })
 }

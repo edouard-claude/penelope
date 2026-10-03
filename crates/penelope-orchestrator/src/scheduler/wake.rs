@@ -14,6 +14,7 @@
 //! attendue.
 
 use super::*;
+use penelope_kernel::config::TimeRange;
 use penelope_kernel::event::EventDraft;
 use penelope_mcp::supervisor::ServerState;
 use std::time::Instant;
@@ -146,22 +147,34 @@ pub async fn health(ports: &Ports) -> Value {
     json!({"channel": channel, "mcp_restarted": restarted})
 }
 
-/// Un créneau parti après son heure : l'heure prévue, les créneaux qu'il rattrape, et si
-/// une veille l'explique.
+/// Un créneau parti après son heure : l'heure prévue, les créneaux qu'il rattrape, si
+/// une veille l'explique, et si les heures calmes l'ont retenu (#296).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Late {
     pub planned_ms: i64,
     pub missed: u32,
     pub slept: Option<i64>,
+    /// Le créneau tombait dans les heures calmes du propriétaire et le tir n'y est plus :
+    /// la planification a attendu la fin de la plage.
+    pub quiet: bool,
 }
 
 /// Retard du créneau `sched.next_run` à `now_ms`, au-delà de [`LATE_AFTER_MS`]. Les
-/// créneaux manqués entre-temps sont comptés : ils partent en un seul run.
-pub fn late_of(sched: &Schedule, now_ms: i64, tz: &str, wake: Option<Wake>) -> Option<Late> {
+/// créneaux manqués entre-temps sont comptés : ils partent en un seul run. `quiet` : les
+/// heures calmes, si la planification y est soumise ; un créneau qui y tombait est
+/// toujours annoncé, même de deux minutes, parce qu'il a été retenu exprès (#296).
+pub fn late_of(
+    sched: &Schedule,
+    now_ms: i64,
+    tz: &str,
+    wake: Option<Wake>,
+    quiet: Option<&TimeRange>,
+) -> Option<Late> {
     let planned_ms = chrono::DateTime::parse_from_rfc3339(sched.next_run.as_deref()?)
         .ok()?
         .timestamp_millis();
-    if now_ms - planned_ms < LATE_AFTER_MS {
+    let quiet = quiet.is_some_and(|r| r.contains_at(planned_ms, tz) && !r.contains_at(now_ms, tz));
+    if !quiet && now_ms - planned_ms < LATE_AFTER_MS {
         return None;
     }
     let mut missed = 1u32;
@@ -182,11 +195,53 @@ pub fn late_of(sched: &Schedule, now_ms: i64, tz: &str, wake: Option<Wake>) -> O
         planned_ms,
         missed,
         slept,
+        quiet,
     })
 }
 
 /// « ⏰ Exécution en retard : prévue à 8h30, lancée à 10h02 après une veille de 3 h 32. »
+/// Retenue par les heures calmes (#296) : « 🌙 Pendant les heures calmes : prévue à
+/// 23h00, retenue jusqu'à 7h00. »
 pub fn late_text(late: &Late, now_ms: i64, tz: &str) -> String {
+    let (when, now) = planned_and_now(late, now_ms, tz);
+    let mut text = if late.quiet {
+        format!(
+            "{} prévue {when}, retenue jusqu'à {now}",
+            penelope_app::quiet::HEADER
+        )
+    } else {
+        format!("⏰ Exécution en retard : prévue {when}, lancée à {now}")
+    };
+    if let Some(slept) = late.slept {
+        text.push_str(&format!(" après une veille de {}", duration_text(slept)));
+    }
+    text.push('.');
+    if late.missed > 1 {
+        text.push_str(&format!(
+            " Les {} créneaux manqués partent en une seule exécution.",
+            late.missed
+        ));
+    }
+    text
+}
+
+/// Mention courte d'un créneau retenu, pour la livraison groupée de la fin des heures
+/// calmes (#296) : « prévue à 23h00 », « prévue le 01/01 à 23h00 ; les 5 créneaux manqués
+/// partent en une seule livraison ».
+pub fn held_text(late: &Late, now_ms: i64, tz: &str) -> String {
+    let (when, _) = planned_and_now(late, now_ms, tz);
+    let mut text = format!("prévue {when}");
+    if late.missed > 1 {
+        text.push_str(&format!(
+            " ; les {} créneaux manqués partent en une seule livraison",
+            late.missed
+        ));
+    }
+    text
+}
+
+/// « à 8h30 » ou « le 01/01 à 8h30 » pour le créneau prévu, et l'heure de maintenant.
+fn planned_and_now(late: &Late, now_ms: i64, tz: &str) -> (String, String) {
     let zone = tz.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::Tz::UTC);
     let local = |ms: i64| {
         chrono::DateTime::from_timestamp_millis(ms)
@@ -200,21 +255,7 @@ pub fn late_text(late: &Late, now_ms: i64, tz: &str) -> String {
     } else {
         format!("le {} à {}", planned.format("%d/%m"), hour(&planned))
     };
-    let mut text = format!(
-        "⏰ Exécution en retard : prévue {when}, lancée à {}",
-        hour(&now)
-    );
-    if let Some(slept) = late.slept {
-        text.push_str(&format!(" après une veille de {}", duration_text(slept)));
-    }
-    text.push('.');
-    if late.missed > 1 {
-        text.push_str(&format!(
-            " Les {} créneaux manqués partent en une seule exécution.",
-            late.missed
-        ));
-    }
-    text
+    (when, hour(&now))
 }
 
 /// « 3 h 32 », « 12 min ».

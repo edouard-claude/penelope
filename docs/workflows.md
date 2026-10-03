@@ -441,7 +441,14 @@ ce qui manque, puis propose un plan avec `workflow_plan` (`goal`, `steps`, `para
 `brief`). Les corrections et retours arrière créent de nouvelles versions. Une carte
 dans le sujet d'origine montre le plan et son bouton « Vas-y (vN) ». Ce clic approuve la
 révision montrée et lance son run (section suivante). Le lancement direct avec
-`workflow_start` est refusé dans une conversation Telegram. `/run <id>` passe toujours
+`workflow_start` est refusé dans une conversation de canal, avant toute carte
+d'approbation, et le refus dit l'état réel : plan en revue, approuvé en attente du clic,
+ou déjà lancé, avec le run et son état (#302). Le clic écrit l'événement
+`workflow.plan.launched` dans la session d'origine et une note pour son prochain tour
+(bloc `<evenements>` du contexte : « run lancé, `workflow_status` pour suivre ») ;
+« vas-y » tapé en texte après le clic reçoit l'état du run sans tour de modèle ; deux
+refus de `workflow_start` dans un même tour l'arrêtent avec cet état (`turn.halted`).
+`/run <id>` passe toujours
 par cette conversation, même quand des paramètres sont fournis. La CLI et les runs
 techniques continuent d'utiliser le moteur existant. Une nouvelle demande dans la même
 session conserve le plan approuvé précédent, et son run. `/stop` dans la conversation met

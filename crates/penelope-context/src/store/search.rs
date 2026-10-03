@@ -1,4 +1,7 @@
 use super::*;
+use crate::derive::tool_node;
+use crate::journal::ConvEvent;
+use penelope_store::rusqlite::Connection;
 
 /// Mots vides retirés d'une question avant la recherche : sans eux, une phrase
 /// entière ne correspond à rien, puisque le plein texte exige chaque mot.
@@ -185,28 +188,171 @@ pub fn significant_terms(question: &str) -> Vec<String> {
     out
 }
 
+/// Ce que l'index plein texte garde d'un appel d'outil, en caractères : son nom et ses
+/// arguments textuels aplatis. Une commande `shell_exec` et ses options tiennent
+/// largement ; au-delà, l'appel est coupé et `history_expand` le rend en entier (#300).
+pub(crate) const TOOL_CALL_INDEX_CHARS: usize = 2_000;
+
+/// Arguments qu'un appel n'apporte pas à l'index : le corps d'un fichier écrit est
+/// volumineux et vit dans le fichier (le chemin qui l'a produit reste indexé) ; la requête
+/// d'une recherche dans l'historique se retrouverait elle-même à chaque recherche.
+const UNINDEXED_ARGUMENTS: &[(&str, &str)] = &[
+    ("fs_write", "content"),
+    ("history_grep", "query"),
+    ("history_expand_query", "question"),
+];
+
+/// Le texte qu'un message apporte au plein texte : le sien, puis chaque appel d'outil sur
+/// sa ligne (`outil clé: valeur …`), secrets masqués par le rédacteur et coupé à
+/// [`TOOL_CALL_INDEX_CHARS`]. Jusqu'à #300, un message assistant qui n'était qu'un appel
+/// d'outil entrait dans l'index avec une chaîne vide : la commande qu'il portait était
+/// introuvable une fois la conversation résumée.
+pub(crate) fn searchable_text(m: &ChatMessage) -> String {
+    let mut out = m.text();
+    for call in &m.tool_calls {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&tool_call_index_line(call));
+    }
+    out
+}
+
+/// Une ligne d'index pour un appel : son nom, puis ses arguments aplatis.
+fn tool_call_index_line(call: &ToolCall) -> String {
+    let mut parts = vec![call.name.clone()];
+    flatten_arguments(&call.name, "", &call.arguments, &mut parts);
+    let joined = penelope_observe::redact::redact(&parts.join(" "));
+    match joined.char_indices().nth(TOOL_CALL_INDEX_CHARS) {
+        Some((i, _)) => format!("{}…", &joined[..i]),
+        None => joined,
+    }
+}
+
+/// Les feuilles d'un objet d'arguments, `chemin.de.clé: valeur`, sans celles que
+/// [`UNINDEXED_ARGUMENTS`] écarte pour cet outil.
+fn flatten_arguments(tool: &str, key: &str, v: &Value, out: &mut Vec<String>) {
+    let labelled = |value: String| {
+        if key.is_empty() {
+            value
+        } else {
+            format!("{key}: {value}")
+        }
+    };
+    match v {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let path = if key.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{key}.{k}")
+                };
+                if UNINDEXED_ARGUMENTS.contains(&(tool, path.as_str())) {
+                    continue;
+                }
+                flatten_arguments(tool, &path, v, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                flatten_arguments(tool, key, item, out);
+            }
+        }
+        Value::String(s) => {
+            let s = s.trim();
+            if !s.is_empty() {
+                out.push(labelled(s.to_string()));
+            }
+        }
+        Value::Number(n) => out.push(labelled(n.to_string())),
+        Value::Bool(b) => out.push(labelled(b.to_string())),
+        Value::Null => {}
+    }
+}
+
+/// Le texte que le plein texte indexe pour une ligne : [`searchable_text`] du message, sauf
+/// pour un corps externalisé (niveau 1), dont l'index garde le texte d'origine, celui de
+/// l'événement d'ajout (`externalise` ne touche pas `messages_fts`). Le projecteur, la
+/// double écriture et `rebuild_fts` passent tous ici : un même message donne la même
+/// entrée, quel que soit le chemin qui l'écrit.
+pub(crate) fn searchable(
+    c: &Connection,
+    m: &ChatMessage,
+    artifact_id: Option<&str>,
+    event_id: Option<i64>,
+) -> penelope_store::Result<String> {
+    let original = match (artifact_id, event_id) {
+        (Some(_), Some(id)) => c
+            .query_row(
+                "SELECT kind, payload FROM events WHERE id = ?1",
+                [id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .and_then(|(kind, payload)| {
+                let value: Value = serde_json::from_str(&payload).ok()?;
+                match ConvEvent::decode(&kind, &value).ok()?? {
+                    ConvEvent::ToolResult(p) => Some(tool_node(p).message.text()),
+                    _ => None,
+                }
+            }),
+        _ => None,
+    };
+    Ok(original.unwrap_or_else(|| searchable_text(m)))
+}
+
+/// Une ligne de `messages` relue pour refaire son entrée plein texte.
+struct Stored {
+    id: i64,
+    sid: String,
+    role: String,
+    content: String,
+    tool_call_id: Option<String>,
+    tool_name: Option<String>,
+    artifact_id: Option<String>,
+    event_id: Option<i64>,
+}
+
 impl HistoryStore {
-    /// Reconstruit l'index plein texte des messages depuis l'historique canonique.
+    /// Reconstruit l'index plein texte des messages depuis l'historique canonique, lignes
+    /// scellées comprises, avec la même entrée que le projecteur ([`searchable`]) : c'est
+    /// ce qui met les appels d'outils des lignes d'avant #300 dans l'index.
     pub async fn rebuild_fts(&self) -> penelope_store::Result<usize> {
         self.store
             .write(|tx| {
                 tx.execute("DELETE FROM messages_fts", [])?;
-                let mut st = tx.prepare("SELECT id, session_id, role, content FROM messages")?;
-                let rows: Vec<(i64, String, String, String)> = st
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                let mut st = tx.prepare(
+                    "SELECT id, session_id, role, content, tool_call_id, tool_name, artifact_id,
+                            event_id
+                     FROM messages",
+                )?;
+                let rows: Vec<Stored> = st
+                    .query_map([], |r| {
+                        Ok(Stored {
+                            id: r.get(0)?,
+                            sid: r.get(1)?,
+                            role: r.get(2)?,
+                            content: r.get(3)?,
+                            tool_call_id: r.get(4)?,
+                            tool_name: r.get(5)?,
+                            artifact_id: r.get(6)?,
+                            event_id: r.get(7)?,
+                        })
+                    })?
                     .collect::<Result<_, _>>()?;
                 drop(st);
                 let mut n = 0;
-                for (id, sid, role, content) in rows {
+                for row in rows {
                     let message = deserialise_content(
-                        Role::parse(&role).unwrap_or(Role::User),
-                        &content,
-                        None,
-                        None,
+                        Role::parse(&row.role).unwrap_or(Role::User),
+                        &row.content,
+                        row.tool_call_id,
+                        row.tool_name,
                     );
+                    let text = searchable(tx, &message, row.artifact_id.as_deref(), row.event_id)?;
                     tx.execute(
                         "INSERT INTO messages_fts(content, session_id, msg_id) VALUES(?1,?2,?3)",
-                        params![message.text(), sid, id],
+                        params![text, row.sid, row.id],
                     )?;
                     n += 1;
                 }

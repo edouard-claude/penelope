@@ -76,7 +76,35 @@ impl Config {
         self.validate_models()?;
         self.validate_turn_limits()?;
         self.validate_schedules()?;
-        self.validate_mcp_and_runtime()
+        self.validate_mcp_and_runtime()?;
+        self.validate_webhooks()
+    }
+
+    /// Webhooks entrants (#294) : une adresse d'écoute lisible avec un port non nul, ou
+    /// vide (pas de serveur) ; des plafonds qui laissent passer au moins une requête.
+    fn validate_webhooks(&self) -> Result<()> {
+        let w = &self.webhooks;
+        if !w.listen.trim().is_empty() {
+            let bind = w.listen.parse::<std::net::SocketAddr>().map_err(|_| {
+                KernelError::config("webhooks.listen invalide (attendu `hôte:port`)")
+            })?;
+            if bind.port() == 0 {
+                return Err(KernelError::config(
+                    "webhooks.listen doit porter un port non nul",
+                ));
+            }
+        }
+        if w.max_body_bytes < 1024 {
+            return Err(KernelError::config(
+                "webhooks.max_body_bytes doit valoir au moins 1024",
+            ));
+        }
+        if w.rate_per_minute == 0 || w.prompt_turns_per_hour == 0 {
+            return Err(KernelError::config(
+                "webhooks.rate_per_minute et webhooks.prompt_turns_per_hour doivent valoir au moins 1",
+            ));
+        }
+        Ok(())
     }
 
     /// Propriétaire, flux runtime et canal Telegram.
@@ -115,15 +143,13 @@ impl Config {
             }
         }
 
-        if !matches!(self.telegram.mode.as_str(), "polling" | "webhook") {
-            return Err(KernelError::config(
-                "telegram.mode doit valoir `polling` ou `webhook`",
-            ));
-        }
-        if self.telegram.mode == "webhook" && self.telegram.webhook_url.is_empty() {
-            return Err(KernelError::config(
-                "telegram.webhook_url est requis en mode webhook",
-            ));
+        // Seul le long polling est servi (#294) : accepter `webhook` laisserait le bot
+        // sourd sans un mot, comme la clé le promettait depuis la 0.17.
+        if self.telegram.mode != "polling" {
+            return Err(KernelError::config(format!(
+                "telegram.mode : `{}` n'est pas servi, seul `polling` l'est (webhook_url est sans effet, #294)",
+                self.telegram.mode
+            )));
         }
         if !self.telegram.quiet_hours.is_empty() {
             TimeRange::parse(&self.telegram.quiet_hours)?;
@@ -284,7 +310,42 @@ impl Config {
             crate::cron::Cron::parse(&self.backup.cron)?;
         }
         crate::cron::Cron::parse(&self.memory.digest_cron)?;
-        self.validate_backup_s3()
+        // L'agenda du digest (#295) : un outil MCP par son nom qualifié, ou rien.
+        let agenda = self.digest.agenda.trim();
+        if !agenda.is_empty() && !agenda_tool_is_qualified(agenda) {
+            return Err(KernelError::config(format!(
+                "digest.agenda doit nommer un outil MCP qualifié `mcp__<serveur>__<outil>` \
+                 (par exemple `mcp__agenda__events_today`), lu : « {agenda} »"
+            )));
+        }
+        self.validate_backup_s3()?;
+        self.validate_voice_postprocess()
+    }
+
+    /// Post-traitement vocal (#299) : moteur et périphérique connus, délai lisible et non
+    /// nul. Vérifié même éteint : une clé fausse se voit avant d'allumer.
+    fn validate_voice_postprocess(&self) -> Result<()> {
+        let p = &self.voice.postprocess;
+        if !VOICE_ENGINES.contains(&p.engine.trim()) {
+            return Err(KernelError::config(format!(
+                "voice.postprocess.engine `{}` inconnu : {}",
+                p.engine,
+                VOICE_ENGINES.join(", ")
+            )));
+        }
+        if !VOICE_RESEMBLE_DEVICES.contains(&p.resemble_device.trim()) {
+            return Err(KernelError::config(format!(
+                "voice.postprocess.resemble_device `{}` inconnu : {}",
+                p.resemble_device,
+                VOICE_RESEMBLE_DEVICES.join(", ")
+            )));
+        }
+        if parse_duration(&p.timeout)?.is_zero() {
+            return Err(KernelError::config(
+                "voice.postprocess.timeout : un délai non nul est attendu",
+            ));
+        }
+        Ok(())
     }
 
     /// Destination S3 (#289) : adresse en HTTPS (HTTP seulement vers la boucle locale),
@@ -432,8 +493,17 @@ impl Config {
             .copied()
     }
 
+    /// Heures calmes du propriétaire ; `None` : désactivées. La clé reste sous `[telegram]`
+    /// (configuration installée), la notion appartient au propriétaire : le cœur passe
+    /// par ici, jamais par la section (#296).
     pub fn quiet_range(&self) -> Option<TimeRange> {
         TimeRange::parse(&self.telegram.quiet_hours).ok()
+    }
+
+    /// Vrai si `now_ms` tombe dans les heures calmes, à l'heure du propriétaire.
+    pub fn quiet_at(&self, now_ms: i64) -> bool {
+        self.quiet_range()
+            .is_some_and(|r| r.contains_at(now_ms, &self.owner.timezone))
     }
 
     /// Configuration minimale valide, utilisée par les tests et `penelope init`.

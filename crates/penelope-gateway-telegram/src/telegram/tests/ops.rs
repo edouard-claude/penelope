@@ -93,7 +93,12 @@ async fn the_reminder_of_a_go_template_command_is_delivered() {
     let d = Arc::new(Daemon::from_services(s.clone()));
     d.publish_config("test", |c| {
         c.telegram.rate_per_chat_per_s = 1_000.0;
-        Ok(vec!["telegram.rate_per_chat_per_s".into()])
+        // 4 h du matin chez le propriétaire : sans cela le rappel attendrait 7 h (#296).
+        c.telegram.quiet_hours.clear();
+        Ok(vec![
+            "telegram.rate_per_chat_per_s".into(),
+            "telegram.quiet_hours".into(),
+        ])
     })
     .unwrap();
     let t = MockTransport::new();

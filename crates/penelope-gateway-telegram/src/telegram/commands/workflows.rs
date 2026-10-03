@@ -135,3 +135,45 @@ impl TelegramGateway {
             .await;
     }
 }
+
+impl TelegramGateway {
+    /// « vas-y » tapé après le clic sur la carte (#302) : le run est déjà parti, la réponse
+    /// dit son état, sans tour de modèle. `true` : le message est traité. Sans run vivant
+    /// (aucun plan, plan en revue, run fini), le texte part au modèle comme avant.
+    pub(crate) async fn plan_go_typed(
+        self: &Arc<Self>,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+        text: &str,
+    ) -> anyhow::Result<bool> {
+        use penelope_workflow::plan::{PlanStore, gate};
+        if !gate::is_go_text(text) {
+            return Ok(false);
+        }
+        let s = &self.daemon.services;
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: None,
+        };
+        let session = self.daemon.chat_session_for(&origin).await?;
+        let Some(live) =
+            gate::live_run(&PlanStore::new(s.store.clone()), &s.runs, &session).await?
+        else {
+            return Ok(false);
+        };
+        let note = format!(
+            "✅ Déjà lancé : run `{}` du plan v{} (« {} »), {}. Rien à relancer ; `/stop` \
+             l'arrête, `/resume {}` le reprend.",
+            live.run.id,
+            live.draft.plan.version(),
+            live.draft.plan.goal(),
+            live.state_line(),
+            live.run.id
+        );
+        self.reply(chat_id, topic_id, Some(message_id), &note)
+            .await?;
+        Ok(true)
+    }
+}

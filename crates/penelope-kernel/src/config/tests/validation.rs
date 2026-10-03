@@ -41,9 +41,9 @@ fn each_invalid_value_is_refused_with_its_key() {
             c.observability.runtime_consumers = vec![consumer("a", " ")];
         }),
         ("telegram.mode", |c| c.telegram.mode = "push".into()),
-        ("telegram.webhook_url", |c| {
+        ("seul `polling` l'est", |c| {
             c.telegram.mode = "webhook".into();
-            c.telegram.webhook_url.clear();
+            c.telegram.webhook_url = "https://example.invalid/tg".into();
         }),
         ("heure invalide", |c| {
             c.telegram.quiet_hours = "22h-7h".into()
@@ -127,10 +127,50 @@ fn each_invalid_value_is_refused_with_its_key() {
             c.sandbox.default_profile = "prison".into()
         }),
         ("budget.alert_ratio", |c| c.budget.alert_ratio = 0.0),
+        ("digest.agenda", |c| c.digest.agenda = "events_today".into()),
+        ("digest.agenda", |c| {
+            c.digest.agenda = "mcp__agenda__".into()
+        }),
+        ("webhooks.listen invalide", |c| {
+            c.webhooks.listen = "pas une adresse".into()
+        }),
+        ("webhooks.listen doit porter un port", |c| {
+            c.webhooks.listen = "127.0.0.1:0".into()
+        }),
+        ("webhooks.max_body_bytes", |c| {
+            c.webhooks.max_body_bytes = 10
+        }),
+        ("webhooks.rate_per_minute", |c| {
+            c.webhooks.rate_per_minute = 0
+        }),
+        ("webhooks.rate_per_minute", |c| {
+            c.webhooks.prompt_turns_per_hour = 0
+        }),
     ];
     for (want, mutate) in cases {
         let got = refused(*mutate);
         assert!(got.contains(want), "attendu « {want} », reçu : {got}");
+    }
+}
+
+/// #295 : l'agenda du digest est un outil MCP qualifié, ou rien ; un espace autour ne
+/// compte pas.
+#[test]
+fn the_digest_agenda_is_a_qualified_mcp_tool_or_nothing() {
+    let mut c = cfg();
+    assert!(c.digest.agenda.is_empty(), "éteint par défaut");
+    c.validate().unwrap();
+    c.digest.agenda = " mcp__agenda__events_today ".into();
+    c.validate().unwrap();
+    assert!(agenda_tool_is_qualified("mcp__agenda__events_today"));
+    assert!(agenda_tool_is_qualified("mcp__mon-serveur__events_today"));
+    for bad in [
+        "events_today",
+        "mcp__agenda",
+        "mcp____events_today",
+        "mcp__agenda__",
+    ] {
+        assert!(!agenda_tool_is_qualified(bad), "{bad}");
     }
 }
 

@@ -20,7 +20,7 @@ mod visible;
 use self::lifecycle::shut_down;
 pub use self::visible::Visible;
 use super::normalise::Normaliser;
-use super::{McpTool, Mode, Scenario, ScriptEntry, ScriptLine, Spec, Step, world};
+use super::{McpResource, McpTool, Mode, Scenario, ScriptEntry, ScriptLine, Spec, Step, world};
 use anyhow::Context as _;
 use penelope_agent::TurnOutcome;
 use penelope_app::elicitation::Destination;
@@ -158,6 +158,7 @@ pub async fn run(scenario: &Scenario, mode: Mode) -> anyhow::Result<Run> {
         if let Some(id) = line[key].as_str() {
             n.text(id);
         }
+        n.note_world(line);
     }
     let outcomes = std::mem::take(&mut h.outcomes);
     let expected: Vec<Value> = outcomes
@@ -448,9 +449,11 @@ fn schema(t: &McpTool) -> Value {
 }
 
 /// Serveur MCP simulé : rend le texte déclaré ; en mode bloqué, signale l'appel et ne
-/// répond qu'une fois relâché (jamais, pour un crash).
+/// répond qu'une fois relâché (jamais, pour un crash). Sert aussi les ressources
+/// déclarées (`mcp_resource_read`, #293).
 struct Gateway {
     tools: Vec<McpTool>,
+    resources: Vec<McpResource>,
     block: AtomicBool,
     called: tokio::sync::Notify,
     release: tokio::sync::Notify,
@@ -474,6 +477,15 @@ impl McpGateway for Gateway {
             self.release.notified().await;
         }
         Ok(json!({"content": [{"type": "text", "text": tool.result}]}))
+    }
+
+    async fn read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
+        let r = self
+            .resources
+            .iter()
+            .find(|r| r.server == server && r.uri == uri)
+            .ok_or_else(|| format!("ressource simulée inconnue : {server} {uri}"))?;
+        Ok(json!({"contents": [{"uri": r.uri, "mimeType": r.mime_type, "text": r.text}]}))
     }
 
     async fn server_lines(&self) -> Vec<String> {

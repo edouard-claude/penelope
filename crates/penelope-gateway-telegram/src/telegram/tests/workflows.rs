@@ -433,7 +433,9 @@ async fn run_without_parameters_turns_into_a_conversation() {
     );
 }
 
-/// Issue #186 : l'ancienne carte de lancement ne contourne plus le gate du plan.
+/// Issue #186 : l'ancienne carte de lancement ne contourne plus le gate du plan. Depuis
+/// #302, `workflow_start` est refusé avant toute carte : le propriétaire n'a rien à
+/// valider, et le refus revient au modèle, qui propose un plan.
 #[tokio::test]
 async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
     let (_d, g, t, p) = gateway().await;
@@ -458,6 +460,7 @@ async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
             }),
         }],
     ));
+    p.reply("Je prépare d'abord un plan.");
     g.process_update(&updates::text_message(
         140,
         OWNER,
@@ -467,25 +470,21 @@ async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
     .await
     .unwrap();
     drain(&g).await;
-    let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
-    let text = card["text"].as_str().unwrap();
     assert!(
-        text.contains("Lancer") && text.contains("7647") && text.contains("filtre de dates"),
-        "{text}"
+        d.services.approvals.pending(10).await.unwrap().is_empty(),
+        "aucune carte pour un appel voué au refus"
     );
-    let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
-    assert_eq!(labels, vec!["▶️ Lancer", "⏸ Pas encore"]);
-
-    p.reply("Je prépare d'abord un plan.");
-    let launch = button(&t, "▶️ Lancer").await;
-    g.process_update(&updates::callback(141, OWNER, &launch, 1400))
-        .await
-        .unwrap();
-    settle_click(&g).await;
-    drain(&g).await;
+    for m in t.calls_to(tg::SEND_MESSAGE).await {
+        let labels: Vec<String> = inline_buttons(&m).into_iter().map(|(l, _)| l).collect();
+        assert!(!labels.iter().any(|l| l.contains("Lancer")), "{labels:?}");
+    }
     assert!(d.services.runs.list(None, 5).await.unwrap().is_empty());
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
-    assert!(sent.iter().any(|m| m.contains("plan")), "{sent:?}");
+    assert!(
+        sent.iter()
+            .any(|m| m.contains("Je prépare d'abord un plan")),
+        "{sent:?}"
+    );
 }
 
 /// #191 : « Vas-y » lance le run du plan exact, une fois ; la carte d'une révision
@@ -648,4 +647,76 @@ async fn schedules_are_named_and_moved_by_the_telegram_channel() {
         to_of(&list, &sched.id),
         "sujet « Veille », groupe « Équipe »"
     );
+}
+
+/// #302 : « vas-y » tapé après le clic répond l'état du run, sans tour de modèle ; sans
+/// plan, ou le run fini, le texte part au modèle comme avant.
+#[tokio::test]
+async fn typed_go_after_the_click_answers_the_run_state_without_a_turn() {
+    use penelope_workflow::plan::{Phase, Plan, PlanDraft, PlanStep, PlanStore};
+    let (_d, g, t, _p) = gateway().await;
+    let s = &g.daemon.services;
+    let origin = Origin::Telegram {
+        chat_id: OWNER,
+        topic_id: None,
+        message_id: None,
+    };
+    let session = g.daemon.chat_session_for(&origin).await.unwrap();
+    // Sans plan : un message ordinaire, qui part en tour.
+    g.process_update(&updates::text_message(501, OWNER, OWNER, "vas-y"))
+        .await
+        .unwrap();
+    assert_eq!(s.turns.pending_count().await.unwrap(), 1);
+
+    let v1 = PlanDraft {
+        workflow_id: "build-verify".into(),
+        params: json!({"objectif":"réparer le build"}),
+        brief: None,
+        plan: Plan::new(
+            "Réparer le build",
+            vec![
+                PlanStep::new(Phase::Tests, "Reproduire l'échec"),
+                PlanStep::new(Phase::Implementation, "Corriger"),
+            ],
+        )
+        .unwrap(),
+    };
+    PlanStore::new(s.store.clone())
+        .create(&session, &v1)
+        .await
+        .unwrap();
+    g.send_plan_card(&origin, &session, &v1).await.unwrap();
+    g.flush_outbox().await.unwrap();
+    let go = button(&t, "Vas-y").await;
+    g.process_update(&updates::callback(502, OWNER, &go, 1502))
+        .await
+        .unwrap();
+    settle_click(&g).await;
+    let run = s.runs.list(None, 5).await.unwrap().remove(0);
+
+    g.process_update(&updates::text_message(503, OWNER, OWNER, "vasy"))
+        .await
+        .unwrap();
+    g.flush_outbox().await.unwrap();
+    assert_eq!(
+        s.turns.pending_count().await.unwrap(),
+        1,
+        "aucun tour de modèle"
+    );
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    let last = sent.last().unwrap();
+    assert!(
+        last.contains("Déjà lancé") && last.contains(&run.id) && last.contains("en cours"),
+        "{last}"
+    );
+
+    // Le run fini, « vas-y » redevient un message ordinaire.
+    s.runs
+        .control(&run.id, &penelope_workflow::Control::Cancel)
+        .await
+        .unwrap();
+    g.process_update(&updates::text_message(504, OWNER, OWNER, "vas-y"))
+        .await
+        .unwrap();
+    assert_eq!(s.turns.pending_count().await.unwrap(), 2);
 }

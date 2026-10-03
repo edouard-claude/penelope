@@ -2,6 +2,62 @@
 
 use super::*;
 
+/// Plafond, en caractères, d'une valeur textuelle d'argument rendue par `history_expand` :
+/// une commande, un chemin ou une requête tiennent ; le corps d'un `fs_write` est coupé,
+/// le fichier se relit.
+const EXPAND_ARGUMENT_CHARS: usize = 1_500;
+
+/// Un message relu par `history_expand` : son texte et, s'il en porte, ses appels d'outils
+/// (`appels`, nom et arguments). Jusqu'à #300 seul le texte était rendu : un message
+/// assistant qui n'était qu'un `shell_exec` se relisait vide, et la commande lancée la
+/// veille passait pour perdue.
+pub(crate) fn expanded_message(e: &penelope_context::Entry) -> Value {
+    let mut v = json!({
+        "seq": e.seq,
+        "role": e.message.role.as_str(),
+        "texte": e.message.text(),
+    });
+    if !e.message.tool_calls.is_empty() {
+        let calls: Vec<Value> = e
+            .message
+            .tool_calls
+            .iter()
+            .map(|c| {
+                json!({
+                    "outil": c.name,
+                    "arguments": truncate_strings(
+                        &penelope_observe::redact::redact_json(&c.arguments),
+                        EXPAND_ARGUMENT_CHARS,
+                    ),
+                })
+            })
+            .collect();
+        v["appels"] = json!(calls);
+    }
+    v
+}
+
+/// Coupe les chaînes d'une valeur JSON au-delà de `max` caractères, structure gardée.
+fn truncate_strings(v: &Value, max: usize) -> Value {
+    match v {
+        Value::String(s) => match s.char_indices().nth(max) {
+            Some((i, _)) => Value::String(format!(
+                "{}… [tronqué : {} caractères]",
+                &s[..i],
+                s.chars().count()
+            )),
+            None => v.clone(),
+        },
+        Value::Array(a) => Value::Array(a.iter().map(|x| truncate_strings(x, max)).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), truncate_strings(x, max)))
+                .collect(),
+        ),
+        _ => v.clone(),
+    }
+}
+
 impl NativeToolExecutor {
     /// Mémoire.
     pub(super) async fn memory_tools(
@@ -319,7 +375,7 @@ impl NativeToolExecutor {
                     .filter(|e| e.seq <= to)
                     .skip(page * 20)
                     .take(20)
-                    .map(|e| json!({"seq": e.seq, "role": e.message.role.as_str(), "texte": e.message.text()}))
+                    .map(expanded_message)
                     .collect();
                 json!({"node": node.id, "page": page, "messages": msgs})
             }
@@ -344,5 +400,64 @@ impl NativeToolExecutor {
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use penelope_context::Entry;
+    use penelope_llm::types::{ChatMessage, ToolCall};
+
+    fn entry(message: ChatMessage) -> Entry {
+        Entry {
+            seq: 2,
+            message,
+            eager: false,
+            artifact_id: None,
+            tokens: 10,
+            episode: 0,
+            compacted: true,
+        }
+    }
+
+    /// #300 : `history_expand` rend les appels d'outils d'un message avec leurs arguments ;
+    /// un jeton y est masqué, une longue valeur coupée, et un message sans appel n'a pas la
+    /// clé `appels`.
+    #[test]
+    fn expanded_messages_carry_their_tool_calls() {
+        let plain = expanded_message(&entry(ChatMessage::user("fais le rendu")));
+        assert_eq!(plain["texte"], "fais le rendu");
+        assert!(plain.get("appels").is_none());
+
+        let command = "ffmpeg -i in.wav -af acompressor=threshold=-18dB,loudnorm=I=-16 out.wav";
+        let calls = ChatMessage::assistant("").with_tool_calls(vec![
+            ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({"command": command, "cwd": "/w"}),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "fs_write".into(),
+                arguments: json!({
+                    "path": "notes/jeton.md",
+                    "content": format!("{} ghp_0123456789abcdefghijABCDEFGHIJ012345", "x".repeat(5_000)),
+                }),
+            },
+        ]);
+        let v = expanded_message(&entry(calls));
+        assert_eq!(v["texte"], "");
+        let appels = v["appels"].as_array().unwrap();
+        assert_eq!(appels.len(), 2);
+        assert_eq!(appels[0]["outil"], "shell_exec");
+        assert_eq!(appels[0]["arguments"]["command"], command);
+        assert_eq!(appels[0]["arguments"]["cwd"], "/w");
+        assert_eq!(appels[1]["arguments"]["path"], "notes/jeton.md");
+        let content = appels[1]["arguments"]["content"].as_str().unwrap();
+        assert!(content.contains("… [tronqué : "), "{content}");
+        assert!(content.ends_with(" caractères]"), "{content}");
+        assert!(content.chars().count() < EXPAND_ARGUMENT_CHARS + 40);
+        assert!(!v.to_string().contains("ghp_0123"), "le jeton est masqué");
     }
 }

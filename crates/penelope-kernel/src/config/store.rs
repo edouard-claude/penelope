@@ -56,6 +56,7 @@ pub const RESTART_ONLY_PATHS: &[&str] = &[
     "telegram.token",
     "observability.runtime_stream_bind",
     "observability.runtime_consumers",
+    "webhooks.listen",
 ];
 
 pub fn restart_allowed(path: &str) -> bool {

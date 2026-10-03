@@ -31,8 +31,8 @@ impl Rpc {
                 checks.push(penelope_ops::doctor::install_mode_check());
                 checks.push(penelope_ops::doctor::pending_upgrade_check(s));
                 checks.push(penelope_ops::doctor::schedules_check(s).await);
-                checks.push(
-                    penelope_executor::voice::doctor_check(
+                checks.extend(
+                    penelope_executor::voice::doctor_checks(
                         &self.daemon.services,
                         self.daemon.providers.as_ref(),
                     )

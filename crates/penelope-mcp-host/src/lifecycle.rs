@@ -273,6 +273,7 @@ impl McpSupervisor {
                     client: client.clone(),
                     pump,
                     keychain,
+                    subscriptions: std::sync::Mutex::new(Default::default()),
                 });
                 drop(live);
                 self.persist(slot).await;
@@ -486,6 +487,26 @@ impl McpSupervisor {
                                     sup.services.elicitations.complete(&name, &id).await;
                                 });
                             }
+                        }
+                        // Une ressource abonnée a changé (#293) : l'ordonnanceur la relit
+                        // à son passage, par le journal ; le superviseur ne connaît pas
+                        // les planifications.
+                        "notifications/resources/updated" => {
+                            let uri = n
+                                .params
+                                .as_ref()
+                                .and_then(|p| p.get("uri"))
+                                .and_then(|u| u.as_str())
+                                .map(String::from);
+                            if let (Some(sup), Some(uri)) = (me.upgrade(), uri) {
+                                let name = name.clone();
+                                tokio::spawn(async move {
+                                    sup.resource_updated(&name, &uri).await;
+                                });
+                            }
+                        }
+                        "notifications/resources/list_changed" => {
+                            tracing::debug!(server = %name, "liste des ressources MCP changée");
                         }
                         _ => {}
                     },

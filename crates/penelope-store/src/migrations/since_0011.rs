@@ -166,3 +166,31 @@ CREATE INDEX approval_samples_created ON approval_samples(created_at);
 CREATE INDEX approval_samples_approval ON approval_samples(approval_id)
   WHERE approval_id IS NOT NULL;
 "#;
+
+/// File des heures calmes (#296) : une livraison proactive (alerte MCP, lien
+/// d'autorisation) née pendant `quiet_hours` attend ici la fin de la plage, puis part
+/// groupée et disparaît. Dans la base, pas en mémoire : un redémarrage ne la perd pas.
+/// `origin` est la conversation de destination, en JSON (`Origin`).
+pub(super) const SQL_0025: &str = r#"
+CREATE TABLE quiet_queue (
+  id           INTEGER PRIMARY KEY,
+  created_at   TEXT NOT NULL,
+  kind         TEXT NOT NULL,               -- mcp_notice | mcp_auth | …
+  origin       TEXT NOT NULL,
+  text         TEXT NOT NULL
+);
+"#;
+
+/// Les appels d'outils entrent dans l'index plein texte des messages (#300) : les lignes
+/// écrites avant n'y ont que leur texte, et un message assistant qui n'était qu'un appel y
+/// est vide. La migration ne réécrit pas l'index, qui est un cache tenu par
+/// `penelope-context` : elle pose une marque dans `kv`, que la passe de maintenance du
+/// daemon honore en refaisant `messages_fts` depuis `messages` (`penelope store rebuild`
+/// le fait aussi). Une base sans message n'a rien à refaire. Le journal n'est pas touché.
+pub(super) const SQL_0026: &str = r#"
+INSERT INTO kv(k, v, ts)
+SELECT 'store.messages_fts_pending', 'appels d''outils (#300)',
+       strftime('%Y-%m-%dT%H:%M:%fZ','now')
+WHERE EXISTS (SELECT 1 FROM messages)
+ON CONFLICT(k) DO NOTHING;
+"#;

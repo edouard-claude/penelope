@@ -167,12 +167,8 @@ impl Rpc {
                 Ok(json!({"id": id, "destination": to}))
             }
             method::SCHEDULE_ADD => {
-                let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "kind inconnu : cron, interval, mcp_poll, watch_file ou event"
-                        )
-                    })?;
+                let kind = penelope_workflow::TriggerKind::parse_known(&required_str(p, "kind")?)
+                    .map_err(anyhow::Error::msg)?;
                 penelope_orchestrator::scheduler::create(
                     s,
                     kind,
@@ -196,8 +192,9 @@ impl Rpc {
                     method::SCHEDULE_RESUME => "active",
                     _ => "deleted",
                 };
-                // Une faute de frappe ne passe pas pour une pause réussie (#221).
-                if !s.schedules.set_state(&id, state).await? {
+                // Une faute de frappe ne passe pas pour une pause réussie (#221). Le
+                // secret d'un webhook part avec sa planification (#294).
+                if !penelope_orchestrator::scheduler::set_state(s, &id, state).await? {
                     anyhow::bail!("planification inconnue : {id}");
                 }
                 Ok(json!({"ok": true}))

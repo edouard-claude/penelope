@@ -6,6 +6,21 @@ use super::*;
 pub(super) fn skills_mcp() -> Vec<ToolSpec> {
     vec![
         spec(
+            "mcp_resource_read",
+            RiskClass::Read,
+            "Lit une ressource d'un serveur MCP (`resources/read`) : son texte, ou son JSON \
+             décodé. Sert à relire la ressource qui a réveillé un déclencheur \
+             `mcp_subscribe` (son `server` et son `uri` sont dans le message), ou une \
+             ressource pointée par un résultat d'outil (`resource_link`).",
+            obj(
+                json!({"server": {"type":"string"}, "uri": {"type":"string"}}),
+                &["server", "uri"],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "skill_search",
             RiskClass::Read,
             "Cherche une skill par mots-clés.",
@@ -112,8 +127,10 @@ pub(super) fn workflows() -> Vec<ToolSpec> {
         spec(
             "workflow_start",
             RiskClass::Write,
-            "Lancement direct réservé aux contextes internes et CLI ; depuis Telegram, \
-             propose d'abord `workflow_plan` et attends le gate « vas-y ». \
+            "Lancement direct réservé aux contextes internes, à la CLI et aux runs ; depuis \
+             une conversation, propose d'abord `workflow_plan` : seul le clic « vas-y » du \
+             propriétaire sur la carte lance le run, et un appel ici est refusé avant toute \
+             carte, avec l'état du plan et de son run (déjà lancé : `workflow_status`). \
              `params` : les paramètres requis, complétés par toi (outils, conversation). \
              `brief` : résumé de la discussion (ticket, constats, décisions, contraintes, \
              approche retenue), transmis à la première étape du run.",

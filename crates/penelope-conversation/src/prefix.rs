@@ -102,7 +102,21 @@ pub async fn settle(
         }
         tiers.volatile.push_str(block);
     }
+    // Ce qui s'est passé hors tour (un run lancé depuis la carte de plan, #302) part avec
+    // ce message, et n'est retiré qu'une fois figé avec lui.
+    let notes = penelope_app::notices::peek(s, session_id).await?;
+    if !notes.is_empty() {
+        if !tiers.volatile.trim().is_empty() {
+            tiers.volatile.push_str("\n\n");
+        }
+        tiers
+            .volatile
+            .push_str(&penelope_app::notices::block(&notes));
+    }
     let frozen = freeze_volatile(s, session_id, tiers).await?;
+    if frozen && !notes.is_empty() {
+        penelope_app::notices::consume(s, session_id, notes.len()).await?;
+    }
     // Envoyée une seule fois : journalisée seulement si elle part avec ce message.
     if let Some(block) = block.filter(|_| frozen) {
         record.chars = block.chars().count();

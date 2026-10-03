@@ -593,6 +593,7 @@ pub use purge::CachesPurged;
 pub use rewrite::Rewound;
 pub(crate) use rewrite::mark_compacted_in;
 pub use search::{sanitise_fts, significant_terms};
+pub(crate) use search::{searchable, searchable_text};
 
 #[cfg(test)]
 mod tests;

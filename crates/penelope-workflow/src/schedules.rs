@@ -1,11 +1,22 @@
 //! Déclencheurs et jobs planifiés (§12.9).
 //!
-//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`.
+//! Types : `cron`, `interval`, `mcp_poll`, `watch_file`, `event`, `webhook`, `mcp_subscribe`.
 //! Cibles : `prompt`, `workflow`, `notify`.
+//!
+//! `webhook` (#294) : un service extérieur pousse un corps JSON sur `POST /hook/<jeton>`,
+//! signé en HMAC-SHA256 par un secret rangé dans le magasin de secrets ; la spécification
+//! ne porte que le chemin et le **nom** du secret (`secret_ref`), jamais sa valeur.
 //!
 //! Déduplication `mcp_poll` : un élément nouveau **ou modifié** (empreinte) déclenche la
 //! cible, une seule fois par élément. À la création, les éléments existants sont marqués
 //! vus sans déclenchement, sauf option `backfill`.
+//!
+//! `mcp_subscribe` (#293) : une ressource d'un serveur MCP (`server`, `uri`) suivie par
+//! abonnement (`resources/subscribe`) ; la ressource est relue à chaque notification
+//! `resources/updated`, groupée sur une fenêtre, et dédoublonnée comme `mcp_poll`
+//! (`item_path`, `id_path`, `filter`). Sans `id_path`, la ressource entière est l'élément
+//! et chaque changement de contenu déclenche. Un serveur qui ne sait pas s'abonner est
+//! sondé toutes les `every_ms` (60 s au moins), sans que l'utilisateur ait à choisir.
 
 use penelope_kernel::clock::SharedClock;
 use penelope_kernel::cron::Cron;
@@ -21,6 +32,9 @@ pub enum TriggerKind {
     McpPoll,
     WatchFile,
     Event,
+    Webhook,
+    /// Ressource MCP suivie par abonnement, sondée à défaut (#293).
+    McpSubscribe,
 }
 
 impl TriggerKind {
@@ -31,7 +45,17 @@ impl TriggerKind {
             TriggerKind::McpPoll => "mcp_poll",
             TriggerKind::WatchFile => "watch_file",
             TriggerKind::Event => "event",
+            TriggerKind::Webhook => "webhook",
+            TriggerKind::McpSubscribe => "mcp_subscribe",
         }
+    }
+    /// `parse`, ou le refus qui nomme les sept déclencheurs (#293, #294).
+    pub fn parse_known(s: &str) -> Result<TriggerKind, String> {
+        Self::parse(s).ok_or_else(|| {
+            "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook ou \
+             mcp_subscribe"
+                .to_string()
+        })
     }
     pub fn parse(s: &str) -> Option<TriggerKind> {
         Some(match s {
@@ -40,9 +64,33 @@ impl TriggerKind {
             "mcp_poll" => TriggerKind::McpPoll,
             "watch_file" => TriggerKind::WatchFile,
             "event" => TriggerKind::Event,
+            "webhook" => TriggerKind::Webhook,
+            "mcp_subscribe" => TriggerKind::McpSubscribe,
             _ => return None,
         })
     }
+}
+
+/// Préfixe des chemins de webhook : `/hook/<jeton>` (#294).
+pub const WEBHOOK_PATH_PREFIX: &str = "/hook/";
+
+/// Un jeton de chemin de webhook : 16 caractères au moins parmi `[A-Za-z0-9_-]`, pour
+/// qu'il ne se devine pas et ne porte rien qu'une URL ou un journal maltraite.
+pub fn webhook_token_ok(token: &str) -> bool {
+    token.len() >= 16
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+/// Réglages d'un `mcp_subscribe` et leurs défauts (#293).
+pub mod subscribe {
+    /// Sondage de repli, et minimum accepté pour `every_ms`.
+    pub const DEFAULT_EVERY_MS: u64 = 60_000;
+    /// Fenêtre de regroupement des notifications.
+    pub const DEFAULT_WINDOW_MS: u64 = 30_000;
+    /// Tirs d'un `prompt` ou d'un `workflow` par heure glissante ; le surplus est notifié.
+    pub const DEFAULT_MAX_PER_HOUR: u64 = 20;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +141,12 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    /// `spec.urgent` (#296) : la planification part même pendant les heures calmes du
+    /// propriétaire. Faux par défaut.
+    pub fn is_urgent(&self) -> bool {
+        self.spec.get("urgent").and_then(|u| u.as_bool()) == Some(true)
+    }
+
     pub fn target_kind(&self) -> Option<TargetKind> {
         self.target
             .get("type")
@@ -100,8 +154,22 @@ impl Schedule {
             .and_then(TargetKind::parse)
     }
 
+    /// Chemin d'un déclencheur `webhook` (`/hook/<jeton>`), s'il en a un.
+    pub fn webhook_path(&self) -> Option<&str> {
+        (self.kind == TriggerKind::Webhook)
+            .then(|| self.spec.get("path").and_then(|v| v.as_str()))
+            .flatten()
+    }
+
     /// Validation d'une spécification avant activation (§12.9, aperçu puis HITL).
     pub fn validate(&self, tz: &str) -> Result<(), String> {
+        if let Some(urgent) = self.spec.get("urgent")
+            && !urgent.is_boolean()
+        {
+            return Err(
+                "`urgent` est un booléen (vrai : part même pendant les heures calmes)".into(),
+            );
+        }
         match self.kind {
             TriggerKind::Cron => {
                 let expr = self
@@ -149,6 +217,59 @@ impl Schedule {
                     return Err("`event` est obligatoire".into());
                 }
             }
+            TriggerKind::Webhook => {
+                let path = self
+                    .spec
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or("`path` est obligatoire pour un webhook (attribué à la création)")?;
+                if !path
+                    .strip_prefix(WEBHOOK_PATH_PREFIX)
+                    .is_some_and(webhook_token_ok)
+                {
+                    return Err(format!(
+                        "`path` d'un webhook : `{WEBHOOK_PATH_PREFIX}<jeton>` attendu, reçu `{path}`"
+                    ));
+                }
+                let secret_ref = self.spec.get("secret_ref").and_then(|v| v.as_str()).ok_or(
+                    "`secret_ref` est obligatoire pour un webhook (attribué à la création)",
+                )?;
+                if secret_ref.is_empty()
+                    || !secret_ref
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+                {
+                    return Err(format!(
+                        "`secret_ref` d'un webhook : nom de secret invalide `{secret_ref}`"
+                    ));
+                }
+                // Le secret lui-même n'a rien à faire dans le store.
+                if self.spec.get("secret").is_some() {
+                    return Err("`secret` n'a pas sa place dans la spécification : le secret vit dans le magasin de secrets, sous `secret_ref`".into());
+                }
+                if self.spec.get("filter").is_some_and(|f| !f.is_object()) {
+                    return Err("`filter` d'un webhook : un objet `{chemin: valeur}`".into());
+                }
+            }
+            TriggerKind::McpSubscribe => {
+                for k in ["server", "uri"] {
+                    if self.spec.get(k).and_then(|v| v.as_str()).is_none() {
+                        return Err(format!("`{k}` est obligatoire pour un mcp_subscribe"));
+                    }
+                }
+                let bounded = |key: &str, min: u64| -> Result<(), String> {
+                    match self.spec.get(key) {
+                        None => Ok(()),
+                        Some(v) => match v.as_u64() {
+                            Some(n) if n >= min => Ok(()),
+                            _ => Err(format!("`{key}` d'un mcp_subscribe : entier ≥ {min}")),
+                        },
+                    }
+                };
+                bounded("every_ms", subscribe::DEFAULT_EVERY_MS)?;
+                bounded("window_ms", 1_000)?;
+                bounded("max_per_hour", 1)?;
+            }
         }
 
         match self.target_kind() {
@@ -194,8 +315,12 @@ impl Schedule {
                 let ms = self.spec.get("every_ms")?.as_u64()? as i64;
                 Some(now_ms + ms)
             }
-            // Ces déclencheurs sont poussés par un événement externe.
-            TriggerKind::WatchFile | TriggerKind::Event => None,
+            // Ces déclencheurs sont poussés par un événement externe ; le sondage de repli
+            // d'un `mcp_subscribe` tient sa propre horloge (`scheduler.mcp_subscribe.<id>`).
+            TriggerKind::WatchFile
+            | TriggerKind::Event
+            | TriggerKind::Webhook
+            | TriggerKind::McpSubscribe => None,
         }
     }
 }

@@ -316,6 +316,26 @@ impl Default for Intents {
     }
 }
 
+/// Ce que le digest du matin lit au-dehors de Pénélope (#295). Son heure reste
+/// `memory.digest_cron`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Digest {
+    /// Outil MCP qui rend les rendez-vous du jour, par son nom qualifié
+    /// `mcp__<serveur>__<outil>` (`mcp__agenda__events_today` avec le serveur livré) ;
+    /// vide : l'« Aujourd'hui » du digest ne liste que les planifications. L'outil doit être
+    /// en lecture ; il est appelé avec `{"timezone": owner.timezone}` et doit rendre
+    /// `events[]` avec `summary`, `start`, `end`, `all_day`, `calendar` et `location`.
+    pub agenda: String,
+}
+
+/// Forme attendue de `digest.agenda` : `mcp__<serveur>__<outil>`.
+pub fn agenda_tool_is_qualified(name: &str) -> bool {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .is_some_and(|(server, tool)| !server.is_empty() && !tool.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Mcp {
@@ -704,6 +724,8 @@ pub struct Voice {
     pub max_chars: usize,
     /// Répondre en vocal quand le propriétaire vient d'envoyer un vocal.
     pub reply_in_kind: bool,
+    /// Post-traitement local du vocal avant l'encodage OGG/Opus (#299) ; éteint par défaut.
+    pub postprocess: VoicePostprocess,
 }
 
 impl Default for Voice {
@@ -712,6 +734,73 @@ impl Default for Voice {
             tts_voice: "fr_female".into(),
             max_chars: 1_500,
             reply_in_kind: false,
+            postprocess: VoicePostprocess::default(),
+        }
+    }
+}
+
+/// Moteur de restauration par défaut du post-traitement vocal : Resemble Enhance.
+pub const VOICE_ENGINE_RESEMBLE: &str = "resemble_enhance";
+/// Sans moteur : la chaîne de filtres FFmpeg seule.
+pub const VOICE_ENGINE_NONE: &str = "none";
+/// Moteurs connus du post-traitement vocal.
+pub const VOICE_ENGINES: [&str; 2] = [VOICE_ENGINE_RESEMBLE, VOICE_ENGINE_NONE];
+/// Périphériques de calcul acceptés par Resemble Enhance sur cette plateforme.
+pub const VOICE_RESEMBLE_DEVICES: [&str; 2] = ["cpu", "mps"];
+/// Preset « studio doux » (#299), la chaîne `-af` exacte retrouvée dans la base de
+/// l'instance : passe-haut 70 Hz, passe-bas 16 kHz, deux égaliseurs doux (180 Hz et
+/// 3,2 kHz), compression douce, normalisation à −16 LUFS. Une seule constante à changer
+/// pour retoucher le rendu.
+pub const VOICE_STUDIO_SOFT_FILTERS: &str = "highpass=f=70,lowpass=f=16000,\
+    equalizer=f=180:t=q:w=1.2:g=1.0,equalizer=f=3200:t=q:w=1.0:g=0.8,\
+    acompressor=threshold=-20dB:ratio=1.5:attack=15:release=180:makeup=1.2,\
+    loudnorm=I=-16:LRA=7:TP=-1.5";
+/// Sortie du preset : mono à 24 kHz, comme le prototype validé.
+pub const VOICE_STUDIO_SOFT_OUTPUT_ARGS: &str = "-ac 1 -ar 24000";
+/// Débit Opus du vocal fini (le prototype validé) ; le vocal brut garde 32k.
+pub const VOICE_STUDIO_SOFT_OPUS_BITRATE: &str = "48k";
+
+/// Post-traitement audio local d'un vocal (#299) : un moteur de restauration, puis une
+/// chaîne de filtres FFmpeg, avant l'encodage OGG/Opus. Entièrement local, sans réseau ;
+/// en cas d'absence, d'erreur ou de délai dépassé, le vocal brut part quand même.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoicePostprocess {
+    /// Appliquer le post-traitement à chaque `send_voice`. Éteint : comportement d'origine.
+    pub enabled: bool,
+    /// Moteur de restauration : `resemble_enhance` (Resemble Enhance, local), ou `none` (filtres FFmpeg seuls).
+    pub engine: String,
+    /// Délai maximal du post-traitement complet (moteur puis filtres) ; au-delà, le vocal brut part.
+    pub timeout: String,
+    /// Chemin de `ffmpeg` ; vide : trouvé dans le PATH et les emplacements Homebrew.
+    pub ffmpeg_bin: String,
+    /// Chaîne de filtres FFmpeg (`-af`) appliquée après le moteur ; défaut : preset « studio doux » ; vide : pas de filtres.
+    pub ffmpeg_filters: String,
+    /// Options FFmpeg de sortie du preset, avant le fichier (`-ac 1 -ar 24000` : mono à 24 kHz) ; vide : format d'entrée conservé.
+    pub ffmpeg_output_args: String,
+    /// Débit Opus du vocal post-traité (`48k`) ; un vocal brut garde le débit d'origine (32k).
+    pub opus_bitrate: String,
+    /// Chemin de `resemble-enhance` ; vide : trouvé dans le PATH (`uv tool install` le pose dans `~/.local/bin`).
+    pub resemble_bin: String,
+    /// Répertoire des poids de Resemble Enhance (`hparams.yaml`, `ds/G/…`), préparé à l'installation et vérifié par `doctor`, jamais téléchargé pendant un envoi ; vide : `<données>/models/resemble-enhance/enhancer_stage2`.
+    pub resemble_run_dir: String,
+    /// Périphérique de calcul de Resemble Enhance : `cpu` (sûr sur Apple Silicon) ou `mps` (avec repli des opérations non portées vers le CPU).
+    pub resemble_device: String,
+}
+
+impl Default for VoicePostprocess {
+    fn default() -> Self {
+        VoicePostprocess {
+            enabled: false,
+            engine: VOICE_ENGINE_RESEMBLE.into(),
+            timeout: "180s".into(),
+            ffmpeg_bin: String::new(),
+            ffmpeg_filters: VOICE_STUDIO_SOFT_FILTERS.into(),
+            ffmpeg_output_args: VOICE_STUDIO_SOFT_OUTPUT_ARGS.into(),
+            opus_bitrate: VOICE_STUDIO_SOFT_OPUS_BITRATE.into(),
+            resemble_bin: String::new(),
+            resemble_run_dir: String::new(),
+            resemble_device: "cpu".into(),
         }
     }
 }
@@ -816,6 +905,37 @@ impl Default for Retention {
         Retention {
             days: 90,
             memory_history_days: 30,
+        }
+    }
+}
+
+/// Webhooks entrants (#294) : la porte par laquelle un service extérieur pousse un
+/// événement dans un déclencheur `webhook`. Le serveur n'écoute que l'adresse donnée,
+/// locale par défaut ; l'exposer passe par un tunnel ou un réseau privé, jamais par ici.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Webhooks {
+    /// Adresse d'écoute `hôte:port` des webhooks entrants ; `127.0.0.1` par défaut, pour
+    /// qu'un tunnel ou un réseau privé décide seul de l'exposition. Vide : aucun
+    /// serveur. Prise en compte au redémarrage.
+    pub listen: String,
+    /// Taille maximale d'un corps reçu, en octets ; au-delà, la requête est refusée
+    /// (413) sans être lue.
+    pub max_body_bytes: usize,
+    /// Réceptions admises par minute et par hook ; au-delà, 429 avec `Retry-After`.
+    pub rate_per_minute: u32,
+    /// Tours `prompt` déclenchés par webhook admis par heure, tous hooks confondus : une
+    /// source bavarde ne fait pas travailler le modèle sans fin.
+    pub prompt_turns_per_hour: u32,
+}
+
+impl Default for Webhooks {
+    fn default() -> Self {
+        Webhooks {
+            listen: "127.0.0.1:7778".into(),
+            max_body_bytes: 64 * 1024,
+            rate_per_minute: 60,
+            prompt_turns_per_hour: 20,
         }
     }
 }

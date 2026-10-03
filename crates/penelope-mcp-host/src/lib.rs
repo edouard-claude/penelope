@@ -47,6 +47,7 @@ mod connector;
 mod gateway;
 mod lifecycle;
 mod render;
+mod resources;
 mod tools;
 
 pub use connector::{
@@ -63,6 +64,18 @@ struct Live {
     /// Accès au trousseau accordé au lancement : s'il change, le processus repart sous
     /// le nouveau profil (issue #122).
     keychain: bool,
+    /// URI des ressources abonnées **sur cette connexion** (#293) : une connexion neuve
+    /// repart sans, et l'appel suivant de `subscribe_resource` repose l'abonnement.
+    subscriptions: std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl Live {
+    fn has_subscriptions(&self) -> bool {
+        self.subscriptions
+            .lock()
+            .map(|s| !s.is_empty())
+            .unwrap_or_else(|p| !p.into_inner().is_empty())
+    }
 }
 
 struct Info {

@@ -38,6 +38,8 @@ pub struct LoopDetector {
     warned: bool,
     /// Appels refusés pour arguments invalides, par outil (issue #117).
     invalid: std::collections::BTreeMap<String, usize>,
+    /// Appels refusés par l'exécuteur avant toute exécution, par outil (issue #302).
+    refused: std::collections::BTreeMap<String, usize>,
 }
 
 impl Default for LoopDetector {
@@ -54,7 +56,17 @@ impl LoopDetector {
             capacity: 40,
             warned: false,
             invalid: Default::default(),
+            refused: Default::default(),
         }
+    }
+
+    /// Un appel refusé par l'exécuteur avant toute carte (le gate « vas-y » de
+    /// `workflow_start`, issue #302) : rend le nombre de refus de cet outil dans le tour.
+    /// Le refus dit déjà l'état réel ; c'est à la garde d'arrêter le tour au deuxième.
+    pub fn observe_refused(&mut self, tool: &str) -> usize {
+        let n = self.refused.entry(tool.to_string()).or_default();
+        *n += 1;
+        *n
     }
 
     /// Un appel refusé pour arguments invalides, avant toute exécution (issue #117) : le
@@ -148,6 +160,7 @@ impl LoopDetector {
         self.window.clear();
         self.warned = false;
         self.invalid.clear();
+        self.refused.clear();
     }
 
     pub fn calls_in_window(&self) -> usize {

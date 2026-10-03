@@ -75,6 +75,12 @@ pub fn server(version: ProtocolVersion, transport_kind: &'static str) -> Arc<Loo
     })
 }
 
+/// Le serveur simulé prévient qu'une ressource abonnée a changé
+/// (`notifications/resources/updated`, #293).
+pub fn push_resource_update(server: &LoopbackTransport, uri: &str) {
+    server.push_notification("notifications/resources/updated", json!({"uri": uri}));
+}
+
 fn handle(v: ProtocolVersion, method: &str, params: &Value) -> Result<Value, McpError> {
     match method {
         // Seule la famille 2026-07-28 connaît `server/discover`.

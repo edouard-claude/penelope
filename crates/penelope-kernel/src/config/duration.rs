@@ -61,6 +61,37 @@ impl TimeRange {
             minute_of_day >= self.start_min || minute_of_day < self.end_min
         }
     }
+
+    /// Vrai si l'instant `now_ms` tombe dans la plage, à l'heure locale du fuseau `tz`
+    /// (UTC si le fuseau est inconnu). Heures calmes (#296).
+    pub fn contains_at(&self, now_ms: i64, tz: &str) -> bool {
+        self.contains(minute_of_day(now_ms, tz))
+    }
+
+    /// `22:00-07:00`.
+    pub fn text(&self) -> String {
+        format!("{}-{}", hhmm(self.start_min), hhmm(self.end_min))
+    }
+
+    /// Fin de la plage, `07:00`.
+    pub fn end_text(&self) -> String {
+        hhmm(self.end_min)
+    }
+}
+
+/// Minute du jour (0..1440) de `ms` dans le fuseau `tz`, UTC si le fuseau est inconnu.
+pub fn minute_of_day(ms: i64, tz: &str) -> u32 {
+    use chrono::Timelike;
+    let utc = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
+    let local = match tz.parse::<chrono_tz::Tz>() {
+        Ok(zone) => utc.with_timezone(&zone).naive_local().time(),
+        Err(_) => utc.naive_utc().time(),
+    };
+    local.hour() * 60 + local.minute()
+}
+
+fn hhmm(minute: u32) -> String {
+    format!("{:02}:{:02}", minute / 60, minute % 60)
 }
 
 fn parse_hhmm(s: &str) -> Result<u32> {

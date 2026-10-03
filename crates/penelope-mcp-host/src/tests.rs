@@ -3,6 +3,7 @@ use super::*;
 
 mod admin;
 mod calls;
+mod resources;
 mod sandbox;
 
 use penelope_app::ports::McpGateway;

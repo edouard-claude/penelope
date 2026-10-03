@@ -12,6 +12,429 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.37
+
+**Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les
+rendez-vous du jour dans l'« Aujourd'hui » du digest (#295).** Constat : Pénélope n'avait
+aucun agenda ; le digest ne listait que ses propres planifications et ignorait les
+rendez-vous, anniversaires et vacances du propriétaire, alors qu'elle sert déjà de rappel.
+L'instance est pilotée en SSH : aucune autorisation TCC ne peut être cliquée, le
+calendrier Apple local (EventKit, `shortcuts`) est hors de portée. Voie retenue, écrite
+dans la décision [0018](decisions/0018-agenda-caldav-en-lecture.md) : CalDAV avec un mot
+de passe d'application, en lecture seule, dans un serveur MCP à part, conformément à la
+frontière canal/cœur de la V1.
+
+Correctif. Nouvelle crate `penelope-agenda-mcp` : un serveur MCP stdio (protocole
+2025-06-18 au plus, `server/discover` inconnu, `initialize`, `tools/list`, `tools/call`,
+`ping`) qui lit un compte CalDAV (iCloud, Fastmail, Nextcloud, tout serveur en
+authentification Basic) : découverte RFC 6764 (`current-user-principal`,
+`calendar-home-set`, dossier), calendriers d'événements seuls (rappels et boîtes de
+réception écartés), redirection suivie avec la même méthode, `REPORT calendar-query`
+borné ; parseur iCalendar écrit à la main (dépliage, paramètres, `DTSTART`/`DTEND` en
+date, heure flottante, UTC ou `TZID`, `DURATION`, `EXDATE`, `RECURRENCE-ID`,
+`STATUS:CANCELLED`) et récurrences quotidienne (`BYDAY` filtre), hebdomadaire (`BYDAY`,
+`WKST`), mensuelle (`BYMONTHDAY`, `BYDAY` avec rang), annuelle (`BYMONTH`), `INTERVAL`,
+`COUNT`, `UNTIL` ; un `TZID` inconnu est rabattu sur `AGENDA_TIMEZONE`. Quatre outils,
+tous en lecture (`readOnlyHint`) : `calendar_list`, `events_today(timezone)`,
+`events_range(start, end, timezone)` (366 jours au plus), `event_search(query, from, to,
+timezone)` (50 résultats) ; texte lisible et `structuredContent` (`events[]` : `uid`,
+`summary`, `calendar`, `all_day`, `start`, `end` en RFC 3339 dans le fuseau demandé ou en
+dates pour une journée entière, `location`) ; arguments illisibles et identifiants refusés
+en `isError`, outil inconnu en erreur de protocole. Identifiants par l'environnement
+(`AGENDA_URL`, `AGENDA_USER`, `AGENDA_PASSWORD` par `${SECRET:…}`, `AGENDA_TIMEZONE`,
+`AGENDA_CALENDARS`, `AGENDA_TIMEOUT`) ; le mot de passe n'apparaît dans aucune erreur,
+aucun `Debug`, aucune adresse. **Release** : le serveur est aussi la sous-commande
+`penelope agenda-mcp` (`penelope-cli` dépend de la crate), donc `mcp.d/agenda.toml`
+déclare `command = "penelope"`, `args = ["agenda-mcp"]` et `release.yml`, le `Makefile`
+et `penelope upgrade` ne changent pas ; le binaire `penelope-agenda-mcp` existe hors
+release. **Digest** : clé `digest.agenda` (vide par défaut ; un nom qualifié
+`mcp__<serveur>__<outil>`, validé) ; `DigestFeed` reçoit le branchement MCP de la
+composition et l'« Aujourd'hui » mêle rendez-vous et planifications, rangés par heure,
+journées entières en tête, dans `owner.timezone` ; l'outil doit être en lecture et connu
+du registre, l'appel passe par le port `McpGateway` (archtest vert) ; un outil inconnu, en
+écriture, un superviseur absent ou une réponse en erreur donnent une ligne « Agenda non
+lu : … » (`DigestInputs.agenda_error`) sans retenir le digest. Rien de l'agenda n'entre en
+mémoire durable. Dépendance nouvelle `roxmltree` (MIT ou Apache-2.0, sans dépendance),
+justifiée dans le `Cargo.toml`. Doc : mcp.md (« L'agenda CalDAV, un serveur livré »),
+install-headless.md (« Agenda CalDAV », digest), README (commande, décision), architecture
+(crate), référence des clés et golden `config.get` régénérés.
+
+Tests (34 dans la crate) : fixtures `.ics` (événement `TZID` avec lignes pliées et
+échappements, journées entières, hebdomadaire avec `EXDATE`, `COUNT`, instance déplacée et
+instance annulée, quotidienne à `UNTIL` en UTC, anniversaire annuel, mensuelle par jour et
+par dernier vendredi, UTC avec `DURATION`, heure flottante, fréquence horaire inconnue) ;
+règles sans borne, 31 du mois, jours ouvrés ; faux serveur CalDAV (Basic vérifié,
+découverte en trois requêtes, `REPORT` avec sa plage, 401 sans le mot de passe, 500 avec
+l'étape, redirection, adresse déjà dossier, adresses refusées) ; le protocole (négociation
+descendante, `server/discover` inconnu, notifications muettes, JSON illisible, quatre
+outils en lecture, `events_today` sur deux calendriers dans deux fuseaux avec cache de la
+liste, `events_range` et `event_search` avec leurs bornes, arguments fautifs en `isError`,
+outil inconnu en `-32602`, identifiants refusés, calendriers restreints). Côté Pénélope :
+validation de `digest.agenda` ; l'ordonnanceur avec un faux serveur MCP (éteint par
+défaut, mélange trié avec les planifications, fuseau du propriétaire passé à l'outil,
+superviseur absent, outil en erreur, en écriture ou inconnu refusés sans appel) ; le
+digest dit l'agenda non lu en une ligne tronquée, rien sans configuration ; la commande
+`agenda-mcp` hors daemon. Ce qui marchait déjà et continue : l'« Aujourd'hui » des
+planifications seules et son ordre (`due_today`), les `mcp_poll`, la négociation du
+client MCP. Reste ouvert (#295, points 2 et 3) : l'écriture sous approbation, la
+relecture mémoire qui propose une entrée d'agenda, la cohérence des planifications avec
+l'agenda ; Google Agenda (OAuth 2 sur son point CalDAV). Closes #295.
+
+**Webhooks entrants : un déclencheur `webhook` signé en HMAC, sur un listener local
+dédié, et le mode webhook de Telegram enfin refusé plutôt que promis (#294).** Constat :
+rien ne pouvait pousser un événement dans Pénélope depuis l'extérieur ; une forge, un
+suivi de tickets, un formulaire ou un script sur une autre machine n'avaient que la
+scrutation (`mcp_poll`). Et `telegram.mode = "webhook"` avec `telegram.webhook_url`,
+acceptés à la validation depuis la 0.17, n'ont jamais été servis : un bot ainsi réglé ne
+recevait rien, sans un mot.
+
+Correctif. **Kind `webhook`** (`penelope schedule add webhook --spec '{}' --target …`,
+ou `schedule_create` soumis à approbation) : à la création, Pénélope attribue le chemin
+`/hook/<jeton>` (24 caractères tirés au sort) et un secret de 48 caractères rangé dans le
+magasin de secrets sous `webhook_<jeton>` ; la spécification ne porte que le chemin et le
+nom du secret (`secret_ref`), jamais sa valeur, et `spec.secret` est refusé. Le secret est
+montré une fois, en ligne de commande, avec l'adresse locale du hook ; par l'outil, il
+n'est pas montré au modèle (la réponse entre dans le journal) et le propriétaire pose le
+sien avec `penelope secret set`. **Serveur** (`scheduler/webhook.rs`, listener dédié,
+décision [0019](decisions/0019-webhook-entrant.md)) : `[webhooks] listen =
+"127.0.0.1:7778"` par défaut, vide pour ne rien ouvrir, au redémarrage ; `POST` seulement
+(405 sinon, un `GET` ne déclenche jamais), chemin actif (404 pour inconnu, en pause ou
+supprimé), horodatage `X-Penelope-Timestamp: <secondes Unix>` à ±5 min de l'horloge et
+signature `X-Penelope-Signature: sha256=<HMAC-SHA256 hex de « <horodatage>.<corps> »>`
+comparée en temps constant (401), signature déjà admise dans la fenêtre refusée comme
+rejeu (409), corps borné par `webhooks.max_body_bytes` (64 Ko, 413 avant
+lecture), débit par hook `webhooks.rate_per_minute` (60, 429 avec `Retry-After`), plafond
+`webhooks.prompt_turns_per_hour` de tours `prompt` pour l'ensemble des hooks (20, 429),
+`Expect: 100-continue` honoré, transfert par morceaux refusé (411), connexion coupée à
+20 s. L'en-tête HTTP est lu par `httparse` (celui de `hyper` et de `tokio-tungstenite`,
+déjà dans le graphe, dépendance directe justifiée dans `Cargo.toml`), et tout ce qu'un
+intermédiaire lirait autrement que nous est refusé en 400 : CR ou LF nus, ligne repliée,
+`Content-Length` répété ou non décimal, `Transfer-Encoding` avec `Content-Length`. Le
+chemin et le secret viennent de l'aléa du système, sans biais de modulo et sans repli
+(`ids::secret_token`) : s'il manque, la création échoue. Ces trois derniers points
+(rejeu, *request smuggling*, secret faible si l'aléa échoue) viennent de la revue de
+sécurité du lot. Le corps JSON est l'événement, filtrable par `filter` comme un élément de
+`mcp_poll` (202 `accepted: false` quand il est écarté), et passe aux mêmes cibles :
+`notify` reçoit `{{payload}}` et les champs de premier niveau, `workflow` le corps en
+`{{item}}`, `prompt` ne le substitue **jamais** dans son texte, il arrive après, encadré
+par `wrap_untrusted` avec l'alerte du détecteur local (#92), un tour par réception
+dédoublonné par l'identifiant de livraison. Chaque réception, acceptée ou refusée, est un
+événement `webhook.received` de l'audit : statut, motif, taille, empreinte SHA-256 du
+corps, adresse ; jamais le corps ni les en-têtes. La suppression d'un hook (RPC, outil)
+efface son secret du magasin. Le HMAC-SHA256 de la signature SigV4 (#289) remonte dans
+`penelope_kernel::hmac`, partagé. **Telegram** : `telegram.mode` n'admet plus que
+`polling`, la validation nomme le refus et sa raison ; `webhook_url` reste lue, sans
+effet, et la doc le dit. CLI et `/schedules` montrent `POST /hook/<jeton>` ; doc
+« Webhooks entrants » dans install-headless.md (créer, signer avec `openssl`, exposer par
+un tunnel ou un réseau privé sans rien ouvrir), référence des clés, fixture 0.17 et
+golden `config.get` régénérés.
+
+Tests : serveur sur un port éphémère servi par `serve_on`, interrogé par le client HTTP du
+workspace. Un POST signé déclenche la notification (corps et champs), la réception et le
+tir sont au journal, le secret n'est ni dans le store ni dans le journal et la création le
+montre une fois avec l'adresse locale ; signature absente, fausse, mal formée, d'un autre
+secret ou d'un autre corps : 401 et rien ne part, chaque refus journalisé, préfixe
+`sha256=` facultatif ; une livraison renvoyée telle quelle : 409 sans tir, la même après
+un 429 repasse, horodatage absent, signé `+`, à 301 s dans le passé ou le futur, ou
+signature du corps seul : 401, la copie passée la fenêtre refusée par son horodatage ; le
+cache anti-rejeu purge les expirées ; l'horodatage fait partie du message signé ;
+dix-sept en-têtes ambigus refusés en 400 (dont `Content-Length` doublé à l'identique,
+`+5`, `5, 5`, ligne repliée, LF nu, CR nu, `Transfer-Encoding` dans les deux ordres),
+`Transfer-Encoding: identity` seul 411, et sur le fil `Transfer-Encoding` avec
+`Content-Length` 400 journalisé ; sans aléa, `prepare` échoue sans rien ranger ;
+`secret_token` sans biais et en erreur sur une source en échec ; `GET` 405 avec `Allow`, chemin inconnu, hook en pause ou supprimé
+404, corps trop grand 413, non JSON 400 ; le filtre écarte sans déclencher ; débit par hook
+et plafond horaire des prompts partagé entre deux hooks, `Retry-After`, fenêtres qui
+glissent à l'horloge de test ; le prompt porte le corps encadré, le motif d'injection
+signalé et son texte non substitué, trois livraisons font trois tours ; la création refuse
+un chemin ou un secret choisis par l'appelant et n'oublie pas un secret rangé pour une
+planification refusée ; dialogue HTTP brut (`100 Continue`, 411, 431, 413 avant lecture,
+400) ; magasin : validation du kind (chemin, `secret_ref`, `secret` refusé, `filter`),
+pas de prochain passage ; HMAC contre la RFC 4231 ; validation de `[webhooks]` et refus
+de `telegram.mode = "webhook"`. Ce qui marchait déjà et continue : les cinq autres
+déclencheurs et leurs tests, la signature SigV4 (vecteurs d'AWS inchangés), le retour
+OAuth sur `mcp.callback_port`, la suppression d'une planification sans webhook. Closes
+#294.
+
+**Réponses vocales : un post-traitement local, optionnel et configurable, entre le WAV de
+Voxtral et l'OGG envoyé (#299).** Constat : un essai à la main sur l'instance (Voxtral
+`fr_female` → Resemble Enhance complet → finition studio douce FFmpeg → OGG/Opus) a donné
+le rendu de référence, mais `send_voice` ne connaissait que `tts_voice`, `max_chars` et
+`reply_in_kind` : la chaîne se rejouait à la main, et Resemble Enhance ne vivait que dans
+le cache éphémère de `uvx`.
+
+Correctif. Section `[voice.postprocess]`, éteinte par défaut (`enabled`, `engine` :
+`resemble_enhance` ou `none`, `timeout` 180 s, `ffmpeg_bin`, `ffmpeg_filters`,
+`ffmpeg_output_args`, `opus_bitrate`, `resemble_bin`, `resemble_run_dir`,
+`resemble_device` `cpu` ou `mps`), validée au chargement même éteinte (moteur et
+périphérique connus, délai non nul). Allumée, après l'assemblage du WAV : le moteur, puis
+`ffmpeg -af` avec le preset « studio doux » retrouvé dans la base de l'instance (passe-haut
+70 Hz, passe-bas 16 kHz, égaliseurs doux à 180 Hz et 3,2 kHz, compression douce, `loudnorm`
+à −16 LUFS, sortie mono 24 kHz ; constantes `VOICE_STUDIO_SOFT_*` du noyau, reprises comme
+défauts des clés), puis `wav_to_ogg_opus_with` : Opus à 48 kb/s pour le vocal fini, 32 kb/s
+inchangé pour un vocal brut. Le moteur est derrière un trait
+(`Enhancer`) ; `ResembleEnhance` lance `resemble-enhance <in> <out> --device … --run_dir …`
+hors ligne (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, et `PYTORCH_ENABLE_MPS_FALLBACK` en
+`mps`), sur des poids préparés à l'installation (`uv tool install --python 3.11
+resemble-enhance`, dépôt Hugging Face cloné avec Git LFS sous
+`<données>/models/resemble-enhance`) : poids absents ou pointeur Git LFS à leur place, le
+moteur est écarté avant tout lancement. Binaire absent, poids manquants, erreur ou délai
+dépassé (processus tué) : avertissement journalisé, le WAV brut part converti ; `ffmpeg`
+désigné par la configuration sert aussi à la conversion finale
+(`audio::wav_to_ogg_opus_with`). Les temporaires (`<id>.wav`, `<id>.work/`) disparaissent
+sur succès comme sur échec. `voice.sent` et le résultat de l'outil portent `postprocess`
+(`status` `disabled`, `applied`, `skipped`, `failed`, `timed_out` ; `engine` ; `seconds` ;
+`reason`). `doctor` : le contrôle `voice` cherche `ffmpeg` dans le PATH étendu (Homebrew,
+`~/.local/bin`) ou au chemin configuré ; un contrôle `voice.postprocess` apparaît quand la
+section est allumée et nomme ce qui manque avec la commande qui l'installe, sans rien
+lancer. Inventaire `install` : `postprocess`, `postprocess_engine`. Doc : section « Post-
+traitement du vocal » d'install-headless.md (installation durable, poids, CPU contre MPS,
+exemple), référence des clés, fixture 0.17 et golden `config.get` régénérés. Pas de
+commande `penelope voice install` : la préparation est documentée et `doctor` la vérifie.
+
+Tests (faux `resemble-enhance` et `ffmpeg` dans un répertoire temporaire, jamais les vrais) :
+section éteinte par défaut, relue depuis TOML, clé inconnue refusée, moteur, délai et
+périphérique validés ; la chaîne complète dans l'ordre (moteur avec `--device cpu
+--run_dir`, puis `-af` du preset) ; `none` seul et filtres vides ; rien lancé si le
+binaire, les poids ou `ffmpeg` manquent, `~` développé dans `resemble_run_dir`, pointeur
+Git LFS nommé ; moteur en erreur ou muet ; délai dépassé ; `doctor` ok et en échec ;
+`send` de bout en bout avec les services de test : OGG envoyé et seul fichier restant dans
+les trois cas (appliqué, échec, éteint), `voice.sent` avec les trois statuts et la durée,
+aucun repli en texte. Ce qui marchait déjà et continue : section absente ou `enabled =
+false`, le pipeline d'origine octet pour octet (synthèse, `wav_to_ogg_opus`, `sendVoice`,
+usage `tts`) ; texte trop long renvoyé au modèle ; synthèse impossible, réponse en texte
+avec la raison. Closes #299.
+
+**Heures calmes : `telegram.quiet_hours` retient enfin les livraisons proactives, qui
+partent groupées à la fin de la plage, une fois (#296).** Constat : la plage était validée,
+réglable par `/quiet`, affichée, et le doctor affirmait « sa notification attendra » ;
+aucun code de l'ordonnanceur ni de la livraison ne la consultait. Une planification de
+23 h partait à 23 h ; `quiet_backlog` (HITL) n'était appelé nulle part.
+
+Correctif. **Planifications** : dans `tick_after`, un créneau dû sans `spec.urgent` pendant
+la plage n'est pas tiré ; il reste dû (dans la base : un redémarrage n'y change rien), un
+événement `schedule.held` le note une fois par créneau, et il part au premier passage après
+la plage par le chemin du rattrapage après veille (#228) : `late_of` reçoit la plage et
+marque `Late.quiet` quand le créneau y tombait et que le tir n'y est plus, toujours annoncé
+(même deux minutes après) ; créneaux manqués comptés, un seul run. Les tirs retenus d'un
+passage forment une fournée (`scheduler/quiet.rs`) : un message par conversation sous
+« 🌙 Pendant les heures calmes : », chaque `notify` suivi de « (prévue à 23h00 ; les N
+créneaux manqués partent en une seule livraison) », un `prompt` ou `workflow` annoncé
+(« elle part maintenant, sa réponse suivra »), le texte du prompt précédé de la mention ;
+`schedule.notified` n'est écrit qu'à l'envoi, un envoi raté est un échec de la
+planification. `mcp_poll` retenu rattrape tout d'un coup ; `event` et `watch_file` sans
+`urgent` sont passés la nuit et relisent à la sortie le journal depuis le curseur gardé
+(`scheduler.quiet.pushed_from`) ou comparent l'empreinte à celle d'avant (la première
+observation est prise quand même) ; `urgent` passe partout. **File persistée** : nouvelle
+table `quiet_queue` (migration `0025`) et module `penelope_app::quiet` (`is_quiet`, `hold`,
+`deliver_or_hold`, `held`, `forget`) ; les avis du superviseur MCP (règles révoquées) y
+attendent et partent avec la fournée, horodatés (« reçu à 3h12 »). Le lien OAuth, qui
+expire, n'est pas produit pendant la plage : il part frais au premier passage après.
+**Relances d'approbation** : rien n'est envoyé ni marqué pendant la plage ; à la sortie,
+une seule relance par conversation nomme toutes les demandes retenues sous l'en-tête, puis
+leurs cartes ; une demande du jour garde « Rappel 1/2 ». **Création** : la réponse de
+`schedule_create` porte `heures_calmes` quand le premier passage tombe dans la plage
+(heure, plage, fin, et comment recréer avec `"urgent": true`), `urgent` est validé
+booléen, `/schedules` marque 🔔. **Doctor** : la cohérence ignore les planifications
+urgentes et dit « retenu jusqu'à 07:00 … `"urgent": true` pour qu'il parte à l'heure » ;
+`schedules` dit pendant la plage ce qui attend (retenues, livraisons en file).
+`quiet_backlog` est supprimé avec son test (la colonne `quiet` de `approval_requests` et
+son paramètre restent écrits, jamais lus). La clé reste `telegram.quiet_hours` (configuration
+installée, `/quiet`) ; le cœur ne lit que `Config::quiet_range` et `quiet_at`, et
+`TimeRange` gagne `contains_at`, `text`, `end_text`. Exceptions assumées : réponses au
+propriétaire, digest (son cron), `urgent`. Doc : install-headless.md (« Heures calmes »),
+telegram.md, runtime-events.md, référence des clés et des outils régénérée.
+
+Tests : la plage à l'heure du propriétaire (`contains_at`, `quiet_at`, UTC par défaut) ;
+la file dans la base (retenu la nuit, parti le jour, oublié une fois parti) ; l'ordonnanceur
+: trois planifications de nuit (récurrente, rappel daté, prompt) retenues sans rien
+envoyer, créneau inchangé, `schedule.held` une fois chacune, une urgente qui part à
+l'heure, puis à 7 h un seul message groupé octet pour octet, le tour du prompt avec sa
+mention, le rappel `done`, rien au passage suivant et le créneau suivant compté depuis 7 h
+30 ; un avis MCP seul en file part sous l'en-tête avec son heure ; `event` et `watch_file`
+retenus rattrapent deux événements et un fichier sans perte, l'`event` urgent parle la nuit,
+le curseur gardé s'efface ; la création dit `heures_calmes` et propose `urgent`, se tait
+avec `urgent` ou de jour, refuse un `urgent` non booléen, le doctor dit la même chose ;
+`late_of` : deux minutes retenues sont annoncées, un tir encore dans la plage ne l'est pas,
+textes avec veille et au lendemain. Relances (`penelope_app::quiet::remind_approvals`) :
+deux demandes retenues dans une conversation et une dans un sujet donnent une relance
+groupée par conversation sous l'en-tête puis les trois cartes, une demande du jour garde
+« Rappel 1/2 », deux du jour sont groupées sans en-tête ; la passe de maintenance du daemon
+n'envoie ni ne marque rien pendant la plage. Les harnais dont l'horloge est à 4 h du matin
+éteignent la plage explicitement ; les tests du superviseur passent dans
+`supervisor/tests.rs` (plafond de taille).
+Ce qui marchait déjà et continue : le rattrapage après veille et au redémarrage (#228),
+`run_now` qui ne retient jamais, les alertes d'échec et le retour au succès (#229), les
+relances à T+1 h et T+6 h de jour (#97), la carte de rappel d'une commande `go-template`.
+Closes #296.
+
+**MCP : réagir aux notifications `resources/updated` d'un serveur, par abonnement, au lieu
+de sonder (#293).** Constat : Pénélope ne savait que sonder un serveur MCP (`mcp_poll`,
+60 s au mieux). Un serveur qui déclare `resources.subscribe` (un pont de messagerie
+installé sur l'instance) pouvait la prévenir à l'instant, mais le superviseur jetait la
+notification (`lifecycle.rs`, `_ => {}`) ; le client savait `subscribe_resource` et
+`read_resource` sans qu'aucun chemin de production ne les appelle, et le modèle n'avait
+aucun outil pour lire une ressource.
+
+Correctif. Un kind `mcp_subscribe` (`server`, `uri` ; `item_path`, `id_path`, `filter`
+comme `mcp_poll` ; sans `id_path`, la ressource entière est l'élément et chaque changement
+déclenche) pour les trois cibles. L'ordonnanceur demande l'abonnement à chaque passage par
+le port `McpGateway::subscribe_resource` : le superviseur le pose une fois par connexion
+(`Live.subscriptions`), donc le **repose après chaque reconnexion**, et un serveur abonné
+n'est plus arrêté pour inactivité (sa santé est sondée). La notification devient un
+événement du journal (`mcp.resource_updated`) ; le passage suivant ouvre une fenêtre de
+regroupement (`window_ms`, 30 s), puis relit la ressource (`read_resource`), dédoublonne
+par empreinte (`seen_items`) et tire. Plafond `max_per_hour` (20) pour `prompt` et
+`workflow` : le surplus est notifié sans modèle (`schedule.capped`). Repli automatique :
+serveur sans `resources.subscribe` (ou « méthode inconnue ») sondé toutes les `every_ms`
+(60 s au moins). Abonnement perdu : aucun échec compté ni alerte à chaque passage, mais
+`schedule.subscription_lost` une fois, une ligne dans le digest du matin au-delà d'une
+heure, puis `schedule.subscription_restored` et une relecture de rattrapage au retour.
+Outil à la demande `mcp_resource_read` (`server`, `uri`, lecture, contenu encadré comme
+observé). Cible `notify` avec un gabarit du catalogue (`ticket_detected`, jamais émis
+jusqu'ici) : nouveau port `ChannelDelivery::schedule_card`, la passerelle Telegram rend la
+carte avec « ⚡ Relire maintenant » et « 📅 Voir la planification » ; sans canal qui sait
+la rendre, le texte part comme avant. `/schedules`, `penelope schedule list` et
+`schedule_create` connaissent le kind (« abonnement `pont` mail://inbox »). Doc :
+install-headless.md (déclencheurs), mcp.md (« Abonnements aux ressources »),
+runtime-events.md, telegram.md ; référence des outils régénérée.
+
+Tests : validation et non-programmation du kind (`penelope-workflow`) ; superviseur :
+abonnement posé une fois, reposé après une connexion perdue, notification au journal,
+lecture, serveur sans capacité (`Ok(false)`), serveur abonné jamais arrêté pour
+inactivité ; ordonnanceur, avec le vrai superviseur et un faux pont qui pousse des
+notifications : amorçage sans tir, fenêtre de 30 s puis tir, dédoublonnage, perte
+constatée par la sonde de santé puis digest à une heure puis reprise avec rattrapage,
+repli en sondage, plafond horaire et surplus notifié, carte du catalogue par le port ;
+conformité MCP : la notification poussée après `resources/subscribe` arrive au client
+(2024-11-05 et 2026-07-28) ; exécuteur : `mcp_resource_read` par la passerelle, en
+lecture, encadré. Ce qui marchait déjà et continue : `mcp_poll` inchangé (mêmes
+`seen_items`), les quatre autres kinds, les alertes de planification, les notifications
+en texte libre. Closes #293.
+
+**Historique : les appels d'outils entrent dans l'index plein texte, dans `history_expand`
+et dans les ancres des résumés ; une commande lancée la veille se retrouve après
+compaction (#300).** Constat du 02 au 03/10 sur une instance : Pénélope avait produit un
+rendu audio par un `shell_exec` FFmpeg (`-af "highpass=…,acompressor=…,loudnorm=…"`) ; le
+lendemain, dans la même session compactée, `history_grep` sur `acompressor` ou `loudnorm`
+rendait 0 résultat, `history_expand` du bon nœud relisait le passage sans la commande, et
+elle a conclu « la commande exacte n'est plus récupérable » (commentaire de #299). La
+commande était intacte dans `messages.content`. Cause : les deux voies d'accès ne gardaient
+que le **texte** d'un message. `searchable()` indexait `message.text()`, vide pour un
+message assistant qui n'est qu'un appel (`messages_fts.content = ''`, vérifié sur
+l'instance) ; `history_expand` rendait `{seq, role, texte}`.
+
+Correctif, en cinq points. **Index** : `store::searchable_text` indexe le texte du message
+puis chaque appel sur sa ligne (`outil clé: valeur …`, feuilles de l'objet d'arguments
+aplaties, 2 000 caractères par appel, `fs_write.content` exclu, ainsi que la requête de
+`history_grep` et la question de `history_expand_query`, qui se retrouveraient elles-mêmes à
+chaque recherche), arguments passés par le
+rédacteur de `penelope-observe` (le même détecteur que `secret_shelf`, sans ranger : un
+jeton dans une commande est masqué avant l'index) ; le projecteur, la double écriture
+(`Row::of`) et `rebuild_fts` passent tous par `store::searchable`, qui garde le texte
+d'origine d'un corps externalisé ; `rebuild_fts` relit maintenant `tool_call_id`,
+`tool_name`, `artifact_id` et `event_id`, donc redonne les mêmes entrées que l'écriture
+directe. **`history_expand`** rend `appels: [{outil, arguments}]` pour un message qui en
+porte, arguments passés par `redact_json`, chaînes coupées à 1 500 caractères
+(`… [tronqué : N caractères]`), structure gardée. **Ancres** : type `commande`
+(`AnchorKind::Command`, rendu « commande »), première ligne de chaque `shell_exec` du lot,
+rédigée, 300 caractères, placée avant les ancres du texte sous le même plafond ;
+`history_describe` la montre, et le résumé la porte, donc `history_grep` trouve le nœud par
+un mot de la commande. **Réindexation** : migration `0026_messages_fts_tool_calls`, qui ne
+réécrit pas le cache (règle des caches de `penelope-archtest`) : elle pose
+`store.messages_fts_pending` dans `kv` si la base a des messages ; la passe de maintenance
+du daemon (`session_ops::reindex_fts_if_pending`) refait `messages_fts` depuis `messages`,
+lignes scellées comprises, lève la clé et laisse un `store.rebuilt` (`reason: migration`) ;
+`penelope store rebuild` et la reconstruction après restauration lèvent la clé aussi ; le
+journal n'est pas touché et `history verify` ne lit pas l'index. **Comportement** : règle du
+harnais dans le prompt système (« Ce que tu as fait reste écrit, même après un résumé » :
+`history_grep` sur un mot de la commande ou de l'argument avant de dire « irrécupérable »,
+puis `history_expand`), descriptions de `history_grep` et `history_expand` mises à jour.
+
+Tests : index (un appel trouvé par un mot de ses arguments, `loudnorm=I` compris, le
+résultat indexé à part ; corps d'un `fs_write` hors index et chemin dedans ; jeton masqué ;
+appel coupé au plafond ; `rebuild_fts` redonne les entrées de l'écriture directe, corps
+externalisé compris) ; `expanded_message` (appels rendus, jeton masqué, contenu tronqué,
+pas de clé sans appel) ; ancres (`shell_exec` seul, première ligne, rédigée, coupée) ;
+migration (marque posée sur une base avec messages, pas sur une base vide, journal
+intact, pas rejouée) ; `reindex_fts_if_pending` (une fois, journal de la conversation
+intact). Scénario `outils-historique-appels` : commande lancée (un `true` qui porte les
+filtres en arguments, sortie vide), deux échanges semés plus gros que la queue, `/compact`
+qui résume les quatre premiers messages, `history_grep`
+« acompressor » trouve le message brut et le résumé par son ancre, `history_expand` rend
+l'appel, la réponse cite la commande. La sortie du `shell_exec` qu'il recopie porte une
+durée mesurée : le normaliseur des scénarios masque désormais l'estimation de jetons d'un
+objet qui cite une durée (`{{tokens}}`), comme il le faisait pour la racine temporaire et
+la version, sans quoi deux rejeux différaient d'un jeton. Le texte du prompt système et les descriptions
+d'outils changent : les surfaces de tous les scénarios ont été régénérées
+(`UPDATE_SCENARIOS=1`), la référence des outils aussi (`UPDATE_DOCS=1`). Ce qui marchait
+déjà et continue : `history_grep` sur le texte et les sorties d'outils, les ancres `path`,
+`sha`, `ticket`, `url`, la refonte `history reindex`, les empreintes scellées (l'index n'en
+fait pas partie). Closes #300.
+
+**Workflows : après le clic « vas-y », la conversation sait que le run est parti, et
+`workflow_start` depuis un canal dit l'état réel au lieu de renvoyer à `workflow_plan`
+(#302).** Constat le 03/10, dans un sujet Telegram : `workflow_plan` publie la carte, le
+propriétaire clique « vas-y », le run `r_plan_…` démarre et travaille six minutes. La
+session de conversation n'en sait rien : elle reçoit « vasy » puis « vas-y » en texte et
+appelle `workflow_start` quatre fois ; chaque appel passe par une carte d'approbation que
+le propriétaire valide, puis est refusé par « propose d'abord un plan avec workflow_plan ;
+seul le propriétaire peut valider « vas-y » », comme si rien n'avait été approuvé ;
+`workflow_plan` répond « le plan a déjà été approuvé » sans dire qu'un run tourne ;
+Pénélope conclut à tort que le lancement n'a pas reconnu « vasy ». Un seul run, aucune
+information.
+
+Correctif, en six points. **Le cœur écrit le lancement dans la session d'origine** : le
+clic (`go_plan`, Telegram ou `wf.plan.go`) ajoute l'événement `workflow.plan.launched`
+(run, version, empreinte, workflow, étape) à la session qui a préparé le plan, et une note
+pour son prochain tour (`penelope_app::notices`, en `kv`) ; rien n'entre dans le
+transcript hors tour, un message inséré tomberait entre un appel d'outil en attente et son
+résultat. La note part dans le contexte volatil du message suivant, bloc `<evenements>`
+figé avec lui (`prefix::settle`), et n'est retirée qu'une fois partie : « Le propriétaire a
+cliqué « vas-y » sur la carte du plan v1 (« … ») : le run `r_plan_…` est lancé, étape
+`e1-spec`. Ne rappelle ni `workflow_start` ni `workflow_plan` pour ce plan ;
+`workflow_status` donne son état ». **Le refus dit l'état réel**
+(`penelope_workflow::plan::gate`) : aucun plan (« propose d'abord un plan ») ; plan en
+revue (« le propriétaire le valide par le bouton de la carte », et le run encore vivant
+d'un plan précédent s'il en reste un) ; approuvé sans run (« attend son run : seul le
+clic le lance ») ; lancé (« déjà lancé : run `r_plan_…`, en pause à l'étape `e1-spec` ;
+`workflow_status` donne son état, `workflow_control` op `resume` le reprend »).
+`workflow_plan` sur un plan approuvé le dit aussi, derrière « déjà approuvé ». **Pas de
+carte pour un appel voué à l'échec** : le gate est vérifié au précontrôle de l'exécuteur
+(`validate_call`), avant la politique et l'approbation, directement et par `tool_call` ;
+l'exécution le redit au cas où. **« vas-y » tapé après le clic** (« vasy », « Vas-y ! »,
+« ok vas-y » ; jamais « go » ni « ok », qui répondent au modèle) reçoit de la passerelle
+l'état du run (« Déjà lancé : run `…` du plan v1, en cours ; `/stop` l'arrête,
+`/resume` le reprend »), sans tour de modèle, tant qu'un run du plan est vivant ; sans
+plan, ou le run fini, le texte part au modèle comme avant. **Garde anti-boucle** : un
+refus de l'exécuteur avant toute carte (`ToolError::Denied` au précontrôle) revient au
+modèle avec l'état ; le deuxième sur le même outil dans le tour arrête le tour
+(`turn.halted`) : le résultat entre dans la conversation, les appels qui suivaient sont
+fermés, la réponse au propriétaire est l'état connu, sans autre appel au modèle.
+**Scénario** `plan-clic-puis-vas-y-tape` : plan, clic, « vasy » et « Vas-y ! » répondus
+sans tour, puis le modèle rappelle `workflow_start` deux fois : refus avec le run, arrêt du
+tour ; la surface montre la note `<evenements>` dans le message suivant, le monde un seul
+run et aucune approbation.
+
+Documentation : description de `workflow_start`, « Plans et gate » dans workflows.md,
+`turn.halted` dans runtime-events.md, référence des outils régénérée.
+
+Tests : le gate (textes des quatre états, « vas-y » strict, lecture plan et run) ; les
+notes (ordre, retrait de ce qui est parti seulement, bloc) ; le préfixe (note envoyée une
+fois) ; l'orchestrateur (événement et note dans la conversation d'origine, une fois, rien
+dans la session du run) ; l'exécuteur (refus au précontrôle, direct et par `tool_call`,
+dans les quatre états, à l'exécution, `workflow_plan` approuvé, CLI et run non concernés) ;
+la boucle (deuxième refus : tour arrêté, deux résultats, aucune carte, deux appels au
+modèle, `turn.halted`) ; la passerelle (« vas-y » tapé : état sans tour, message ordinaire
+sans plan ou run fini). Ce qui marchait déjà et continue : le clic périmé, un seul run par
+plan, `/stop` sur les runs de la conversation (`plan-en-phases`, `rpc-plans`,
+`livraison-*`), la garde d'arguments invalides (#117), le détecteur de boucles (#31).
+
+Vus au passage dans le même run, hors de ce lot : les captures renvoyées par un outil MCP
+en bloc image sont marquées « non transmise » et rien n'est écrit sur disque ;
+`git_clone` en https sans identifiants échoue là où `gh repo clone` réussit. Deux issues
+séparées, #304 et #305. Closes #302.
+
 ### 1.0.36
 
 **Un sujet Telegram = un projet : créé avec le sujet, rattache toutes ses sessions, et les

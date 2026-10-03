@@ -108,6 +108,7 @@ pub const ON_DEMAND: &[&str] = &[
     "job_list",
     "job_status",
     "job_wait",
+    "mcp_resource_read",
     "mem_forget",
     "mem_get",
     "mem_neighbors",
