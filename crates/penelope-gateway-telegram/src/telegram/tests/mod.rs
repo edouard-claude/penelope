@@ -34,6 +34,7 @@ mod screens_memory;
 mod screens_more;
 mod screens_runs;
 mod sessions;
+mod subjects;
 mod trace;
 mod workflows;
 

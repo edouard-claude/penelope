@@ -39,6 +39,9 @@ pub struct DigestInputs {
     pub struggling_sessions: Vec<(String, u32, Option<f64>)>,
     /// Ce qui part aujourd'hui, une ligne chacun.
     pub due_today: Vec<String>,
+    /// Lignes libres des composants d'au-dessus, une par ligne du digest, telles quelles
+    /// (#301 : le compte rendu de la migration des sujets en projets).
+    pub notes: Vec<String>,
 }
 
 /// Qui fournit au digest ses entrées d'au-dessus du rêve, au moment de l'écrire : les

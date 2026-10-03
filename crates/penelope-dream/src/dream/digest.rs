@@ -204,6 +204,10 @@ pub async fn digest_text(
             due.into_iter().take(10).collect::<Vec<_>>().join("\n")
         ));
     }
+    // Lignes des composants d'au-dessus, telles quelles (#301).
+    for note in inputs.notes {
+        t.push_str(&format!("\n{note}\n"));
+    }
     let pending = s.approvals.pending(100).await?;
     if !pending.is_empty() {
         t.push_str(&format!(

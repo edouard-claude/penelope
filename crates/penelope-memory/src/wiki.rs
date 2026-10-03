@@ -67,6 +67,9 @@ pub fn note_type(rel: &str) -> Option<&'static str> {
         ("audits", _) => "audit",
         ("entites", _) => "entite",
         ("pratiques", _) => "pratique",
+        // Fiche d'un projet (#301) : son identité, pas ses entrées, qui vivent dans
+        // `projets.md` et les annotations `projet`.
+        ("projets", _) => "projet",
         ("notes", _) => "session",
         _ => return None,
     })

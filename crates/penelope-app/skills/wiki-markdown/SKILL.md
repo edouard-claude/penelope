@@ -28,7 +28,7 @@ par `shell_exec` pour écrire une note.
 
 - Frontmatter entre deux lignes `---`, en tête de fichier.
 - `type` sur toute note : `journal`, `source`, `concept`, `profil`, `memoire`, `projets`,
-  `notes`, `accueil`, `audit`, `revue`, `index`, `log`, `entite`, `pratique`.
+  `projet`, `notes`, `accueil`, `audit`, `revue`, `index`, `log`, `entite`, `pratique`.
 - `created` et `updated` au format `AAAA-MM-JJ`, sans guillemets.
 - `aliases` et `tags` toujours en listes à tirets, jamais en chaîne séparée par des virgules :
 
@@ -73,9 +73,13 @@ Relatifs au vault ; avec `fs_*`, `vault:` devant.
 - `journal/AAAA-MM-JJ.md` : note du jour, `type: journal` et `date`.
 - `sources/<slug>.md` : fiche d'un document ; l'original, immuable, est dans `attachments/`.
 - `concepts/<slug>.md` : une page par concept, `aliases` en liste, section `## Sources`.
+- `projets/<slug>.md` : la fiche d'un projet (`type: projet`, `nom`, `aliases`), née du sujet
+  de conversation du même nom ; ses entrées de mémoire vivent dans `projets.md` (section du
+  projet) et sous l'annotation `<!-- projet: nom -->`, pas dans la fiche.
 - `accueil/accueil-AAAA-MM-JJ.md`, `audits/audit-AAAA-MM-JJ.md` : comptes rendus.
 - `log.md` : journal des opérations en ajout seul, une ligne `## [AAAA-MM-JJ] <op> | <titre>`
-  par opération (`ingest`, `dream`, `accueil`, `lint`). Ne jamais réécrire une ligne passée.
+  par opération (`ingest`, `dream`, `accueil`, `lint`, `projet`). Ne jamais réécrire une
+  ligne passée.
 - Dossiers cachés (configuration d'éditeur) : ne jamais y écrire.
 
 ## Vérifier

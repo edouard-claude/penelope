@@ -1919,6 +1919,7 @@ name = "penelope-vault"
 version = "1.0.35"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "chrono-tz",
  "penelope-app",

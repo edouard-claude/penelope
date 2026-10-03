@@ -1,19 +1,26 @@
 //! Sujet de travail d'une session (issue #119) : il filtre la mémoire injectée d'office.
 //!
 //! ```text
-//!  sujet de la session ── explicite (/projet), sinon nom du sujet Telegram, titre ou premier
-//!                         message qui nomment un projet connu du vault
+//!  projet de la session ─ explicite (/projet), sinon le sujet de la conversation que le
+//!                         canal nomme (un sujet = un projet, #301), sinon le titre ou le
+//!                         premier message quand ils nomment un projet connu du vault
 //!  instantané T2 ──────── Profil toujours ; Cœur et Projets : entrées sans projet, et celles
-//!                         du sujet de la session ; les autres restent au rappel et à mem_search
+//!                         du projet de la session ; les autres restent au rappel et à mem_search
 //! ```
 //!
-//! Le sujet se fixe quand l'instantané de l'épisode est figé : le préfixe reste identique
-//! d'un tour à l'autre. Le changer à la main refige l'instantané au tour suivant.
+//! Le projet se fixe quand l'instantané de l'épisode est figé : le préfixe reste identique
+//! d'un tour à l'autre. Le changer à la main refige l'instantané au tour suivant. Les
+//! sujets nommés par le canal deviennent des projets (fiche `projets/<slug>.md`, sessions
+//! rattachées) dans [`subjects`].
 
 use penelope_app::services::Services;
 use penelope_memory::{IndexedEntry, Level};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+
+pub mod subjects;
+#[cfg(test)]
+mod tests;
 
 /// Portée d'un instantané mémoire.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +79,8 @@ pub fn keeps(scope: &Scope, e: &IndexedEntry) -> bool {
     }
 }
 
-/// Projets que le vault connaît : annotations et sections de `projets.md`.
+/// Projets que le vault connaît : annotations, sections de `projets.md` et fiches
+/// `projets/<slug>.md` (#301).
 pub async fn known(s: &Services) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for level in [Level::Coeur, Level::Projet] {
@@ -82,6 +90,7 @@ pub async fn known(s: &Services) -> BTreeSet<String> {
             }
         }
     }
+    out.extend(subjects::notes(&penelope_app::helpers::vault_dir(s)));
     out
 }
 
@@ -89,8 +98,8 @@ fn key(session_id: &str) -> String {
     format!("session.project.{session_id}")
 }
 
-/// Sujet enregistré d'une session : `None` s'il n'a jamais été fixé, `Some(None)` pour
-/// « aucun sujet » choisi.
+/// Projet enregistré d'une session : `None` s'il n'a jamais été fixé, `Some(None)` pour
+/// « aucun projet » choisi.
 async fn stored(s: &Services, session_id: &str) -> Option<(Option<String>, String)> {
     let k = key(session_id);
     let raw = s
@@ -117,7 +126,7 @@ async fn store(s: &Services, session_id: &str, project: Option<&str>, how: &str)
         .await;
 }
 
-/// Sujet d'une session et comment il a été fixé (`explicite`, `sujet`, `titre`,
+/// Projet d'une session et comment il a été fixé (`explicite`, `sujet`, `titre`,
 /// `message`), s'il l'a été.
 pub async fn of_session(s: &Services, session_id: &str) -> (Option<String>, Option<String>) {
     match stored(s, session_id).await {
@@ -126,16 +135,16 @@ pub async fn of_session(s: &Services, session_id: &str) -> (Option<String>, Opti
     }
 }
 
-/// Fixe le sujet d'une session à la main (`None` : aucun). L'instantané de l'épisode en
-/// cours est refigé au tour suivant ; `session.project` au journal libère le préfixe
-/// retenu, même à cache chaud (`penelope_context::store::PREFIX_RELEASES`, T16).
-pub async fn set(s: &Services, session_id: &str, project: Option<&str>) {
-    let project = project.map(normalize).filter(|p| !p.is_empty());
-    store(s, session_id, project.as_deref(), "explicite").await;
+/// Enregistre le projet d'une session déjà en cours et le dit au journal : l'instantané de
+/// l'épisode est refigé au tour suivant, et `session.project` libère le préfixe retenu,
+/// même à cache chaud (`penelope_context::store::PREFIX_RELEASES`, T16). Une fois par
+/// changement, jamais à chaque tour.
+async fn assign(s: &Services, session_id: &str, project: Option<&str>, how: &str) {
+    store(s, session_id, project, how).await;
     crate::episodes::refresh_snapshot(s, session_id).await;
     let draft = penelope_kernel::event::EventDraft::new(
         penelope_context::store::KIND_SESSION_PROJECT,
-        json!({"project": project, "how": "explicite"}),
+        json!({"project": project, "how": how}),
     )
     .session(session_id);
     if let Err(e) = s.events.append(draft).await {
@@ -143,38 +152,40 @@ pub async fn set(s: &Services, session_id: &str, project: Option<&str>) {
     }
 }
 
-/// Sujet à appliquer à l'instantané qu'on fige : l'enregistré, sinon celui que nomment le
-/// sujet Telegram, le titre ou le message, parmi les projets connus du vault. Un sujet
-/// déduit est enregistré, pour que le préfixe reste stable.
+/// Fixe le projet d'une session à la main (`None` : aucun). Un choix explicite n'est
+/// jamais repris par un sujet ni par une migration.
+pub async fn set(s: &Services, session_id: &str, project: Option<&str>) {
+    let project = project.map(normalize).filter(|p| !p.is_empty());
+    assign(s, session_id, project.as_deref(), "explicite").await;
+}
+
+/// Projet à appliquer à l'instantané qu'on fige : l'enregistré, sinon le sujet de la
+/// conversation que le canal nomme (il n'a pas besoin d'être connu du vault : un sujet est
+/// un projet, #301), sinon celui que nomment le titre ou le message parmi les projets
+/// connus. Un projet déduit est enregistré, pour que le préfixe reste stable.
 pub async fn resolve(s: &Services, session_id: &str, user_text: &str) -> Option<String> {
     if let Some((p, _)) = stored(s, session_id).await {
         return p;
+    }
+    if let Some(name) = s.channel.subject(session_id).await {
+        let p = normalize(&name);
+        if !p.is_empty() {
+            store(s, session_id, Some(&p), "sujet").await;
+            return Some(p);
+        }
     }
     let projects = known(s).await;
     if projects.is_empty() {
         return None;
     }
-    let session = s.sessions.get(session_id).await.ok().flatten();
-    let topic = match session
-        .as_ref()
-        .and_then(|x| x.tg_chat_id.zip(x.tg_topic_id))
-    {
-        Some((chat, topic)) => {
-            let k = penelope_app::helpers::topic_name_key(chat, topic);
-            s.store
-                .read(move |c| penelope_store::kv_get(c, &k))
-                .await
-                .ok()
-                .flatten()
-        }
-        None => None,
-    };
-    let title = session.and_then(|x| x.title);
-    for (text, how) in [
-        (topic.as_deref(), "sujet"),
-        (title.as_deref(), "titre"),
-        (Some(user_text), "message"),
-    ] {
+    let title = s
+        .sessions
+        .get(session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|x| x.title);
+    for (text, how) in [(title.as_deref(), "titre"), (Some(user_text), "message")] {
         let Some(text) = text else { continue };
         let words = normalize(text);
         let words: Vec<&str> = words.split('-').collect();

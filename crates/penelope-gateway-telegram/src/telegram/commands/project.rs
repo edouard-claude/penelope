@@ -48,7 +48,8 @@ impl TelegramGateway {
     }
 
     /// Sujet de travail de la session (issue #119) : sans argument, l'état et un
-    /// bouton par projet connu.
+    /// bouton par projet connu. Dans un sujet Telegram, le projet est celui du sujet
+    /// (#301) ; le changer ne vaut que pour cette session, et la réponse le dit.
     pub(super) async fn cmd_projet(
         self: &Arc<Self>,
         chat_id: i64,
@@ -65,6 +66,10 @@ impl TelegramGateway {
         };
         let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
         let reply_to = Some(message_id);
+        let subject = match topic_id {
+            Some(t) => self.topic_subject(chat_id, t).await,
+            None => None,
+        };
         let text: String = {
             let session = d.chat_session_for(&origin).await?;
             let wanted = args.trim();
@@ -76,15 +81,25 @@ impl TelegramGateway {
                 .await
             {
                 Err(e) => format!("❌ {e}"),
-                Ok(v) if !wanted.is_empty() => match v["project"].as_str() {
-                    Some(p) => format!(
-                        "📁 Sujet de la session : **{p}**. La mémoire d'office s'y limite dès \
-                         le prochain message ; le reste reste au rappel."
-                    ),
-                    None => "📁 Session sans sujet : seules les entrées sans projet sont \
-                             injectées d'office."
-                        .into(),
-                },
+                Ok(v) if !wanted.is_empty() => {
+                    let mut text = match v["project"].as_str() {
+                        Some(p) => format!(
+                            "📁 Sujet de la session : **{p}**. La mémoire d'office s'y limite \
+                             dès le prochain message ; le reste reste au rappel."
+                        ),
+                        None => "📁 Session sans sujet : seules les entrées sans projet sont \
+                                 injectées d'office."
+                            .into(),
+                    };
+                    if let Some(name) = &subject {
+                        text.push_str(&format!(
+                            " Ce choix ne vaut que pour cette session : une nouvelle session \
+                             du sujet « {name} » reviendra à son projet **{}**.",
+                            penelope_vault::session_project::normalize(name)
+                        ));
+                    }
+                    text
+                }
                 Ok(v) => {
                     let current = v["project"].as_str();
                     let mut rows = Vec::new();
@@ -114,12 +129,21 @@ impl TelegramGateway {
                         )
                         .await?,
                     ]);
-                    let state = match (current, v["how"].as_str()) {
-                        (Some(p), Some("explicite")) => format!("**{p}** (choisi)"),
-                        (Some(p), Some(how)) => format!("**{p}** (déduit du {how})"),
-                        (Some(p), None) => format!("**{p}**"),
-                        (None, Some(_)) => "aucun (choisi)".into(),
-                        (None, None) => "aucun pour l'instant".into(),
+                    let state = match (current, v["how"].as_str(), &subject) {
+                        (Some(p), Some("explicite"), _) => format!("**{p}** (choisi)"),
+                        (Some(p), Some("sujet"), Some(name)) => {
+                            format!("**{p}** (le projet du sujet « {name} »)")
+                        }
+                        (Some(p), Some("sujet"), None) => format!("**{p}** (le projet du sujet)"),
+                        (Some(p), Some(how), _) => format!("**{p}** (déduit du {how})"),
+                        (Some(p), None, _) => format!("**{p}**"),
+                        (None, Some(_), _) => "aucun (choisi)".into(),
+                        // Le sujet nomme le projet avant même le premier message.
+                        (None, None, Some(name)) => format!(
+                            "**{}** (le projet du sujet « {name} »)",
+                            penelope_vault::session_project::normalize(name)
+                        ),
+                        (None, None, None) => "aucun pour l'instant".into(),
                     };
                     let text = format!(
                         "📁 Sujet de la session : {state}.\n\nLe profil et les entrées sans \

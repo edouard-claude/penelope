@@ -76,4 +76,10 @@ impl Channel {
         }
         .unwrap_or_else(|| "aucune conversation (canal non configuré)".into())
     }
+
+    /// Nom du sujet de la conversation d'une session, par le canal branché (#301) ;
+    /// `None` sans canal, ou quand la conversation n'a pas de sujet qui vaille projet.
+    pub async fn subject(&self, session_id: &str) -> Option<String> {
+        self.delivery.get()?.subject_of(session_id).await
+    }
 }

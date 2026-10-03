@@ -120,16 +120,40 @@ pub(super) fn chat_title_of(update: &Value) -> Option<(i64, String)> {
 }
 
 /// Nom du sujet d'un message de forum : à sa création, à son renommage, ou dans le
-/// message de création auquel chaque message du sujet répond.
-pub(super) fn topic_name_of(update: &Value) -> Option<(i64, i64, String)> {
+/// message de création auquel chaque message du sujet répond. Le dernier n'est qu'un
+/// repli (`current` faux) : il garde le nom de naissance du sujet, même renommé depuis,
+/// et ne doit pas écraser un nom appris d'un renommage (#301).
+pub(super) fn topic_name_of(update: &Value) -> Option<TopicName> {
     let msg = update.get("message")?;
     let chat = msg["chat"]["id"].as_i64()?;
     let topic = msg["message_thread_id"].as_i64()?;
-    let name = msg["forum_topic_created"]["name"]
+    let (name, current) = match msg["forum_topic_created"]["name"]
         .as_str()
         .or(msg["forum_topic_edited"]["name"].as_str())
-        .or(msg["reply_to_message"]["forum_topic_created"]["name"].as_str())?;
-    Some((chat, topic, name.to_string()))
+    {
+        Some(name) => (name, true),
+        None => (
+            msg["reply_to_message"]["forum_topic_created"]["name"].as_str()?,
+            false,
+        ),
+    };
+    Some(TopicName {
+        chat,
+        topic,
+        name: name.to_string(),
+        current,
+    })
+}
+
+/// Un nom de sujet lu dans un update, et s'il fait foi.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TopicName {
+    pub chat: i64,
+    pub topic: i64,
+    pub name: String,
+    /// Vrai pour une création ou un renommage ; faux pour le nom de naissance répété en
+    /// tête de chaque message du sujet.
+    pub current: bool,
 }
 
 const SEEN_CHATS_MAX: usize = 20;

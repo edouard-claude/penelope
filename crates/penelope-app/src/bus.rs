@@ -93,6 +93,14 @@ pub trait ChannelDelivery: Send + Sync {
         None
     }
 
+    /// Nom du sujet de la conversation d'une session, quand le canal lui en donne un qui
+    /// vaut projet (#301) : « Dose » pour la session du sujet « Dose ». `None` pour une
+    /// conversation sans sujet, le sujet général ou le foyer. Le cœur en fait le projet de
+    /// la session (`session_project`), sans savoir d'où vient le nom.
+    async fn subject_of(&self, _session_id: &str) -> Option<String> {
+        None
+    }
+
     /// La conversation où livrer une planification désignée par `origin` (issue #124),
     /// sans le message qui l'a désignée. `Err` : le canal refuse d'y livrer, et dit
     /// pourquoi au propriétaire.

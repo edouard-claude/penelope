@@ -46,4 +46,6 @@ penelope-tools.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Double de test du port `ChannelDelivery` (le canal nomme le sujet d'une session, #301).
+async-trait.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "net", "io-util", "test-util"] }

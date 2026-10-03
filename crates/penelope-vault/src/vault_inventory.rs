@@ -12,6 +12,7 @@
 //! | `inbox/` | non | en attente d'ingestion |
 //! | `accueil/`, `audits/` | non | comptes rendus : l'accueil écrit dans le profil |
 //! | `log.md`, `DREAMS.md` | non | journaux techniques en ajout seul : opérations, rapport des rêves (#282) |
+//! | `projets/<slug>.md` | non | fiche d'identité d'un projet (#301) : ses entrées vivent dans `projets.md` et les annotations `projet` |
 //! | `index.md`, `concepts/_a-definir.md`, `archive/`, fichiers cachés | non | pages générées ou archivées |
 //! | autre format (`.pdf`, `.docx`, `.txt`…) hors `sources/` | non | à envoyer pour ingestion |
 
@@ -47,6 +48,9 @@ pub fn excluded(rel: &str) -> Option<&'static str> {
         "accueil" | "audits" => Some("compte rendu, repris dans le profil ou le digest"),
         "archive" => Some("archivé"),
         crate::session_notes::DIR => Some("notes de travail, injectées dans leur session"),
+        crate::session_project::subjects::DIR if rel.contains('/') => {
+            Some("fiche de projet : ses entrées vivent dans projets.md et les annotations projet")
+        }
         penelope_memory::wiki::ATTACHMENTS_DIR => {
             Some("original immuable, indexé par sa fiche source")
         }

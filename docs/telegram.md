@@ -267,7 +267,7 @@ Workflows (4)
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 📍 livrer dans cette conversation, 🗑 (confirmé) ; où livre chaque planification, sa dernière erreur et ses échecs de suite ; `/schedules ici <id>` dans un sujet l'y déplace ; une exécution en échec arrive en alerte avec « Relancer maintenant » au premier échec, quand la raison change et aux paliers (5, 20, 100), puis « rétablie » au retour |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
-| `/projet` | sujet de travail de la session : un bouton par projet connu du vault, et « Aucun » ; la mémoire d'office s'y limite |
+| `/projet` | sujet de travail de la session : un bouton par projet connu du vault (fiches `projets/` comprises), et « Aucun » ; la mémoire d'office s'y limite ; dans un sujet Telegram, le projet est celui du sujet, le changer ne vaut que pour la session |
 | `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
 | `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
@@ -463,12 +463,27 @@ en fond (la nouvelle session prend le fil, l'ancienne finit son travail) ou la f
 disant combien de tours seraient perdus.
 
 Chaque sujet porte sa propre session : plusieurs chantiers avancent en parallèle, un par
-sujet. Chaque session a aussi un **sujet de travail** : le nom du sujet Telegram, le titre
-de la session ou son premier message, quand il nomme un projet connu du vault (annotation
-`projet`, section de `projets.md`), sinon `/projet`. La mémoire injectée d'office s'y
-limite : le profil et les entrées sans projet partout, celles d'un projet seulement dans
-ses sessions ; le reste revient par le rappel quand la question le vise, ou par
-`mem_search`. `/sessions` le montre (📁), `/projet` le change.
+sujet. **Un sujet est un projet** (#301) : créer le sujet « Dose » crée le projet `dose`
+(fiche `projets/dose.md` dans le vault, au gabarit du wiki) et toutes les sessions de ce
+sujet, présentes et futures, lui appartiennent, qu'il soit connu de la mémoire ou pas.
+Renommer le sujet renomme le projet : la fiche suit (l'ancien nom reste en alias, les
+wikilinks sont réécrits), les annotations `projet` et la section de `projets.md` aussi,
+les sessions aussi. Le sujet « Général » et le foyer (`/home`, `telegram.home`) ne sont
+pas des projets. Une session hors sujet (conversation privée) prend pour projet celui que
+nomment son titre ou son premier message, parmi les projets connus du vault (annotation
+`projet`, section de `projets.md`, fiche `projets/`), sinon aucun. La mémoire injectée
+d'office s'y limite : le profil et les entrées sans projet partout, celles d'un projet
+seulement dans ses sessions ; le reste revient par le rappel quand la question le vise, ou
+par `mem_search`. `/sessions` le montre (📁) ; `/projet` dans un sujet montre le projet du
+sujet, et le changer ne vaut que pour cette session, la réponse le dit : une nouvelle
+session du sujet revient à son projet.
+
+À la mise à jour, les sujets déjà nommés deviennent des projets au premier démarrage, une
+fois : fiches manquantes créées, sessions sans projet rattachées, rattachements déduits
+d'un titre ou d'un premier message remplacés ; un choix fait avec `/projet` est conservé.
+Le digest du lendemain le dit (« 18 sujets, 18 projets, N sessions rattachées, M
+rattachements corrigés »). Le préfixe du prompt d'une session rattachée est refigé une
+fois, au tour suivant, pas à chaque tour.
 
 Pour monter un tel groupe :
 
