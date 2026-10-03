@@ -234,7 +234,52 @@ pub async fn clone(url: &str, dest: &Path, depth: Option<u32>) -> ToolResult<Val
     let parent = dest
         .parent()
         .ok_or_else(|| ToolError::Invalid("destination sans répertoire parent".into()))?;
-    clone_in(url, dest, &[parent.to_path_buf()], depth).await
+    clone_in(
+        url,
+        dest,
+        &[parent.to_path_buf()],
+        depth,
+        &CloneAuth::default(),
+    )
+    .await
+}
+
+/// Ce que `git_clone` ajoute à `git clone` (#305) : l'assistant d'identifiants d'un client
+/// de forge connecté, et la configuration de la plateforme.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CloneAuth {
+    /// Client connecté dont git emprunte les identifiants (`gh`, `glab`) : c'est lui que
+    /// le résultat nomme.
+    pub helper: Option<String>,
+    /// Paires `-c clé=valeur`, dans l'ordre.
+    pub config: Vec<(String, String)>,
+}
+
+impl CloneAuth {
+    /// L'assistant d'identifiants de `program` pour `https://<host>` : git lui demande le
+    /// jeton au moment de s'authentifier, par son entrée standard. Le jeton ne passe ni
+    /// par l'adresse, ni par un argument, ni par une variable d'environnement : rien de ce
+    /// que le journal, l'audit ou la trace relèvent ne le contient. La première entrée
+    /// vide efface les assistants déjà déclarés pour cet hôte, comme `gh auth setup-git`.
+    pub fn forge_helper(program: &str, host: &str) -> CloneAuth {
+        let key = format!("credential.https://{host}.helper");
+        CloneAuth {
+            helper: Some(program.to_string()),
+            config: vec![
+                (key.clone(), String::new()),
+                (key, format!("!{program} auth git-credential")),
+            ],
+        }
+    }
+}
+
+/// L'hôte d'une source `https://`, en minuscules : seule cette voie passe par un
+/// assistant d'identifiants ; `ssh://` et `user@hôte:chemin` ont leurs clés.
+pub fn https_host(source: &str) -> Option<String> {
+    let url = url::Url::parse(source).ok()?;
+    (url.scheme() == "https")
+        .then(|| url.host_str().map(str::to_ascii_lowercase))
+        .flatten()
 }
 
 /// Variante appelée par le daemon avec toutes les racines de workspace autorisées.
@@ -243,6 +288,7 @@ pub async fn clone_in(
     dest: &Path,
     workspaces: &[std::path::PathBuf],
     depth: Option<u32>,
+    auth: &CloneAuth,
 ) -> ToolResult<Value> {
     let url = normalize_clone_url(url)?;
     let parent = dest
@@ -259,22 +305,39 @@ pub async fn clone_in(
         }
     }
     std::fs::create_dir_all(parent).map_err(|e| ToolError::Io(e.to_string()))?;
-    let depth_s = depth.unwrap_or(50).to_string();
+    fetch_clone(parent, &url, dest, Some(depth.unwrap_or(50)), auth).await
+}
+
+/// `git clone` lui-même, sans les contrôles de [`clone_in`].
+async fn fetch_clone(
+    parent: &Path,
+    url: &str,
+    dest: &Path,
+    depth: Option<u32>,
+    auth: &CloneAuth,
+) -> ToolResult<Value> {
+    let pairs: Vec<String> = auth
+        .config
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    let mut args: Vec<&str> = Vec::new();
+    for pair in &pairs {
+        args.extend(["-c", pair.as_str()]);
+    }
+    args.push("clone");
+    let depth_s = depth.map(|d| d.to_string());
+    if let Some(d) = &depth_s {
+        args.extend(["--depth", d.as_str()]);
+    }
     let dest_s = dest.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--depth",
-        depth_s.as_str(),
-        url.as_str(),
-        dest_s.as_str(),
-    ];
+    args.extend([url, dest_s.as_str()]);
     let (code, out, err) = run(parent, &args).await?;
-    ok_or_err(
-        code,
-        out,
-        err,
-        json!({"dest": dest_s, "url": url, "already": false}),
-    )
+    let mut extra = json!({"dest": dest_s, "url": url, "already": false});
+    if let Some(helper) = &auth.helper {
+        extra["credentials"] = json!(helper);
+    }
+    ok_or_err(code, out, err, extra)
 }
 
 pub async fn push(cwd: &Path, remote: &str, branch_name: &str) -> ToolResult<Value> {
@@ -512,6 +575,7 @@ mod tests {
             &dest,
             &[workspace.path().to_path_buf()],
             None,
+            &CloneAuth::default(),
         )
         .await
         .unwrap();
@@ -545,5 +609,191 @@ mod tests {
         assert_eq!(result["url"], url);
         assert_eq!(result["already"], false);
         assert!(dest.join(".git").exists());
+    }
+
+    /// #305 : l'assistant d'identifiants est scopé à l'hôte, efface ceux déjà déclarés, et
+    /// ne porte qu'une commande ; seule une source `https://` a un hôte à authentifier.
+    #[test]
+    fn a_forge_helper_is_a_command_scoped_to_its_host() {
+        let auth = CloneAuth::forge_helper("gh", "github.com");
+        assert_eq!(auth.helper.as_deref(), Some("gh"));
+        assert_eq!(
+            auth.config,
+            vec![
+                ("credential.https://github.com.helper".into(), String::new()),
+                (
+                    "credential.https://github.com.helper".into(),
+                    "!gh auth git-credential".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            https_host("https://GitHub.com/o/r.git").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(https_host("git@github.com:o/r.git"), None);
+        assert_eq!(https_host("ssh://git@github.com/o/r.git"), None);
+        assert_eq!(https_host("file:///tmp/r"), None);
+    }
+
+    /// Un faux hôte git en HTTP « bête » qui exige une authentification Basic : 401 sans
+    /// les bons identifiants, les fichiers sous `root` sinon. Rend l'adresse et le
+    /// nombre de requêtes authentifiées.
+    async fn private_forge(
+        root: std::path::PathBuf,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        // `x-access-token:jeton-305`, ce que rend le faux client de forge.
+        const GRANTED: &str = "Basic eC1hY2Nlc3MtdG9rZW46amV0b24tMzA1";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = served.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf).to_string();
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/")
+                    .split('?')
+                    .next()
+                    .unwrap_or("/")
+                    .trim_start_matches('/')
+                    .to_string();
+                let granted = head.lines().any(|l| {
+                    l.split_once(':').is_some_and(|(k, v)| {
+                        k.eq_ignore_ascii_case("authorization") && v.trim() == GRANTED
+                    })
+                });
+                let (status, body) = if !granted {
+                    ("401 Unauthorized", Vec::new())
+                } else {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    match std::fs::read(root.join(&path)) {
+                        Ok(b) if !path.contains("..") => ("200 OK", b),
+                        _ => ("404 Not Found", Vec::new()),
+                    }
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\
+                     WWW-Authenticate: Basic realm=\"forge\"\r\n\
+                     Content-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(header.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{addr}/"), served)
+    }
+
+    /// #305 : un dépôt privé se clone en un appel par l'assistant d'identifiants du client
+    /// connecté ; sans lui, refus. Le jeton ne sort ni dans le résultat, ni dans l'erreur.
+    #[tokio::test]
+    async fn a_private_repo_clones_through_the_forge_helper_without_showing_the_token() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("coffre.git");
+        let work = root.path().join("travail");
+        std::fs::create_dir_all(&work).unwrap();
+        if run(root.path(), &["init", "-q", "--bare", "coffre.git"])
+            .await
+            .map(|(c, _, _)| c)
+            .unwrap_or(-1)
+            != 0
+        {
+            eprintln!("git indisponible : test ignoré");
+            return;
+        }
+        run(&work, &["init", "-q"]).await.unwrap();
+        std::fs::write(work.join("README.md"), "privé\n").unwrap();
+        for args in [
+            &["add", "README.md"][..],
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "départ",
+            ],
+            &["push", "-q", bare.to_str().unwrap(), "HEAD:refs/heads/main"],
+        ] {
+            assert_eq!(run(&work, args).await.unwrap().0, 0, "{args:?}");
+        }
+        run(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"])
+            .await
+            .unwrap();
+        run(&bare, &["update-server-info"]).await.unwrap();
+
+        // Le faux client de forge : il ne répond qu'à `auth git-credential get`.
+        let fake = root.path().join("faux-gh");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncase \"$*\" in\n  *get) echo username=x-access-token; \
+             echo password=jeton-305 ;;\nesac\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (base, served) = private_forge(root.path().to_path_buf()).await;
+        let url = format!("{base}coffre.git");
+        let auth = CloneAuth {
+            helper: Some("gh".into()),
+            config: vec![
+                ("credential.helper".into(), String::new()),
+                (
+                    "credential.helper".into(),
+                    format!("!{} auth git-credential", fake.display()),
+                ),
+            ],
+        };
+
+        // Sans assistant : le dépôt est privé, git ne peut rien demander, refus.
+        let refused = fetch_clone(
+            root.path(),
+            &url,
+            &root.path().join("sans"),
+            None,
+            &CloneAuth {
+                helper: None,
+                config: vec![("credential.helper".into(), String::new())],
+            },
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(!refused.contains("jeton-305"), "{refused}");
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let dest = root.path().join("coffre");
+        let v = fetch_clone(root.path(), &url, &dest, None, &auth)
+            .await
+            .unwrap();
+        assert_eq!(v["credentials"], "gh");
+        assert_eq!(v["already"], false);
+        assert!(!v.to_string().contains("jeton-305"), "{v}");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("README.md")).unwrap(),
+            "privé\n"
+        );
+        assert!(served.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        // Le jeton n'est pas non plus resté dans la configuration du clone.
+        let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
+        assert!(!config.contains("jeton-305"), "{config}");
     }
 }

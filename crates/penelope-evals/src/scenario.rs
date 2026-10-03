@@ -58,6 +58,11 @@ pub struct Spec {
     /// Dépôts git semés dans le workspace après les fichiers (#192).
     #[serde(default)]
     pub repos: Vec<SeedRepo>,
+    /// Dépôts privés fictifs d'une forge (#305) : `git_clone` sur `url` atteint un dépôt
+    /// nu local par une réécriture d'adresse posée dans la configuration git de la
+    /// plateforme. Rien ne part sur le réseau.
+    #[serde(default)]
+    pub forge_repos: Vec<ForgeRepo>,
     /// Outils d'un serveur MCP simulé, exposés au modèle et inscrits au registre.
     #[serde(default)]
     pub mcp_tools: Vec<McpTool>,
@@ -144,6 +149,16 @@ pub struct SeedRepo {
     pub path: String,
     pub base: String,
     pub branch: String,
+}
+
+/// Un dépôt privé fictif (`[[forge_repos]]`) : `url` telle que `git_clone` la normalise
+/// (`https://github.com/<owner>/<repo>.git`), et les fichiers de son unique commit.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForgeRepo {
+    pub url: String,
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]

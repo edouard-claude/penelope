@@ -1,0 +1,31 @@
+name = "outils-git-prive"
+description = """Binaire local d'abord (#305) : un dépôt GitHub privé fictif, et `gh` marqué
+connecté dans l'inventaire semé (`machine.inventory`), comme la passe de fond l'aurait
+rangé. Le message système porte la règle « binaire local d'abord ». Le modèle clone par
+le raccourci `owner/repo` (`git_clone`) : l'outil emprunte les identifiants de `gh` par
+son assistant (`credentials` dans le résultat) et réussit en un appel, sans repli sur
+`gh repo clone` dans le shell, puis lit le README (`fs_read`). La forge est un dépôt nu
+local derrière une réécriture d'adresse de la plateforme : rien ne part sur le réseau,
+l'assistant n'est pas sollicité ici (le test `git` de `penelope-tools` l'exerce sur un
+faux hôte HTTP qui exige l'authentification)."""
+pin_model = "main"
+
+[config]
+"tools.approval_mode" = "auto"
+
+[kv]
+"machine.inventory" = '''
+{"os":"macOS 27","arch":"arm64","sandbox_profile":"workspace-write","shell_network":false,
+ "present":[{"name":"gh","version":"gh version 2.101.0","account":"compte-exemple"},
+            {"name":"git","version":"git version 2.54.0"}],
+ "missing":["glab"],
+ "checked_at":"2026-01-01T00:00:00Z"}
+'''
+
+[[forge_repos]]
+url = "https://github.com/exemple-prive/coffre.git"
+files = { "README.md" = "# Coffre\n\nNotes privées du projet.\n" }
+
+[[steps]]
+kind = "message"
+text = "clone exemple-prive/coffre (dépôt privé) et dis-moi ce que dit le README"
