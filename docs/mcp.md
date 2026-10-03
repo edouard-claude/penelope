@@ -156,7 +156,7 @@ fermé) : le réglage n'y change rien.
 
 ## L'agenda CalDAV, un serveur livré
 
-Pénélope livre un serveur MCP d'agenda (1.0.35, #295, décision
+Pénélope livre un serveur MCP d'agenda (1.0.37, #295, décision
 [0018](decisions/0018-agenda-caldav-en-lecture.md)) : la sous-commande `penelope
 agenda-mcp` lit un compte CalDAV en lecture seule (iCloud avec un mot de passe
 d'application, Fastmail, Nextcloud, tout serveur en authentification Basic) et expose
@@ -554,7 +554,7 @@ replis.
 
 Un serveur qui déclare `resources.subscribe` peut prévenir Pénélope qu'une ressource a
 changé (`notifications/resources/updated`) au lieu d'être sondé. C'est le déclencheur
-`mcp_subscribe` (1.0.35, #293) :
+`mcp_subscribe` (1.0.37, #293) :
 
 ```bash
 penelope schedule add mcp_subscribe \

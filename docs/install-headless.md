@@ -1932,7 +1932,7 @@ configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 ### Agenda CalDAV
 
 Pénélope lit l'agenda du propriétaire par CalDAV, en lecture seule, sans permission à
-cliquer sur la machine (1.0.35, #295) : un serveur MCP livré dans le binaire, `penelope
+cliquer sur la machine (1.0.37, #295) : un serveur MCP livré dans le binaire, `penelope
 agenda-mcp`, que `mcp.d/agenda.toml` déclare. Chez iCloud, créer un mot de passe
 d'application (appleid.apple.com, « Mots de passe d'application ») ; chez Fastmail ou
 Nextcloud, un mot de passe d'application de même. Puis :
@@ -2069,7 +2069,7 @@ en tête de la notification ou dans le prompt, « ⏰ Exécution en retard : pr�
 lancée à 10h02 après une veille de 3 h 32. » ; plusieurs créneaux manqués d'une même
 planification sont comptés et partent en un seul run.
 
-**Heures calmes** (1.0.35, #296). Pendant `telegram.quiet_hours` (`22:00-07:00` par
+**Heures calmes** (1.0.37, #296). Pendant `telegram.quiet_hours` (`22:00-07:00` par
 défaut, à l'heure du propriétaire, réglable par `/quiet`), une planification qui tombe
 dans la plage n'est pas tirée : elle reste due et part au premier passage après la plage,
 par le même chemin que le rattrapage après veille, donc **une fois**, créneaux manqués
@@ -2131,7 +2131,7 @@ suivie par abonnement, voir ci-dessous), `watch_file` (un fichier modifié), `ev
 événement du journal, `run.done` par exemple) et `webhook` (un `POST` signé venu de
 l'extérieur, section suivante). La création passe par une approbation.
 
-**Réagir à un serveur MCP sans le sonder (`mcp_subscribe`, 1.0.35, #293).** Un serveur qui
+**Réagir à un serveur MCP sans le sonder (`mcp_subscribe`, 1.0.37, #293).** Un serveur qui
 déclare `resources.subscribe` (un pont de messagerie, un tracker) prévient Pénélope quand
 une ressource change ; elle la relit alors et déclenche la cible pour ce qui est nouveau,
 au lieu d'interroger un outil toutes les minutes. La spécification nomme le serveur et la
@@ -2183,7 +2183,7 @@ qui en parle (trois fois au plus, une fois par jour au plus).
 
 Un service qui sait appeler une URL (forge, suivi de tickets, formulaire, domotique, un
 script sur une autre machine) peut pousser un événement dans Pénélope : c'est le
-déclencheur `webhook` (1.0.35, #294), sa première porte entrante, fermée par défaut sur
+déclencheur `webhook` (1.0.37, #294), sa première porte entrante, fermée par défaut sur
 `127.0.0.1`.
 
 ```bash
@@ -3273,7 +3273,7 @@ interrompue a laissé derrière le journal est refait ; un rattrapage en échec 
 dans `penelope doctor`.
 
 L'index plein texte seul (`messages_fts`) se refait depuis les lignes de `messages`, lignes
-scellées comprises, par `penelope store rebuild`. Depuis la 1.0.35, il porte aussi les
+scellées comprises, par `penelope store rebuild`. Depuis la 1.0.37, il porte aussi les
 appels d'outils de chaque message (#300) ; la migration qui l'introduit ne réécrit pas
 l'index : elle pose la clé `store.messages_fts_pending` dans `kv`, que la passe de
 maintenance du daemon lève au premier passage en refaisant l'index (événement
@@ -3554,7 +3554,7 @@ penelope approve <id> --effect done
 ## 11. Ce qui n'est pas encore branché
 
 Tout ce que décrit ce guide fonctionne. Restent : le mode webhook de Telegram
-(`telegram.mode = "webhook"`, refusé à la validation depuis la 1.0.35 ; les webhooks
+(`telegram.mode = "webhook"`, refusé à la validation depuis la 1.0.37 ; les webhooks
 entrants de Pénélope sont une autre porte, section « Webhooks entrants »),
 l'interprétation de `.penelope/deploy.toml` (le déploiement passe par les cibles `make`),
 et l'OCR des pages scannées d'un PDF qui a aussi du texte. Le gate de production d'un

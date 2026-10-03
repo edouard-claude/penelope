@@ -109,7 +109,7 @@ exclus), mesurées à la 1.0.22 :
 
 `penelope-cli` dépend de `penelope-hitl` depuis la 1.0.13 (#233) : la lecture des
 échantillons du juge (`penelope dataset export`) vit à côté de leur écriture. Elle dépend
-de `penelope-agenda-mcp` depuis la 1.0.35 (#295, décision
+de `penelope-agenda-mcp` depuis la 1.0.37 (#295, décision
 [0018](decisions/0018-agenda-caldav-en-lecture.md)) : le serveur d'agenda entre dans la
 release sans second binaire à emballer.
 
