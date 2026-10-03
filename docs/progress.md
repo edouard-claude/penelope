@@ -26,15 +26,17 @@ nom tiré du message (`tg_<chat>_<message>`) : une réception rejouée réécrit
 fichier. `voice_note` ajoute au message transcrit `(vocal enregistré : <chemin> ; …)`,
 comme la mention d'une photo ; la notion reste générique côté cœur (archtest vert), le
 nom vient de la passerelle. La transcription est inchangée : un original qui ne s'écrit
-pas est journalisé et le transcript part sans chemin ; une transcription en échec ou vide
-efface l'original, qu'aucun message ne citerait. **Purge et rétention** : la purge d'une
+pas est journalisé et le transcript part sans chemin. Une transcription en échec garde
+l'original, seule trace du vocal : le propriétaire voit l'erreur comme avant, et le tour
+reçoit `(message vocal, transcription échouée : …)` avec le chemin, pour que l'agent
+puisse la relancer ; une transcription vide l'efface, qu'aucun message ne citerait. **Purge et rétention** : la purge d'une
 session efface déjà les fichiers sous `{data}/media` cités par ses messages
 (`media_paths`), elle emporte donc l'original avec son message ; comme pour les photos, il
 n'existe pas de rétention par âge des médias (`retention.days` ne touche que la base), ce
 lot n'en ajoute pas. Rien dans le daemon. Tests : vocal reçu, fichier écrit à l'octet,
 chemin vu par le modèle, transcript intact, purge de la session qui l'efface, écriture
-impossible qui laisse passer la transcription, échec de transcription qui ne laisse pas
-d'orphelin. Doc : install-headless.md (« Messages vocaux »).
+impossible qui laisse passer la transcription, échec de transcription qui garde
+l'original et en transmet le chemin. Doc : install-headless.md (« Messages vocaux »).
 
 Closes #308.
 

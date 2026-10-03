@@ -296,29 +296,36 @@ impl TelegramGateway {
         )
         .inspect_err(|e| tracing::warn!(error = %e, "vocal reçu non conservé"))
         .ok();
-        // Sans message au journal, un original ne serait cité nulle part : la purge ne le
-        // trouverait jamais.
-        let forget = || {
-            if let Some(path) = &kept {
-                let _ = std::fs::remove_file(path);
-            }
-        };
         let text = match self.daemon.transcribe(audio, &filename, &session).await {
             Ok(t) => t,
             Err(e) => {
-                forget();
-                return self
-                    .reply(
-                        chat_id,
-                        topic_id,
-                        reply_to,
-                        &format!("🎙️ Transcription impossible : {e}"),
-                    )
-                    .await;
+                self.reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    &format!("🎙️ Transcription impossible : {e}"),
+                )
+                .await?;
+                // L'original est alors la seule trace du vocal : il part au tour avec son
+                // chemin, l'agent peut relancer la transcription, la purge le trouvera.
+                let Some(path) = &kept else {
+                    return Ok(());
+                };
+                let message = format!(
+                    "(message vocal, transcription échouée : {e}){}",
+                    penelope_app::media::voice_note(path)
+                );
+                self.daemon
+                    .enqueue_message(&session, &message, &origin, Some(format!("tg:{update_id}")))
+                    .await?;
+                return Ok(());
             }
         };
         if text.trim().is_empty() {
-            forget();
+            // Aucun message ne citerait l'original : la purge ne le trouverait jamais.
+            if let Some(path) = &kept {
+                let _ = std::fs::remove_file(path);
+            }
             return self
                 .reply(
                     chat_id,

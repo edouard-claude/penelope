@@ -1453,7 +1453,8 @@ transcription est compté avec le rôle `stt`. L'original est conservé tel quel
 `{data}/media/voice` (`tg_<chat>_<message>.ogg` pour un vocal) et son chemin suit le
 transcript, comme celui d'une photo : l'agent peut le transmettre à un outil (un
 échantillon de voix, par exemple). Il part avec la purge de sa session ; si l'écriture
-échoue, la transcription part quand même, sans chemin. Deux façons de transcrire.
+échoue, la transcription part quand même, sans chemin. Si c'est la transcription qui
+échoue, l'original reste et part au tour avec la mention « transcription échouée ». Deux façons de transcrire.
 
 Par OpenRouter, sans rien installer :
 

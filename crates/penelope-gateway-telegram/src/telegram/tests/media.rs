@@ -387,20 +387,39 @@ async fn a_voice_note_without_local_stt_explains_what_to_configure() {
     g.process_update(&updates::voice(61, OWNER, OWNER))
         .await
         .unwrap();
-    // Traitement détaché : on attend le message d'explication (issue #69).
+    // Traitement détaché : on attend le message d'explication (issue #69), puis le tour.
     for _ in 0..200 {
         tokio::time::sleep(Duration::from_millis(10)).await;
         g.flush_outbox().await.unwrap();
-        if !t.calls_to(tg::SEND_MESSAGE).await.is_empty() {
+        if !t.calls_to(tg::SEND_MESSAGE).await.is_empty()
+            && g.daemon.services.turns.pending_count().await.unwrap() > 0
+        {
             break;
         }
     }
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
     assert!(sent[0].contains("providers.local"), "{sent:?}");
-    assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
-    // Aucun message ne citerait l'original : il ne reste pas sur le disque (#308).
-    let kept = g.daemon.services.platform.dirs.data().join("media/voice");
-    assert!(!kept.join(format!("tg_{OWNER}_610.ogg")).exists());
+    // Issue #308 : l'original, seule trace du vocal, reste ; son chemin part au tour avec
+    // l'échec, pour que l'agent puisse relancer la transcription.
+    let kept = g
+        .daemon
+        .services
+        .platform
+        .dirs
+        .data()
+        .join(format!("media/voice/tg_{OWNER}_610.ogg"));
+    assert_eq!(std::fs::read(&kept).unwrap(), b"OggS");
+    assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 1);
+    let turn = g.daemon.services.turns.claim("t").await.unwrap().unwrap();
+    let text = turn.payload["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("(message vocal, transcription échouée"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("(vocal enregistré : {}", kept.display())),
+        "{text}"
+    );
 }
 
 #[test]
