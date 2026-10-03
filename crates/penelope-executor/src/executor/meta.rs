@@ -242,10 +242,12 @@ impl NativeToolExecutor {
             .mcp
             .as_ref()
             .ok_or_else(|| ToolError::Other("aucun serveur MCP n'est démarré".into()))?;
-        let v = gw
+        let mut v = gw
             .call_tool(qualified, args, self.elicitation_destination())
             .await
             .map_err(ToolError::Other)?;
+        // Une image ou un son du serveur est posé sur disque, le texte garde le chemin (#304).
+        crate::mcp_media::store(&mut v, &self.mcp_media_dir());
         let is_error = v.get("isError").and_then(|b| b.as_bool()).unwrap_or(false);
         let text = penelope_observe::injection::wrap_untrusted(qualified, &render_mcp_result(&v));
         Ok(ToolOutcome {

@@ -266,6 +266,27 @@ impl ToolExecutor for NativeToolExecutor {
         }
     }
 
+    fn shown_images(&self, value: &Value) -> Vec<PathBuf> {
+        crate::mcp_media::saved_images(value, &self.mcp_media_roots())
+    }
+
+    async fn model_images(
+        &self,
+        paths: &[PathBuf],
+        model_id: &str,
+        session_id: &str,
+    ) -> Vec<String> {
+        let mut urls = Vec::new();
+        for p in paths {
+            match penelope_app::media::model_data_url(&self.services, p, model_id, session_id).await
+            {
+                Ok(u) => urls.push(u),
+                Err(e) => tracing::warn!(error = %e, "image d'outil illisible"),
+            }
+        }
+        urls
+    }
+
     async fn precheck(&self, name: &str, args: &Value) -> Result<(), ToolError> {
         match self.validate_call(name, args).await {
             Ok(()) => Ok(()),

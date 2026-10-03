@@ -68,6 +68,25 @@ pub trait ToolExecutor {
         None
     }
 
+    /// Les images qu'un résultat a posées sur disque et que le modèle du tour peut voir
+    /// (un bloc `image` d'un outil MCP, issue #304). Par défaut : aucune.
+    fn shown_images(&self, value: &Value) -> Vec<std::path::PathBuf> {
+        let _ = value;
+        Vec::new()
+    }
+
+    /// Ces images en URI `data:` pour `model_id`, réduites comme une photo reçue (#242).
+    /// Une image illisible est passée. Par défaut : aucune.
+    async fn model_images(
+        &self,
+        paths: &[std::path::PathBuf],
+        model_id: &str,
+        session_id: &str,
+    ) -> Vec<String> {
+        let _ = (paths, model_id, session_id);
+        Vec::new()
+    }
+
     /// Risque et nom effectif d'un appel. Par défaut : le catalogue natif.
     async fn describe_call(&self, name: &str, args: &Value) -> CallInfo {
         let _ = args;

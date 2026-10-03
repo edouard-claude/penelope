@@ -254,6 +254,27 @@ impl NativeToolExecutor {
             .any(|root| self.configured_workspaces_at_start.contains(root))
     }
 
+    /// Où poser les médias d'un outil MCP (#304) : le répertoire du run pour une étape
+    /// de workflow, sinon celui de la session sous `{data}`.
+    fn mcp_media_dir(&self) -> PathBuf {
+        if self.env.in_workflow {
+            return self.workspace().join(crate::mcp_media::RUN_DIR);
+        }
+        let data = self.services.platform.dirs.data();
+        crate::mcp_media::session_dir(&data, &self.env.session_id)
+    }
+
+    /// Les racines où vit un média MCP de cet exécuteur ; rien d'autre n'est montré.
+    fn mcp_media_roots(&self) -> Vec<PathBuf> {
+        let mut roots = vec![crate::mcp_media::root(&self.services.platform.dirs.data())];
+        roots.extend(
+            self.workspaces()
+                .iter()
+                .map(|w| w.join(crate::mcp_media::RUN_DIR)),
+        );
+        roots
+    }
+
     fn workspace(&self) -> PathBuf {
         self.workspaces()
             .into_iter()

@@ -306,6 +306,20 @@ async fn a_voice_note_is_transcribed_quoted_then_answered() {
             .any(|m| m.text().contains("(message vocal transcrit) Rappelle-moi")),
         "le modèle reçoit le texte transcrit"
     );
+    // Issue #308 : l'original est conservé tel quel, son chemin suit le transcript.
+    let kept = g
+        .daemon
+        .services
+        .platform
+        .dirs
+        .data()
+        .join(format!("media/voice/tg_{OWNER}_600.ogg"));
+    assert_eq!(std::fs::read(&kept).unwrap(), b"OggS\x00fake-opus");
+    let note = format!("(vocal enregistré : {}", kept.display());
+    assert!(
+        chat.messages.iter().any(|m| m.text().contains(&note)),
+        "le modèle reçoit le chemin de l'original"
+    );
     let stt = g
         .daemon
         .services
@@ -314,6 +328,51 @@ async fn a_voice_note_is_transcribed_quoted_then_answered() {
         .await
         .unwrap();
     assert!(stt.iter().any(|r| r.key == "stt"), "{stt:?}");
+
+    // La purge de la session emporte l'original avec le message qui le cite.
+    let origin = Origin::Telegram {
+        chat_id: OWNER,
+        topic_id: None,
+        message_id: None,
+    };
+    let session = g.daemon.chat_session_for(&origin).await.unwrap();
+    penelope_ops::purge::session(&g.daemon.services, &session, "test")
+        .await
+        .unwrap();
+    assert!(!kept.exists(), "purgé avec sa session");
+}
+
+/// Issue #308 : un original qui ne s'écrit pas ne retient pas la transcription ; le
+/// message part sans chemin.
+#[tokio::test]
+async fn a_voice_note_that_cannot_be_kept_is_still_transcribed() {
+    let (_d, g, t, p) = gateway().await;
+    let media = g.daemon.services.platform.dirs.data().join("media");
+    std::fs::create_dir_all(&media).unwrap();
+    // Un fichier à la place du répertoire : l'écriture échoue.
+    std::fs::write(media.join("voice"), b"").unwrap();
+    t.set_file("v1", b"OggS\x00fake-opus").await;
+    p.set_transcript(Some("Note pour plus tard"));
+    p.reply(r#"{"complexity":"medium"}"#);
+    p.reply("Bien reçu.");
+    g.process_update(&updates::voice(62, OWNER, OWNER))
+        .await
+        .unwrap();
+    settle(&g).await;
+    drain(&g).await;
+
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(sent.iter().any(|m| m.contains("Bien reçu.")), "{sent:?}");
+    let chat = p.requests().last().unwrap().clone();
+    let user = chat
+        .messages
+        .iter()
+        .find(|m| {
+            m.text()
+                .contains("(message vocal transcrit) Note pour plus tard")
+        })
+        .expect("le transcript part");
+    assert!(!user.text().contains("vocal enregistré"), "{}", user.text());
 }
 
 #[tokio::test]
@@ -328,17 +387,39 @@ async fn a_voice_note_without_local_stt_explains_what_to_configure() {
     g.process_update(&updates::voice(61, OWNER, OWNER))
         .await
         .unwrap();
-    // Traitement détaché : on attend le message d'explication (issue #69).
+    // Traitement détaché : on attend le message d'explication (issue #69), puis le tour.
     for _ in 0..200 {
         tokio::time::sleep(Duration::from_millis(10)).await;
         g.flush_outbox().await.unwrap();
-        if !t.calls_to(tg::SEND_MESSAGE).await.is_empty() {
+        if !t.calls_to(tg::SEND_MESSAGE).await.is_empty()
+            && g.daemon.services.turns.pending_count().await.unwrap() > 0
+        {
             break;
         }
     }
     let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
     assert!(sent[0].contains("providers.local"), "{sent:?}");
-    assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 0);
+    // Issue #308 : l'original, seule trace du vocal, reste ; son chemin part au tour avec
+    // l'échec, pour que l'agent puisse relancer la transcription.
+    let kept = g
+        .daemon
+        .services
+        .platform
+        .dirs
+        .data()
+        .join(format!("media/voice/tg_{OWNER}_610.ogg"));
+    assert_eq!(std::fs::read(&kept).unwrap(), b"OggS");
+    assert_eq!(g.daemon.services.turns.pending_count().await.unwrap(), 1);
+    let turn = g.daemon.services.turns.claim("t").await.unwrap().unwrap();
+    let text = turn.payload["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("(message vocal, transcription échouée"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("(vocal enregistré : {}", kept.display())),
+        "{text}"
+    );
 }
 
 #[test]
