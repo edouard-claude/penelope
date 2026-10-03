@@ -168,12 +168,7 @@ impl Rpc {
             }
             method::SCHEDULE_ADD => {
                 let kind = penelope_workflow::TriggerKind::parse(&required_str(p, "kind")?)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook \
-                             ou mcp_subscribe"
-                        )
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!(UNKNOWN_KIND))?;
                 penelope_orchestrator::scheduler::create(
                     s,
                     kind,
@@ -262,3 +257,7 @@ async fn skill_install(d: &Core, p: &Value) -> anyhow::Result<Value> {
         "report": penelope_ops::skill_install::report(&src, &installed, &missing),
     }))
 }
+
+/// Refus d'un `kind` de planification inconnu : les sept déclencheurs (#293, #294).
+const UNKNOWN_KIND: &str =
+    "kind inconnu : cron, interval, mcp_poll, watch_file, event, webhook ou mcp_subscribe";
