@@ -100,6 +100,9 @@ pub struct Platform {
     pub images: Box<dyn ImageShrinker>,
     /// Où la carte de l'environnement regarde (#260) : la machine, ou rien en test.
     pub discovery: discover::Discovery,
+    /// Configuration ajoutée aux clones de `git_clone` (`-c clé=valeur`) : vide sur la
+    /// machine ; un rejeu y réécrit l'adresse d'un dépôt fictif vers un dépôt local (#305).
+    pub git_config: Vec<(String, String)>,
 }
 
 impl Platform {
@@ -119,6 +122,7 @@ impl Platform {
             processes,
             images: backend::image_shrinker(),
             discovery: discover::Discovery::of_this_machine(),
+            git_config: Vec::new(),
         })
     }
 
@@ -135,6 +139,7 @@ impl Platform {
             processes,
             images: Box::new(image::NoShrinker),
             discovery: discover::Discovery::none(),
+            git_config: Vec::new(),
             dirs,
         })
     }

@@ -173,7 +173,19 @@ impl Services {
 
     /// Variante de test : racine temporaire, secrets en mémoire, horloge fictive.
     pub async fn for_tests(root: PathBuf, clock: SharedClock) -> anyhow::Result<Services> {
-        let platform = Arc::new(Platform::for_tests(root.clone())?);
+        Self::for_tests_with(root, clock, |_| {}).await
+    }
+
+    /// [`Services::for_tests`] sur une plateforme retouchée avant d'être partagée : un
+    /// rejeu y pose la configuration git de ses dépôts fictifs (#305).
+    pub async fn for_tests_with(
+        root: PathBuf,
+        clock: SharedClock,
+        tweak: impl FnOnce(&mut Platform),
+    ) -> anyhow::Result<Services> {
+        let mut platform = Platform::for_tests(root.clone())?;
+        tweak(&mut platform);
+        let platform = Arc::new(platform);
         let store = Store::open(platform.dirs.db_path())?;
         // Sans revue de fond ni titre automatique par défaut : ils consommeraient les
         // réponses scriptées des tests.

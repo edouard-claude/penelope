@@ -40,6 +40,59 @@ l'original et en transmet le chemin. Doc : install-headless.md (« Messages voca
 
 Closes #308.
 
+**Binaire local d'abord : `git_clone` emprunte les identifiants de `gh` ou de `glab`
+connecté, et le message système le dit (#305).** Constat (run de plan vu dans #302) :
+`git_clone` sur un dépôt GitHub privé en https échouait faute d'identifiants, puis le
+modèle relançait `gh repo clone` dans le shell, qui réussissait. Un appel perdu, et un
+clone qui échappait aux contrôles de `git_clone` (`normalize_clone_url`, réutilisation du
+dépôt déjà présent, #160). L'inventaire savait pourtant `gh` connecté (#156) ; personne
+ne s'en servait pour décider. Principe validé par le propriétaire : comme sa bibliothèque
+de serveurs MCP, Pénélope a une bibliothèque de binaires locaux, et elle les privilégie,
+surtout authentifiés.
+
+Correctif. **`git_clone`** : sur une source `https://` dont l'hôte est github.com avec
+`gh` connecté, ou l'instance à laquelle `glab` est connecté, l'executor lit l'inventaire
+rangé (`machine.inventory`, sans sonde dans le tour) et passe à git
+`-c credential.https://<hôte>.helper=` puis `-c credential.https://<hôte>.helper=!gh auth
+git-credential` (resp. `glab`) : git demande le jeton à l'assistant par son entrée
+standard, rien ne le porte dans l'adresse, les arguments, l'environnement, le journal,
+l'audit ni la trace, ni dans `.git/config` du clone. Les contrôles restent ; le résultat
+dit `credentials: "gh"`. Un clone qui échoue avec l'assistant refait **une** sonde de
+connexion (`machine::recheck_login`), range l'état corrigé dans `kv` s'il a changé (la
+ligne T1 cesse de dire connecté ce qui ne l'est plus) et le dit dans l'erreur, sans
+nouvel essai. `ssh://` et `git@…` gardent les clés SSH. **Inventaire** : l'état
+d'authentification y était déjà, sans jeton (`account` : compte `gh`, instance `glab`,
+`joignable` pour Docker, sondes rafraîchies avec l'inventaire, jamais `--show-token`) ; un
+test le fixe sur une sortie de `gh auth status` qui affiche une ligne `Token:`. **Message
+système** : une phrase « Binaire local d'abord, serveur MCP ou service tiers ensuite : un
+binaire connecté porte déjà ses identifiants, ne les redemande pas (`git_clone` passe par
+ceux de `gh`). » ferme la ligne machine du bloc d'environnement dès qu'un binaire connu est
+présent ; la parenthèse ne nomme que les forges connectées. Elle ne dépend que des
+binaires et de leur connexion, comme le reste de la ligne : elle ne bouge pas d'un tour à
+l'autre, le préfixe reste stable. Aucun rejeu existant ne sème d'inventaire : aucun
+attendu ni test doré ne change. Pour les rejeux, `Platform` porte `git_config` (vide sur la machine) et
+`Services::for_tests_with` la retouche avant de la partager ; le harnais gagne
+`[[forge_repos]]`, un dépôt privé fictif servi par un dépôt nu local derrière une
+réécriture d'adresse. Doc : install-headless.md (« Binaire local d'abord », ligne
+machine).
+
+Tests : un faux hôte git en HTTP qui exige une authentification Basic, et un faux client
+de forge comme assistant : refus sans lui, clone réussi avec lui, jeton absent du
+résultat, de l'erreur et de la configuration du clone ; l'assistant scopé à l'hôte et
+seulement pour `https://` ; le choix du client (`gh` pour github.com, `glab` pour son
+instance, rien sans connexion) ; la règle présente une fois et fixe, absente sans binaire ;
+la nouvelle sonde qui corrige un inventaire périmé. Scénario de rejeu
+`outils-git-prive` : `gh` marqué connecté, dépôt privé fictif, `git_clone` par le
+raccourci `owner/repo` réussit en un appel (`credentials: gh`) sans repli shell, puis
+`fs_read` du README. Ce qui marchait déjà et continue : la réutilisation d'un clone
+présent, la validation des sources, les clones `file://`, la ligne T1 stable à la mise à
+jour d'un binaire, la remarque de `http_fetch` vers une forge connectée. Reste ouvert :
+les autres outils natifs ne consultent pas encore l'inventaire ; le scénario ne sollicite
+pas l'assistant lui-même (la forge fictive est locale), c'est le test de `penelope-tools`
+qui l'exerce.
+
+Closes #305.
+
 ### 1.0.37
 
 **Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les

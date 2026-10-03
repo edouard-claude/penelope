@@ -1659,6 +1659,8 @@ installés : git, ffmpeg, brew, node, jq · absents : yt-dlp
 Lance la commande installée plutôt que le réseau brut : GitHub (github.com, api.github.com)
 → `gh api …` ; GitLab → `glab` ; images et conteneurs → `docker`. Jamais `curl` ni
 `http_fetch` vers une forge dont le client est connecté […]
+Binaire local d'abord, serveur MCP ou service tiers ensuite : un binaire connecté porte
+déjà ses identifiants, ne les redemande pas (`git_clone` passe par ceux de `gh` et de `glab`).
 ```
 
 Deux règles tiennent cette ligne :
@@ -1673,6 +1675,17 @@ Deux règles tiennent cette ligne :
 En complément, un `http_fetch` vers une forge dont le client est connecté porte une
 remarque (« `gh` est installé et connecté : préfère `gh api …` »). Elle ne bloque rien :
 la lecture a déjà eu lieu, et `http_fetch` reste le bon outil pour une page publique.
+
+**Binaire local d'abord** (issue #305). `git_clone` sur une source `https://github.com/…`
+(ou sur l'instance à laquelle `glab` est connecté) emprunte les identifiants du client
+quand l'inventaire le dit connecté : git reçoit l'assistant `!gh auth git-credential`
+(resp. `glab`), limité à cet hôte, et lui demande le jeton par son entrée standard. Le
+jeton ne passe ni par l'adresse, ni par un argument, ni par une variable d'environnement :
+il n'apparaît ni dans le journal, ni dans l'audit, ni dans la trace. Tous les contrôles de
+`git_clone` restent (source validée, dépôt déjà présent réutilisé), et le résultat dit
+`credentials: gh`. Si le clone échoue malgré tout, l'outil refait une fois la sonde de
+connexion, corrige l'inventaire si le client est déconnecté depuis la dernière passe, et le
+dit au modèle sans réessayer. Une source `ssh://` ou `git@…` garde les clés SSH.
 
 Une skill qui déclare `requires: [bin:yt-dlp]` sur une machine sans `yt-dlp` est annotée
 dans `skill_search` et dans `skill_load` (`binaires_manquants`), et `doctor` le dit. Elle

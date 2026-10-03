@@ -91,6 +91,7 @@ scenario_cases! {
     outils_question => "outils-question",
     outils_canal => "outils-canal",
     outils_git => "outils-git",
+    outils_git_prive => "outils-git-prive",
     outils_planification => "outils-planification",
     outils_historique_resumes => "outils-historique-resumes",
     // Une commande lancée avant un résumé se retrouve par un mot de ses arguments (#300).

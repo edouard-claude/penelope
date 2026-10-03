@@ -1,0 +1,3 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "git_clone", "arguments": {"url": "exemple-prive/coffre", "dest": "coffre"}}]}}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "fs_read", "arguments": {"path": "coffre/README.md"}}]}}
+{"text": "Cloné en un appel avec les identifiants de `gh`. Le README dit : « Notes privées du projet. »"}
