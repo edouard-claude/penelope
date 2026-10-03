@@ -286,20 +286,46 @@ impl TelegramGateway {
         };
         let session = self.daemon.chat_session_for(&origin).await?;
         let filename = audio_filename(&path, file_name, mime_type);
+        // L'original reste à côté du transcript (issue #308) ; s'il ne s'écrit pas, la
+        // transcription part quand même, sans chemin.
+        let kept = penelope_app::media::save_voice(
+            &self.daemon.services,
+            &format!("tg_{chat_id}_{message_id}"),
+            &filename,
+            &audio,
+        )
+        .inspect_err(|e| tracing::warn!(error = %e, "vocal reçu non conservé"))
+        .ok();
         let text = match self.daemon.transcribe(audio, &filename, &session).await {
             Ok(t) => t,
             Err(e) => {
-                return self
-                    .reply(
-                        chat_id,
-                        topic_id,
-                        reply_to,
-                        &format!("🎙️ Transcription impossible : {e}"),
-                    )
-                    .await;
+                self.reply(
+                    chat_id,
+                    topic_id,
+                    reply_to,
+                    &format!("🎙️ Transcription impossible : {e}"),
+                )
+                .await?;
+                // L'original est alors la seule trace du vocal : il part au tour avec son
+                // chemin, l'agent peut relancer la transcription, la purge le trouvera.
+                let Some(path) = &kept else {
+                    return Ok(());
+                };
+                let message = format!(
+                    "(message vocal, transcription échouée : {e}){}",
+                    penelope_app::media::voice_note(path)
+                );
+                self.daemon
+                    .enqueue_message(&session, &message, &origin, Some(format!("tg:{update_id}")))
+                    .await?;
+                return Ok(());
             }
         };
         if text.trim().is_empty() {
+            // Aucun message ne citerait l'original : la purge ne le trouverait jamais.
+            if let Some(path) = &kept {
+                let _ = std::fs::remove_file(path);
+            }
             return self
                 .reply(
                     chat_id,
@@ -316,20 +342,19 @@ impl TelegramGateway {
             .join("\n");
         self.reply(chat_id, topic_id, reply_to, &format!("🎙️\n{quoted}"))
             .await?;
-        self.daemon
-            .enqueue_message(
-                &session,
-                &if self.daemon.services.config.config().voice.reply_in_kind {
-                    format!(
-                        "(message vocal transcrit ; réponds en vocal avec `send_voice` si la \
-                         réponse s'y prête) {text}"
-                    )
-                } else {
-                    format!("(message vocal transcrit) {text}")
-                },
-                &origin,
-                Some(format!("tg:{update_id}")),
+        let mut message = if self.daemon.services.config.config().voice.reply_in_kind {
+            format!(
+                "(message vocal transcrit ; réponds en vocal avec `send_voice` si la \
+                 réponse s'y prête) {text}"
             )
+        } else {
+            format!("(message vocal transcrit) {text}")
+        };
+        if let Some(path) = &kept {
+            message.push_str(&penelope_app::media::voice_note(path));
+        }
+        self.daemon
+            .enqueue_message(&session, &message, &origin, Some(format!("tg:{update_id}")))
             .await?;
         Ok(())
     }

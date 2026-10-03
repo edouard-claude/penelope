@@ -12,6 +12,34 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.38
+
+**Vocaux Telegram : l'original est conservé et son chemin suit le transcript (#308).**
+Constat : à la réception d'un vocal, la passerelle téléchargeait les octets, les confiait
+à la transcription et les oubliait ; l'agent ne recevait que le texte et ne pouvait pas
+réutiliser l'audio, par exemple pour importer dans un serveur MCP un échantillon de voix
+envoyé par le propriétaire, sans lui demander de le renvoyer comme document.
+
+Correctif. `penelope_app::media::save_voice` range l'original sous `{data}/media/voice`, au
+format reçu (OGG/Opus pour un vocal, l'extension d'origine pour un fichier audio), sous un
+nom tiré du message (`tg_<chat>_<message>`) : une réception rejouée réécrit le même
+fichier. `voice_note` ajoute au message transcrit `(vocal enregistré : <chemin> ; …)`,
+comme la mention d'une photo ; la notion reste générique côté cœur (archtest vert), le
+nom vient de la passerelle. La transcription est inchangée : un original qui ne s'écrit
+pas est journalisé et le transcript part sans chemin. Une transcription en échec garde
+l'original, seule trace du vocal : le propriétaire voit l'erreur comme avant, et le tour
+reçoit `(message vocal, transcription échouée : …)` avec le chemin, pour que l'agent
+puisse la relancer ; une transcription vide l'efface, qu'aucun message ne citerait. **Purge et rétention** : la purge d'une
+session efface déjà les fichiers sous `{data}/media` cités par ses messages
+(`media_paths`), elle emporte donc l'original avec son message ; comme pour les photos, il
+n'existe pas de rétention par âge des médias (`retention.days` ne touche que la base), ce
+lot n'en ajoute pas. Rien dans le daemon. Tests : vocal reçu, fichier écrit à l'octet,
+chemin vu par le modèle, transcript intact, purge de la session qui l'efface, écriture
+impossible qui laisse passer la transcription, échec de transcription qui garde
+l'original et en transmet le chemin. Doc : install-headless.md (« Messages vocaux »).
+
+Closes #308.
+
 ### 1.0.37
 
 **Agenda : un connecteur CalDAV en lecture, serveur MCP livré dans le binaire, et les
