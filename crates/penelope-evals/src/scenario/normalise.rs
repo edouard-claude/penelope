@@ -199,11 +199,9 @@ impl Normaliser {
                         Value::String("{{action}}".into())
                     } else if DURATION_KEYS.contains(&k.as_str()) && v.is_number() {
                         Value::String("{{ms}}".into())
-                    } else if unstable_size && SIZE_KEYS.contains(&k.as_str()) && v.is_number() {
-                        Value::String("{{tokens}}".into())
-                    } else if self.unstable_compaction
-                        && COMPACTION_KEYS.contains(&k.as_str())
-                        && v.is_number()
+                    } else if v.is_number()
+                        && ((unstable_size && SIZE_KEYS.contains(&k.as_str()))
+                            || (self.unstable_compaction && COMPACTION_KEYS.contains(&k.as_str())))
                     {
                         Value::String("{{tokens}}".into())
                     } else if !definition
