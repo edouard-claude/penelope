@@ -48,6 +48,10 @@ async fn run(model: &str) -> (Vec<ChatRequest>, Vec<ChatMessage>) {
         seeing,
         penelope_llm::catalog::ModelInfo::minimal("t/texte", "t", 32_000),
     ]);
+    // Un modèle Codex, tel que le catalogue de son backend le décrit.
+    s.catalog.upsert(penelope_llm::codex::fallback_models(
+        &["gpt-6-astra".into()],
+    ));
     let sid = session(&s).await;
     p.push(Scripted::ToolCalls(
         String::new(),
@@ -125,4 +129,15 @@ async fn a_blind_model_only_gets_the_path() {
         "{}",
         tool.text()
     );
+}
+
+/// #304 : le modèle principal de l'instance est Codex ; il voit la capture comme les
+/// autres (son catalogue annonce les images).
+#[tokio::test]
+async fn a_codex_model_is_shown_the_tool_image() {
+    let (requests, history) = run("codex:gpt-6-astra").await;
+    let last = requests[1].messages.last().unwrap();
+    assert_eq!(last.role, Role::User);
+    assert_eq!(images(last), 1);
+    assert_eq!(history.iter().map(images).sum::<usize>(), 0);
 }

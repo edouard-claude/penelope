@@ -35,7 +35,9 @@ valeur, le texte, le ledger ni l'historique. Si le modèle du tour lit les image
 le catalogue, comme une photo Telegram), la boucle les lui montre à l'appel qui suit le
 résultat, dans la copie envoyée seulement, en un message final marqué contenu observé :
 l'historique et le préfixe ne bougent pas, et une image refusée par le fournisseur suit
-le chemin de #231. L'URI passe par `model_data_url`, la réduction des photos reçues
+le chemin de #231. Codex, modèle principal de l'instance, la reçoit comme les autres :
+son catalogue annonce les images et le message part en `input_image` après le
+`function_call_output` (testé sur le corps Responses et dans la boucle). L'URI passe par `model_data_url`, la réduction des photos reçues
 (#242), via deux méthodes du port `ToolExecutor` (`shown_images`, `model_images`) : la
 boucle ne connaît ni le disque ni MCP. Seul l'exécuteur écrit le champ `saved` ; celui
 qu'un serveur glisserait est retiré, et un chemin hors des dossiers de médias n'est jamais
@@ -53,8 +55,8 @@ serveur retiré et chemin hors racine refusé ; appel MCP de bout en bout hors w
 l'appel suivant et une seule fois, l'historique n'en garde que le chemin, un modèle sans
 vision n'a que le chemin ; rétention des vieux médias seulement. Ce qui marchait déjà et
 continue : les photos Telegram et `image_inspect`, les blocs texte et ressource, la relève
-`mcp_poll` et l'agenda du digest. Reste ouvert : l'audio n'est pas transmis au modèle (le
-chemin suffit à un outil de transcription), et les blocs binaires d'une ressource
+`mcp_poll` et l'agenda du digest. Assumé : un audio n'est jamais transmis au modèle, seul son
+chemin l'est (un outil de transcription le relit). Reste ouvert : les blocs binaires d'une ressource
 (`mcp_resource_read`) restent une mention.
 
 Closes #304.
