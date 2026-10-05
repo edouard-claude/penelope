@@ -525,6 +525,9 @@ impl LlmError {
                         429 => LlmErrorKind::RateLimited,
                         400 | 422 => LlmErrorKind::BadRequest,
                         s if s >= 500 => LlmErrorKind::Transient,
+                        _ if signals_overload(error_type.as_deref(), &lower) => {
+                            LlmErrorKind::Transient
+                        }
                         _ => LlmErrorKind::Other,
                     }
                 }
@@ -541,14 +544,18 @@ impl LlmError {
 
     /// Erreur survenue au milieu d'un flux (HTTP 200 déjà envoyé).
     pub fn mid_stream(message: String, retryable: bool, error_type: Option<String>) -> Self {
+        // Une surcharge dite par le seul message (code absent ou inconnu) reste une panne
+        // passagère : en `Other`, le tour abandonnait sans nouvel essai ni repli (#311).
         let kind = error_type
             .as_deref()
             .and_then(kind_for_error_type)
-            .unwrap_or(if retryable {
-                LlmErrorKind::Transient
-            } else {
-                LlmErrorKind::Other
-            });
+            .unwrap_or(
+                if retryable || signals_overload(error_type.as_deref(), &message) {
+                    LlmErrorKind::Transient
+                } else {
+                    LlmErrorKind::Other
+                },
+            );
         LlmError {
             kind,
             message,
@@ -588,6 +595,24 @@ pub fn kind_for_error_type(t: &str) -> Option<LlmErrorKind> {
         | "image_download_failed" => LlmErrorKind::AttachmentRejected,
         _ => return None,
     })
+}
+
+/// Le fournisseur dit être surchargé, par son code ou par son seul message : « Our
+/// servers are currently overloaded. Please try again later. » arrivait chez Codex sans
+/// code connu (#311). Une surcharge se réessaie, puis passe au repli.
+pub fn signals_overload(code: Option<&str>, message: &str) -> bool {
+    let code = code.unwrap_or_default().to_lowercase();
+    let message = message.to_lowercase();
+    code.contains("overload")
+        || code.contains("capacity")
+        || [
+            "overloaded",
+            "try again later",
+            "at capacity",
+            "over capacity",
+        ]
+        .iter()
+        .any(|m| message.contains(m))
 }
 
 pub type Result<T, E = LlmError> = std::result::Result<T, E>;
@@ -715,5 +740,28 @@ mod tests {
         let e = LlmError::mid_stream("boom".into(), true, None);
         assert_eq!(e.kind, LlmErrorKind::Transient);
         assert_eq!(FinishReason::parse("error"), FinishReason::Error);
+    }
+
+    /// #311 : la surcharge se reconnaît au code comme au seul message, jamais `Other`.
+    #[test]
+    fn an_overload_is_transient_whatever_says_it() {
+        let msg = "Our servers are currently overloaded. Please try again later.";
+        for code in [None, Some("server_is_overloaded"), Some("code_inconnu")] {
+            let e = LlmError::mid_stream(msg.into(), false, code.map(String::from));
+            assert_eq!(e.kind, LlmErrorKind::Transient, "{code:?}");
+        }
+        let e = LlmError::mid_stream("boom".into(), false, Some("server_is_overloaded".into()));
+        assert_eq!(e.kind, LlmErrorKind::Transient);
+        let e = LlmError::mid_stream("Selected model is at capacity".into(), false, None);
+        assert_eq!(e.kind, LlmErrorKind::Transient);
+        // Ce qui n'en est pas une reste où il était.
+        let e = LlmError::mid_stream("invalid tool schema".into(), false, None);
+        assert_eq!(e.kind, LlmErrorKind::Other);
+        let e = LlmError::from_status(409, msg);
+        assert_eq!(e.kind, LlmErrorKind::Transient);
+        let e = LlmError::from_status(429, msg);
+        assert_eq!(e.kind, LlmErrorKind::RateLimited);
+        let e = LlmError::from_status(400, msg);
+        assert_eq!(e.kind, LlmErrorKind::BadRequest);
     }
 }

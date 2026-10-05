@@ -174,30 +174,18 @@ impl EventAccumulator for ResponsesAccumulator {
                     });
                 }
             }
-            "response.failed" => {
+            // `error` : l'événement d'erreur nu de l'API Responses, porteur des mêmes
+            // champs ; ignoré, il ne laissait qu'une fermeture sans cause.
+            "response.failed" | "error" => {
                 self.completed = true;
                 let err = v
                     .get("response")
                     .and_then(|r| r.get("error"))
-                    .or_else(|| v.get("error"));
-                let error_type = err
-                    .and_then(|e| e.get("code").or_else(|| e.get("type")))
-                    .and_then(|c| c.as_str())
-                    .map(String::from);
-                let message = err
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("le backend Codex a abandonné la réponse")
-                    .to_string();
-                let retryable = matches!(
-                    error_type.as_deref(),
-                    Some("rate_limit_exceeded" | "slow_down" | "server_error" | "overloaded")
-                );
-                out.push(StreamChunk::Error {
-                    message,
-                    retryable,
-                    error_type,
-                });
+                    .or_else(|| v.get("error"))
+                    .filter(|e| e.is_object())
+                    .or((kind == "error").then_some(&v))
+                    .unwrap_or(&Value::Null);
+                out.push(failure_chunk(kind, err));
             }
             "codex.rate_limits" => {
                 let q = quota_from_event(&v, now_ms());
@@ -226,6 +214,43 @@ impl EventAccumulator for ResponsesAccumulator {
             retryable: true,
             error_type: None,
         }]
+    }
+}
+
+/// L'erreur d'un flux Codex en échec. Le code brut est journalisé (sans rien de la
+/// requête) : celui de la surcharge du 05/10 n'avait laissé aucune trace (#311).
+fn failure_chunk(event: &str, err: &Value) -> StreamChunk {
+    let field = |k: &str| err.get(k).and_then(|c| c.as_str()).map(String::from);
+    // L'événement `error` nu porte son propre nom en `type` : ce n'est pas une cause.
+    let (code, kind) = (field("code"), field("type").filter(|t| t != event));
+    let message =
+        field("message").unwrap_or_else(|| "le backend Codex a abandonné la réponse".to_string());
+    let raw = code.clone().or_else(|| kind.clone());
+    // Le code ou le seul message disent la surcharge : panne passagère, nouvel essai puis
+    // repli, quel que soit le libellé du code (#311).
+    let overloaded = signals_overload(raw.as_deref(), &message);
+    let retryable = overloaded
+        || matches!(
+            raw.as_deref(),
+            Some("rate_limit_exceeded" | "slow_down" | "server_error" | "overloaded")
+        );
+    tracing::warn!(
+        event,
+        code = code.as_deref().unwrap_or("-"),
+        r#type = kind.as_deref().unwrap_or("-"),
+        overloaded,
+        retryable,
+        "flux Codex en échec"
+    );
+    let error_type = if overloaded {
+        Some("provider_overloaded".to_string())
+    } else {
+        raw
+    };
+    StreamChunk::Error {
+        message,
+        retryable,
+        error_type,
     }
 }
 
