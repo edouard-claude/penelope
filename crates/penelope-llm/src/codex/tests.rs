@@ -114,6 +114,50 @@ fn request(model: &str) -> ChatRequest {
     }
 }
 
+/// #313 : le `User-Agent` reproduit `get_codex_user_agent` d'openai/codex@7f892275
+/// (`codex-rs/login/src/auth/default_client.rs`), dont le test macOS attend
+/// `^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$`.
+#[test]
+fn user_agent_matches_codex_cli() {
+    let p = CodexProvider::new(
+        CodexOptions {
+            client_version: "0.160.0".into(),
+            os: ClientOs {
+                name: "Mac OS".into(),
+                version: "27.0.0".into(),
+                arch: "arm64".into(),
+            },
+            ..CodexOptions::default()
+        },
+        Arc::new(FakeTokens {
+            refreshes: Default::default(),
+        }),
+        Catalog::new(),
+        "inst-1",
+    )
+    .unwrap();
+    assert_eq!(
+        p.user_agent(),
+        "codex_cli_rs/0.160.0 (Mac OS 27.0.0; arm64) unknown"
+    );
+}
+
+/// #313 : `auto` (ou vide) prend la version du Codex CLI installé, sinon la valeur
+/// intégrée ; une valeur posée gagne. Le retard se compte en versions mineures.
+#[test]
+fn client_version_follows_the_installed_cli() {
+    assert_eq!(resolve_client_version("auto", Some("0.160.0")), "0.160.0");
+    assert_eq!(resolve_client_version("", None), DEFAULT_CLIENT_VERSION);
+    assert_eq!(
+        resolve_client_version("0.155.0", Some("0.160.0")),
+        "0.155.0"
+    );
+    assert_eq!(minor_versions_behind("0.104.0", "0.155.0"), Some(51));
+    assert_eq!(minor_versions_behind("0.160.0", "0.155.0"), Some(0));
+    assert_eq!(minor_versions_behind("0.160.0", "1.0.0"), Some(u64::MAX));
+    assert_eq!(minor_versions_behind("dev", "0.155.0"), None);
+}
+
 /// #142 : la **même** identité part sur `/responses` et sur `/models` — une identité
 /// incohérente vaut des heures de « servers overloaded ».
 #[tokio::test]
@@ -146,7 +190,11 @@ async fn every_request_carries_the_same_identity() {
         assert!(lower.contains("authorization: bearer jeton-1"), "{r}");
     }
     // Le catalogue est demandé pour la version de client annoncée.
-    assert!(reqs[1].contains("client_version=0.104.0"), "{}", reqs[1]);
+    assert!(
+        reqs[1].contains(&format!("client_version={DEFAULT_CLIENT_VERSION}")),
+        "{}",
+        reqs[1]
+    );
     // La session nomme le cache de préfixe, en corps comme en en-tête.
     assert!(
         reqs[0].to_lowercase().contains("session-id: s-42"),

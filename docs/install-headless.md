@@ -321,7 +321,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `providers.openrouter.api_key` | `"${SECRET:openrouter_api_key}"` | Clé d'API, par référence au magasin de secrets. |
 | `providers.openrouter.base_url` | `"https://openrouter.ai/api/v1"` | Adresse de l'API OpenRouter. |
-| `providers.openrouter.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de connexion, limite de débit) : attente de 1 s, 2 s, 4 s. 0 : aucune. |
+| `providers.openrouter.request_retries` | `4` | Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de connexion, limite de débit : 1 s, 2 s, 4 s, 8 s) et pendant le flux avant tout texte (2 s, 4 s, 8 s, 16 s), avant le repli ; un modèle `codex:` suit `providers.codex.request_retries`. 0 : aucune. |
 | `providers.openrouter.stream_idle_timeout` | `"120s"` | Silence toléré **pendant** un flux : au-delà, le flux est coupé et relancé. Tout octet reçu, commentaire compris, remet le compteur à zéro. |
 | `providers.openrouter.catalog_refresh` | `"6h"` | Période de rechargement du catalogue de modèles. |
 | `providers.openrouter.referer` | `"https://github.com/edouard-claude/penelope"` | Attribution (`HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories`). |
@@ -349,9 +349,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.codex.issuer` | `"https://auth.openai.com"` | Serveur d'autorisation du compte ChatGPT. |
 | `providers.codex.client_id` | `"app_EMoamEEZ73f0CkXaXp7hrann"` | Identifiant du client OAuth, celui de Codex CLI. |
 | `providers.codex.originator` | `"codex_cli_rs"` | En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer sans raison donne un 403 sur toutes les requêtes. |
-| `providers.codex.client_version` | `"0.149.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent : le catalogue et certains identifiants de modèle en dépendent, et une version trop ancienne en fait disparaître (issue #148). |
+| `providers.codex.client_version` | `"auto"` | Version de client annoncée (`User-Agent`, `?client_version=`). `auto` : celle du Codex CLI installé (PATH ou application ChatGPT), sinon la dernière connue à la compilation ; une version posée l'épingle. Le catalogue et certains identifiants de modèle en dépendent (issue #148), et une identité en retard coïncide avec des surcharges (issue #313) : `doctor` signale un retard de plus de dix versions. |
 | `providers.codex.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
-| `providers.codex.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429 de quota n'est jamais rejoué. |
+| `providers.codex.request_retries` | `5` | Nouvelles tentatives d'un modèle `codex:` sur erreur transitoire, avant le flux (5xx, coupure : 1 s, 2 s, 4 s…) comme pendant le flux avant tout texte (« servers overloaded » : 2 s, 4 s, 8 s, 16 s), avant le repli. 5 comme Codex CLI (`stream_max_retries`). Un 429 de quota n'est jamais rejoué. 0 : aucune. |
 | `providers.codex.reasoning_summary` | `"auto"` | Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide). |
 | `providers.codex.verbosity` | `"medium"` | Verbosité du texte rendu (`low`, `medium`, `high`). |
 | `providers.codex.quota_alert_ratio` | `0.8` | Part de la fenêtre de quota qui déclenche une alerte (0 à 1). |
@@ -701,7 +701,9 @@ penelope model set main openrouter:anthropic/claude-sonnet-4.5
 ```
 
 La modification est écrite dans `config.toml` puis publiée à chaud ; `penelope config
-status` montre que chaque sous-système a pris la nouvelle génération.
+status` montre que chaque sous-système a pris la nouvelle génération. Un `config.toml`
+édité à la main se relit par `penelope config reload`, qui reconstruit aussi les
+fournisseurs : `[providers.*]`, dont `[providers.codex]`, vaut dès le tour suivant (#313).
 
 En fichier, les trois tables correspondantes :
 

@@ -90,15 +90,18 @@ pub struct Codex {
     /// En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer
     /// sans raison donne un 403 sur toutes les requêtes.
     pub originator: String,
-    /// Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à
-    /// jour à la main quand le backend exige plus récent : le catalogue et certains
-    /// identifiants de modèle en dépendent, et une version trop ancienne en fait
-    /// disparaître (issue #148).
+    /// Version de client annoncée (`User-Agent`, `?client_version=`). `auto` : celle du
+    /// Codex CLI installé (PATH ou application ChatGPT), sinon la dernière connue à la
+    /// compilation ; une version posée l'épingle. Le catalogue et certains identifiants de
+    /// modèle en dépendent (issue #148), et une identité en retard coïncide avec des
+    /// surcharges (issue #313) : `doctor` signale un retard de plus de dix versions.
     pub client_version: String,
     /// Silence toléré pendant un flux, comme pour OpenRouter.
     pub stream_idle_timeout: String,
-    /// Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429
-    /// de quota n'est jamais rejoué.
+    /// Nouvelles tentatives d'un modèle `codex:` sur erreur transitoire, avant le flux
+    /// (5xx, coupure : 1 s, 2 s, 4 s…) comme pendant le flux avant tout texte
+    /// (« servers overloaded » : 2 s, 4 s, 8 s, 16 s), avant le repli. 5 comme Codex CLI
+    /// (`stream_max_retries`). Un 429 de quota n'est jamais rejoué. 0 : aucune.
     pub request_retries: u32,
     /// Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide).
     pub reasoning_summary: String,
@@ -121,9 +124,9 @@ impl Default for Codex {
             issuer: "https://auth.openai.com".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
             originator: "codex_cli_rs".into(),
-            client_version: "0.149.0".into(),
+            client_version: "auto".into(),
             stream_idle_timeout: "120s".into(),
-            request_retries: 3,
+            request_retries: 5,
             reasoning_summary: "auto".into(),
             verbosity: "medium".into(),
             quota_alert_ratio: 0.8,
@@ -148,7 +151,9 @@ pub struct OpenRouter {
     /// Adresse de l'API OpenRouter.
     pub base_url: String,
     /// Nouvelles tentatives sur erreur transitoire **avant** le flux (5xx, délai de
-    /// connexion, limite de débit) : attente de 1 s, 2 s, 4 s. 0 : aucune.
+    /// connexion, limite de débit : 1 s, 2 s, 4 s, 8 s) et pendant le flux avant tout
+    /// texte (2 s, 4 s, 8 s, 16 s), avant le repli ; un modèle `codex:` suit
+    /// `providers.codex.request_retries`. 0 : aucune.
     pub request_retries: u32,
     /// Silence toléré **pendant** un flux : au-delà, le flux est coupé et relancé. Tout
     /// octet reçu, commentaire compris, remet le compteur à zéro.
@@ -171,7 +176,7 @@ impl Default for OpenRouter {
         OpenRouter {
             api_key: "${SECRET:openrouter_api_key}".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
-            request_retries: 3,
+            request_retries: 4,
             stream_idle_timeout: "120s".into(),
             catalog_refresh: "6h".into(),
             referer: "https://github.com/edouard-claude/penelope".into(),

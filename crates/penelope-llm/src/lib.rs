@@ -16,7 +16,7 @@ pub mod tokens;
 pub mod types;
 
 pub use catalog::{Catalog, ModelInfo};
-pub use codex::{CodexOptions, CodexProvider, CodexToken, Quota, QuotaSink, TokenSource};
+pub use codex::{ClientOs, CodexOptions, CodexProvider, CodexToken, Quota, QuotaSink, TokenSource};
 pub use provider::{
     CancelToken, ChunkStream, OpenAiCompatProvider, OpenRouterProvider, Provider, ProviderSet,
     collect_stream, collect_stream_observed,
@@ -87,7 +87,11 @@ pub fn build_providers(
                     CodexOptions {
                         base_url: c.base_url.clone(),
                         originator: c.originator.clone(),
-                        client_version: c.client_version.clone(),
+                        client_version: codex::resolve_client_version(
+                            &c.client_version,
+                            access.cli_version.as_deref(),
+                        ),
+                        os: access.os,
                         reasoning_summary: c.reasoning_summary.clone(),
                         verbosity: c.verbosity.clone(),
                         stream_idle: idle_of(&c.stream_idle_timeout),
@@ -138,6 +142,11 @@ pub struct CodexAccess {
     pub installation_id: String,
     /// Où publier les jauges du plan lues à chaque réponse.
     pub quota_sink: Option<std::sync::Arc<dyn QuotaSink>>,
+    /// Système annoncé dans le `User-Agent`, lu par la plateforme (#313).
+    pub os: codex::ClientOs,
+    /// Version du Codex CLI installé, si la découverte en a trouvé un : elle remplace
+    /// `client_version = "auto"` (#313).
+    pub cli_version: Option<String>,
 }
 
 /// Préférences de provider OpenRouter (`provider`). Seuls les écarts au comportement
@@ -303,6 +312,8 @@ mod tests {
             tokens: std::sync::Arc::new(NoTokens),
             installation_id: "inst-1".into(),
             quota_sink: None,
+            os: Default::default(),
+            cli_version: None,
         };
         let set = build_providers(&cfg, &secrets, Catalog::new(), Some(access)).unwrap();
         assert!(set.openrouter.is_none());

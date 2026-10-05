@@ -75,7 +75,7 @@ impl AgentLoop {
             &spec.model_id,
             &spec.fallback_models,
             self.provider.name() == "openrouter",
-            s.config.config().providers.openrouter.request_retries,
+            retry_budget(&s.config.config(), &spec.model_id),
         );
 
         loop {
@@ -251,6 +251,7 @@ impl AgentLoop {
                                 model = %model_id,
                                 error = %e,
                                 secs,
+                                attempt = plan.stream_retries(),
                                 "flux interrompu avant tout texte : nouvel essai"
                             );
                             if !sleep_unless_cancelled(&spec.cancel, secs).await {
@@ -271,7 +272,13 @@ impl AgentLoop {
                             failure.message = stream_cut_message(&failure.message, &text);
                             return Ok(Err(failure));
                         }
-                        RetryAction::GiveUp => return Ok(Err(CallFailure::from_llm(&e))),
+                        RetryAction::GiveUp => {
+                            return Ok(Err(with_attempts(
+                                CallFailure::from_llm(&e),
+                                plan.retries() + plan.stream_retries(),
+                                plan.waited_secs(),
+                            )));
+                        }
                     }
                 }
             }
@@ -294,6 +301,15 @@ impl AgentLoop {
                 self.provider.clone()
             }
         }
+    }
+}
+
+/// Budget de tentatives : celui du fournisseur du modèle principal (#313) ;
+/// `providers.codex.request_retries` n'était lu nulle part.
+fn retry_budget(cfg: &penelope_kernel::config::Config, model_id: &str) -> u32 {
+    match penelope_llm::catalog::provider_of(model_id) {
+        "codex" => cfg.providers.codex.request_retries,
+        _ => cfg.providers.openrouter.request_retries,
     }
 }
 

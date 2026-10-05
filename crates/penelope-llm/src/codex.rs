@@ -49,12 +49,66 @@ pub trait TokenSource: Send + Sync {
     async fn refreshed(&self) -> Result<CodexToken>;
 }
 
+/// Version annoncée quand aucun Codex CLI n'est installé et que la configuration dit
+/// `auto` : la dernière publiée (`rust-v0.160.0`, 2026-10-01) au moment du #313.
+pub const DEFAULT_CLIENT_VERSION: &str = "0.160.0";
+
+/// Version annoncée : celle de la configuration si elle est posée, sinon celle du Codex CLI
+/// installé, sinon [`DEFAULT_CLIENT_VERSION`] (#313).
+pub fn resolve_client_version(configured: &str, detected: Option<&str>) -> String {
+    match configured.trim() {
+        "" | "auto" => detected.unwrap_or(DEFAULT_CLIENT_VERSION).to_string(),
+        v => v.to_string(),
+    }
+}
+
+/// Retard de la version annoncée sur celle du Codex CLI installé, en versions mineures
+/// (`0.104.0` contre `0.155.0` : 51). `None` si l'une n'est pas lisible.
+pub fn minor_versions_behind(announced: &str, installed: &str) -> Option<u64> {
+    let minor = |v: &str| -> Option<(u64, u64)> {
+        let mut it = v.trim().split('.');
+        Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+    };
+    let (a, i) = (minor(announced)?, minor(installed)?);
+    Some(if a.0 < i.0 {
+        u64::MAX
+    } else if a.0 > i.0 {
+        0
+    } else {
+        i.1.saturating_sub(a.1)
+    })
+}
+
+/// Le système annoncé dans le `User-Agent`, lu par la plateforme au démarrage (#313) :
+/// ce module n'y touche pas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientOs {
+    /// Nom à la façon d'`os_info` : `Mac OS`, `Ubuntu`.
+    pub name: String,
+    /// Trois nombres : `27.0.0`.
+    pub version: String,
+    /// À la façon de `uname -m` : `arm64` sur un Mac Apple.
+    pub arch: String,
+}
+
+impl Default for ClientOs {
+    fn default() -> Self {
+        ClientOs {
+            name: "Mac OS".into(),
+            version: "Unknown".into(),
+            arch: "arm64".into(),
+        }
+    }
+}
+
 /// Ce que le fournisseur doit savoir de la configuration (`[providers.codex]`).
 #[derive(Debug, Clone)]
 pub struct CodexOptions {
     pub base_url: String,
     pub originator: String,
+    /// Version résolue ([`resolve_client_version`]), jamais `auto`.
     pub client_version: String,
+    pub os: ClientOs,
     pub reasoning_summary: String,
     pub verbosity: String,
     pub stream_idle: std::time::Duration,
@@ -69,7 +123,8 @@ impl Default for CodexOptions {
         CodexOptions {
             base_url: "https://chatgpt.com/backend-api/codex".into(),
             originator: "codex_cli_rs".into(),
-            client_version: "0.104.0".into(),
+            client_version: DEFAULT_CLIENT_VERSION.into(),
+            os: ClientOs::default(),
             reasoning_summary: "auto".into(),
             verbosity: "medium".into(),
             stream_idle: crate::provider::DEFAULT_STREAM_IDLE,
@@ -258,16 +313,20 @@ impl CodexProvider {
         }
     }
 
-    /// `User-Agent` du client Codex, OS et architecture compris.
-    fn user_agent(&self) -> String {
-        format!(
-            "{}/{} ({} {}; {})",
-            self.opts.originator,
-            self.opts.client_version,
-            std::env::consts::OS,
-            os_version(),
-            std::env::consts::ARCH
-        )
+    /// `User-Agent` du client Codex, au format de `get_codex_user_agent`
+    /// (`codex-rs/login/src/auth/default_client.rs`, openai/codex@7f892275) :
+    /// `codex_cli_rs/0.160.0 (Mac OS 27.0.0; arm64) unknown`. Le dernier jeton est le
+    /// terminal ; un daemon lancé par launchd n'en a pas, Codex CLI y écrit `unknown`.
+    pub fn user_agent(&self) -> String {
+        let os = &self.opts.os;
+        let ua = format!(
+            "{}/{} ({} {}; {}) unknown",
+            self.opts.originator, self.opts.client_version, os.name, os.version, os.arch
+        );
+        // Même assainissement que Codex CLI : un caractère hors ASCII imprimable devient `_`.
+        ua.chars()
+            .map(|c| if matches!(c, ' '..='~') { c } else { '_' })
+            .collect()
     }
 
     /// En-têtes communs à toutes les requêtes : l'identité doit être **la même** partout.
@@ -308,12 +367,6 @@ impl CodexProvider {
         }
         r.send().await.map_err(map_reqwest_error)
     }
-}
-
-/// Version de l'OS, telle que Codex CLI l'annonce ; inconnue, elle vaut `0.0.0` plutôt
-/// qu'un `User-Agent` tronqué (un en-tête incohérent est puni par le backend).
-fn os_version() -> String {
-    std::env::var("PENELOPE_OS_VERSION").unwrap_or_else(|_| "0.0.0".into())
 }
 
 fn map_reqwest_error(e: reqwest::Error) -> LlmError {

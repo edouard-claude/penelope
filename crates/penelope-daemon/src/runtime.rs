@@ -109,16 +109,7 @@ impl penelope_app::ports::ProviderSource for Providers {
             let cfg = s.config.config();
             // Le fournisseur Codex ne vit que si un compte ChatGPT est connecté : c'est
             // le daemon qui tient les jetons et leur rotation (issue #142).
-            let codex = match penelope_ops::codex_auth::load(s) {
-                Ok(Some(g)) if g.disconnected.is_none() => Some(penelope_llm::CodexAccess {
-                    tokens: Arc::new(penelope_ops::codex_auth::DaemonTokens::new(s.clone())),
-                    installation_id: penelope_ops::codex_auth::installation_id(s).await,
-                    quota_sink: Some(Arc::new(penelope_ops::codex_quota::QuotaWriter::new(
-                        s.clone(),
-                    ))),
-                }),
-                _ => None,
-            };
+            let codex = penelope_ops::codex_auth::access(s).await;
             let set = penelope_llm::build_providers(
                 &cfg,
                 s.platform.secrets.as_ref(),

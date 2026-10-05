@@ -179,3 +179,34 @@ fn outside_macos_the_discovery_is_an_explicit_stub() {
     assert!(hardware(T).is_none());
     assert!(offer_probes().is_empty());
 }
+
+/// #313 : la version du Codex CLI est la plus récente des installés, celui du PATH comme
+/// celui qu'embarque l'application ChatGPT ; une plateforme de test ne trouve rien.
+#[cfg(unix)]
+#[test]
+fn codex_cli_version_is_the_newest_installed() {
+    let bin = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    script(bin.path(), "codex", "echo codex-cli 0.46.0");
+    let bundled = apps.path().join(CHATGPT_CODEX_CLI);
+    std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+    script(bundled.parent().unwrap(), "codex", "echo codex-cli 0.160.0");
+    let d = Discovery {
+        path: bin.path().as_os_str().to_owned(),
+        app_dirs: vec![apps.path().to_path_buf()],
+        ..Discovery::none()
+    };
+    assert_eq!(codex_cli_version(&d, T).as_deref(), Some("0.160.0"));
+    let path_only = Discovery {
+        app_dirs: Vec::new(),
+        ..d
+    };
+    assert_eq!(codex_cli_version(&path_only, T).as_deref(), Some("0.46.0"));
+    assert_eq!(codex_cli_version(&Discovery::none(), T), None);
+    assert_eq!(
+        parse_codex_version("codex-cli 0.155.0"),
+        Some("0.155.0".into())
+    );
+    assert_eq!(parse_codex_version("codex-cli dev"), None);
+    assert!(version_triplet("0.160.0") > version_triplet("0.99.9"));
+}

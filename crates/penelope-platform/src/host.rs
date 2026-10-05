@@ -95,6 +95,98 @@ pub fn status(data_dir: &Path, now_unix: i64) -> HostStatus {
     h
 }
 
+/// Le système tel que la crate `os_info` le nomme, donc tel que Codex CLI l'annonce dans
+/// son `User-Agent` : `Mac OS`, `27.0.0`, `arm64` (#313).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OsIdentity {
+    pub name: String,
+    pub version: String,
+    pub arch: String,
+}
+
+/// Identité du système, lue une fois par processus (`sw_vers` sur macOS,
+/// `/etc/os-release` sous Linux). `PENELOPE_OS_VERSION` surcharge la version lue.
+pub fn os_identity() -> OsIdentity {
+    static ID: std::sync::OnceLock<OsIdentity> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let (name, raw) = read_os();
+        let raw = std::env::var("PENELOPE_OS_VERSION")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or(raw);
+        OsIdentity {
+            name,
+            version: os_info_version(raw.as_deref().unwrap_or("")),
+            arch: uname_arch(std::env::consts::OS, std::env::consts::ARCH).into(),
+        }
+    })
+    .clone()
+}
+
+#[cfg(target_os = "macos")]
+fn read_os() -> (String, Option<String>) {
+    let v = run("/usr/bin/sw_vers", &["-productVersion"]).map(|v| v.trim().to_string());
+    ("Mac OS".into(), v)
+}
+
+/// `os_info` nomme la distribution ; `NAME` d'`os-release` en est l'approximation.
+#[cfg(not(target_os = "macos"))]
+fn read_os() -> (String, Option<String>) {
+    let text = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let field = |k: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(k)?.strip_prefix('='))
+            .map(|v| v.trim().trim_matches('"').to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let fallback = match std::env::consts::OS {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
+    };
+    (
+        field("NAME").unwrap_or_else(|| fallback.into()),
+        field("VERSION_ID"),
+    )
+}
+
+/// Version au format d'`os_info` : trois nombres (`27.0` devient `27.0.0`), le texte brut
+/// s'il n'est pas numérique, `Unknown` s'il est vide.
+pub fn os_info_version(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "Unknown".into();
+    }
+    let parts: Vec<&str> = raw.split_terminator('.').collect();
+    let numeric = (1..=3).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    if !numeric {
+        return raw.to_string();
+    }
+    let n = |i: usize| {
+        parts
+            .get(i)
+            .and_then(|p| p.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    format!("{}.{}.{}", n(0), n(1), n(2))
+}
+
+/// Architecture comme `uname -m` la dit, que lit `os_info` : `arm64` sur un Mac Apple,
+/// `aarch64` sous Linux, `x86_64` partout.
+pub fn uname_arch(os: &str, arch: &str) -> &'static str {
+    match (os, arch) {
+        ("macos", "aarch64") => "arm64",
+        (_, "aarch64") => "aarch64",
+        (_, "x86_64") => "x86_64",
+        (_, "x86") => "i686",
+        (_, "arm") => "armv7l",
+        _ => "unknown",
+    }
+}
+
 fn run(program: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(program).args(args).output().ok()?;
     out.status
@@ -216,6 +308,23 @@ mod tests {
         let (free, total) = parse_df(df).unwrap();
         assert!((free - 323.3).abs() < 0.1, "{free}");
         assert!((total - 926.4).abs() < 0.1, "{total}");
+    }
+
+    /// #313 : la version et l'architecture s'écrivent comme `os_info`, que Codex CLI lit.
+    #[test]
+    fn os_identity_follows_os_info() {
+        assert_eq!(os_info_version("27.0"), "27.0.0");
+        assert_eq!(os_info_version("15.6.1\n"), "15.6.1");
+        assert_eq!(os_info_version("24.04"), "24.4.0");
+        assert_eq!(os_info_version("rolling"), "rolling");
+        assert_eq!(os_info_version(""), "Unknown");
+        assert_eq!(uname_arch("macos", "aarch64"), "arm64");
+        assert_eq!(uname_arch("linux", "aarch64"), "aarch64");
+        assert_eq!(uname_arch("macos", "x86_64"), "x86_64");
+        let id = os_identity();
+        assert!(!id.name.is_empty() && !id.version.is_empty(), "{id:?}");
+        #[cfg(target_os = "macos")]
+        assert_eq!(id.name, "Mac OS");
     }
 
     #[test]

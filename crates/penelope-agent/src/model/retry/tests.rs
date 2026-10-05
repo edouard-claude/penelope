@@ -139,18 +139,43 @@ fn the_retry_table_holds() {
             vec![wait(1), wait(2), wait(4), GiveUp],
         ),
         (
-            "flux coupé avant texte : un nouvel essai, puis repli, puis abandon",
+            "flux coupé avant texte : le même modèle jusqu'au budget, puis repli, puis abandon",
             &["m/b"],
             false,
             3,
-            vec![(T, None, InStream, false); 3],
-            vec![wait(2), fallback("m/b"), GiveUp],
+            vec![(T, None, InStream, false); 8],
+            vec![
+                wait(2),
+                wait(4),
+                wait(8),
+                fallback("m/b"),
+                wait(2),
+                wait(4),
+                wait(8),
+                GiveUp,
+            ],
+        ),
+        (
+            "flux coupé : attente croissante plafonnée, sans repli",
+            &[],
+            false,
+            6,
+            vec![(T, None, InStream, false); 7],
+            vec![
+                wait(2),
+                wait(4),
+                wait(8),
+                wait(16),
+                wait(16),
+                wait(16),
+                GiveUp,
+            ],
         ),
         (
             "flux coupé chez OpenRouter : repli côté client malgré tout",
             &["m/b"],
             true,
-            3,
+            1,
             vec![(T, None, InStream, false); 2],
             vec![wait(2), fallback("m/b")],
         ),
@@ -240,4 +265,12 @@ fn a_local_fallback_is_played_by_the_loop_not_by_openrouter() {
         plan.on_error(&err(T, None), BeforeStream, false),
         fallback("local:mlx-community/Qwen3-8B-4bit")
     );
+}
+
+/// #313 : les attentes des relances de flux comptent dans l'attente annoncée.
+#[test]
+fn stream_retries_are_counted_and_waited() {
+    let (plan, _) = replay(&[], false, 4, &vec![(T, None, InStream, false); 3]);
+    assert_eq!(plan.stream_retries(), 3);
+    assert_eq!(plan.waited_secs(), 14);
 }
