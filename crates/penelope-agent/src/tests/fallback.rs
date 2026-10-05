@@ -155,6 +155,38 @@ async fn a_stream_cut_before_any_text_is_retried_then_falls_back() {
     assert_eq!(p.requests().len(), before + 1, "un seul appel");
 }
 
+/// #311 : Codex rend « servers are currently overloaded » dans le flux, sans code connu.
+/// Avant tout texte, le tour réessaie une fois puis passe au repli, qui répond.
+#[tokio::test(start_paused = true)]
+async fn a_codex_overload_is_retried_then_falls_back() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let mut sp = spec(&sid);
+    sp.fallback_models = vec!["mock/repli".into()];
+    let overloaded = || {
+        Scripted::CodexEvents(vec![
+            json!({"type": "response.created", "response": {"id": "r1"}}).to_string(),
+            json!({"type": "response.failed", "response": {"error": {
+                "message": "Our servers are currently overloaded. Please try again later."}}})
+            .to_string(),
+        ])
+    };
+    p.push(overloaded());
+    p.push(overloaded());
+    p.reply("réponse du repli");
+    let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+    let out = AgentLoop::new(s.clone(), p.clone())
+        .run_conversation(&sp, &conv, &exec(false), &NullSink)
+        .await
+        .unwrap();
+    assert!(
+        matches!(out, TurnOutcome::Answered { ref text, .. } if text == "réponse du repli"),
+        "{out:?}"
+    );
+    let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+    assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+}
+
 #[tokio::test]
 async fn an_empty_answer_is_retried_once_then_reported() {
     let (_d, s, p) = setup().await;

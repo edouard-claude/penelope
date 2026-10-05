@@ -12,6 +12,34 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.39
+
+**Codex : une surcharge se réessaie puis passe au repli, au lieu d'abandonner le tour (#311).**
+Constat (05/10, 06:05 à 06:23 UTC) : le backend Codex rendait dans le flux « Our servers
+are currently overloaded. Please try again later. » ; le code n'était pas l'un des quatre
+reconnus (`rate_limit_exceeded`, `slow_down`, `server_error`, `overloaded`), l'erreur
+tombait en `Other`, que `RetryPlan` abandonne : sept tours perdus, aucun nouvel essai ni
+repli malgré `models.routing.fallback.main = ["fast"]`.
+
+Correctif. `types::signals_overload` reconnaît la surcharge au code (`overload`,
+`capacity`) comme au seul message (`overloaded`, `try again later`, `at capacity`).
+Chez Codex, `response.failed` et l'événement `error` nu (jusqu'ici ignoré, il ne laissait
+qu'une fermeture sans cause) passent par `failure_chunk` : une surcharge devient
+`provider_overloaded`, réessayable, donc `Transient`. `LlmError::mid_stream` applique la
+même règle quel que soit le fournisseur (flux OpenRouter, serveur local), le flux SSE
+d'OpenRouter marque une surcharge sans `error_type` réessayable, et `from_status` classe
+en `Transient` un statut sinon `Other` dont le corps dit la surcharge (un 400 ou un 429
+gardent leur catégorie). Le code et le type bruts d'un flux Codex en échec sont
+journalisés (`flux Codex en échec`), sans rien de la requête. La boucle n'a pas changé :
+une panne passagère avant tout texte est rejouée une fois, puis part sur le repli ; après
+des fragments affichés, le message de coupure de #206 reste. Rien dans le daemon. Tests :
+surcharge sans code, avec code inconnu, par le seul code, par l'événement `error`,
+erreur ordinaire inchangée ; un tour dont le modèle principal rend deux fois la surcharge
+Codex (événements bruts passés par l'accumulateur, nouvelle variante
+`Scripted::CodexEvents` du mock) et que le repli termine.
+
+Closes #311.
+
 ### 1.0.38
 
 **Vocaux Telegram : l'original est conservé et son chemin suit le transcript (#308).**

@@ -610,3 +610,64 @@ fn a_tool_image_shown_after_the_result_goes_as_input_image() {
         "data:image/png;base64,iVBORw0KGgo="
     );
 }
+
+/// #311 : la surcharge se reconnaît au code comme au seul message : sans code, avec un
+/// code inconnu, ou par l'événement `error` nu. Toujours réessayable, jamais `Other`.
+#[test]
+fn an_overload_is_retryable_whatever_says_it() {
+    let msg = "Our servers are currently overloaded. Please try again later.";
+    let events = [
+        json!({"type": "response.failed", "response": {"error": {"message": msg}}}),
+        json!({"type": "response.failed", "response": {"error": {
+            "code": "server_is_overloaded", "message": "indisponible"}}}),
+        json!({"type": "response.failed", "response": {"error": {
+            "code": "code_inconnu", "message": msg}}}),
+        json!({"type": "error", "code": null, "message": msg}),
+        json!({"type": "error", "error": {"type": "service_unavailable_error", "message": msg}}),
+    ];
+    for event in events {
+        let mut acc = ResponsesAccumulator::plain();
+        let out = chunks(&mut acc, std::slice::from_ref(&event));
+        let Some(StreamChunk::Error {
+            message,
+            retryable,
+            error_type,
+        }) = out.last()
+        else {
+            panic!("{event} : {out:?}");
+        };
+        assert!(*retryable, "{event}");
+        assert_eq!(
+            error_type.as_deref(),
+            Some("provider_overloaded"),
+            "{event}"
+        );
+        let e = LlmError::mid_stream(message.clone(), *retryable, error_type.clone());
+        assert_eq!(e.kind, LlmErrorKind::Transient, "{event}");
+        assert!(acc.on_eof().is_empty(), "l'échec clôt le flux : {event}");
+    }
+
+    // Une erreur qui n'est pas une surcharge garde son code et ne se rejoue pas.
+    let mut acc = ResponsesAccumulator::plain();
+    let out = chunks(
+        &mut acc,
+        &[json!({"type": "response.failed", "response": {"error": {
+            "code": "invalid_prompt", "message": "refusé"}}})],
+    );
+    assert!(matches!(
+        &out[0],
+        StreamChunk::Error { error_type, retryable: false, .. }
+            if error_type.as_deref() == Some("invalid_prompt")
+    ));
+    // Sans erreur jointe : la cause par défaut, pas le nom de l'événement.
+    let mut acc = ResponsesAccumulator::plain();
+    let out = chunks(&mut acc, &[json!({"type": "response.failed"})]);
+    assert!(matches!(
+        &out[0],
+        StreamChunk::Error {
+            error_type: None,
+            retryable: false,
+            ..
+        }
+    ));
+}

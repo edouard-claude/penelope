@@ -4,7 +4,9 @@
 //! (`index`, `id`, `function.name`, `function.arguments` par morceaux) : ils sont
 //! réassemblés ici, et les arguments ne sont décodés qu'une fois le fragment terminé.
 
-use crate::types::{FinishReason, StreamChunk, ToolCall, Usage, kind_for_error_type};
+use crate::types::{
+    FinishReason, StreamChunk, ToolCall, Usage, kind_for_error_type, signals_overload,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -270,7 +272,8 @@ impl StreamAccumulator {
                 .map(String::from);
             let retryable = match error_type.as_deref().and_then(kind_for_error_type) {
                 Some(kind) => kind.is_retryable(),
-                None => code >= 500 || code == 429,
+                // Surcharge sans `error_type` : réessayable, comme chez Codex (#311).
+                None => code >= 500 || code == 429 || signals_overload(None, &message),
             };
             return vec![StreamChunk::Error {
                 message,

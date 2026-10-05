@@ -23,6 +23,9 @@ pub enum Scripted {
     Images(String, Vec<String>),
     /// Flux ouvert (HTTP 200) puis erreur réessayable, après un texte éventuel.
     MidStreamError(String, String),
+    /// Événements bruts du backend Codex (`data:` d'un flux Responses), passés par son
+    /// accumulateur : l'erreur telle que Codex l'écrit, classée par le vrai code (#311).
+    CodexEvents(Vec<String>),
     /// Panique dans l'appel lui-même : pour vérifier qu'un tour qui panique ne tue ni son
     /// runner ni le verrou de sa session (issue #84).
     Panic(String),
@@ -316,6 +319,17 @@ impl Provider for MockProvider {
                     }
                 }
                 Scripted::ReasonedOnly { .. } => FinishReason::Length,
+                Scripted::CodexEvents(events) => {
+                    use crate::sse::EventAccumulator;
+                    let mut acc = crate::codex::ResponsesAccumulator::plain();
+                    let mut chunks: Vec<StreamChunk> =
+                        events.iter().flat_map(|e| acc.push_payload(e)).collect();
+                    chunks.extend(acc.on_eof());
+                    for chunk in chunks {
+                        let _ = tx.send(chunk).await;
+                    }
+                    return;
+                }
                 Scripted::MidStreamError(t, message) => {
                     if !t.is_empty() {
                         let _ = tx.send(StreamChunk::Delta { text: t }).await;
