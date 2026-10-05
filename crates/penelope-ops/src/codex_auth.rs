@@ -632,6 +632,44 @@ impl penelope_llm::TokenSource for DaemonTokens {
     }
 }
 
+/// L'accès que le fournisseur reçoit, si un compte est connecté : jetons, identifiant
+/// d'installation, jauges, et l'identité de la machine (#313) que la plateforme lit, le
+/// système et le Codex CLI installé, sondés hors des fils asynchrones.
+pub async fn access(s: &Arc<Services>) -> Option<penelope_llm::CodexAccess> {
+    match load(s) {
+        Ok(Some(g)) if g.disconnected.is_none() => {}
+        _ => return None,
+    }
+    let (os, cli_version) = machine_identity(s).await;
+    Some(penelope_llm::CodexAccess {
+        tokens: Arc::new(DaemonTokens::new(s.clone())),
+        installation_id: installation_id(s).await,
+        quota_sink: Some(Arc::new(crate::codex_quota::QuotaWriter::new(s.clone()))),
+        os,
+        cli_version,
+    })
+}
+
+/// Le système et la version du Codex CLI installé, tels que la plateforme les lit (#313).
+pub async fn machine_identity(s: &Services) -> (penelope_llm::ClientOs, Option<String>) {
+    let discovery = s.platform.discovery.clone();
+    tokio::task::spawn_blocking(move || {
+        let os = penelope_platform::host::os_identity();
+        let cli = penelope_platform::discover::codex_cli_version(&discovery, CLI_PROBE_TIMEOUT);
+        let os = penelope_llm::ClientOs {
+            name: os.name,
+            version: os.version,
+            arch: os.arch,
+        };
+        (os, cli)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Délai de la sonde `codex --version`.
+const CLI_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Rafraîchissement **hors tour** : une vérification par minute, pour qu'un tour ne
 /// commence jamais par attendre un jeton. Prévient le propriétaire une fois quand la
 /// connexion est morte.

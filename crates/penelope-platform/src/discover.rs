@@ -430,5 +430,42 @@ pub fn probe_offers(candidates: &[OfferProbe], path: &OsStr, timeout: Duration) 
         .collect()
 }
 
+/// Chemin du Codex CLI qu'embarque l'application ChatGPT, relatif au bundle (#313) : hors
+/// du PATH, souvent plus récent que celui d'un gestionnaire de paquets.
+pub const CHATGPT_CODEX_CLI: &str = "ChatGPT.app/Contents/Resources/codex-cli/bin/codex";
+
+/// Version la plus récente des Codex CLI installés : `codex` du PATH et celui de
+/// l'application ChatGPT dans les dossiers d'applications (#313). Bloquant, borné par
+/// `timeout` par sonde ; une plateforme de test ([`Discovery::none`]) ne lance rien.
+pub fn codex_cli_version(d: &Discovery, timeout: Duration) -> Option<String> {
+    let mut candidates: Vec<PathBuf> = crate::process::which_in("codex", &d.path)
+        .into_iter()
+        .collect();
+    candidates.extend(
+        d.app_dirs
+            .iter()
+            .map(|dir| dir.join(CHATGPT_CODEX_CLI))
+            .filter(|p| p.is_file()),
+    );
+    candidates
+        .iter()
+        .filter_map(|p| crate::process::probe_version(p, timeout))
+        .filter_map(|line| parse_codex_version(&line))
+        .max_by_key(|v| version_triplet(v))
+}
+
+/// `codex-cli 0.160.0` : la version, si elle a trois nombres.
+pub fn parse_codex_version(line: &str) -> Option<String> {
+    let v = line.split_whitespace().last()?;
+    version_triplet(v).map(|_| v.to_string())
+}
+
+/// `0.160.0` en trois nombres, comparables.
+pub fn version_triplet(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.trim().split('.').map(|p| p.parse::<u64>().ok());
+    let t = (it.next()??, it.next()??, it.next()??);
+    it.next().is_none().then_some(t)
+}
+
 #[cfg(test)]
 mod tests;

@@ -90,10 +90,11 @@ pub struct Codex {
     /// En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer
     /// sans raison donne un 403 sur toutes les requêtes.
     pub originator: String,
-    /// Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à
-    /// jour à la main quand le backend exige plus récent : le catalogue et certains
-    /// identifiants de modèle en dépendent, et une version trop ancienne en fait
-    /// disparaître (issue #148).
+    /// Version de client annoncée (`User-Agent`, `?client_version=`). `auto` : celle du
+    /// Codex CLI installé (PATH ou application ChatGPT), sinon la dernière connue à la
+    /// compilation ; une version posée l'épingle. Le catalogue et certains identifiants de
+    /// modèle en dépendent (issue #148), et une identité en retard coïncide avec des
+    /// surcharges (issue #313) : `doctor` signale un retard de plus de dix versions.
     pub client_version: String,
     /// Silence toléré pendant un flux, comme pour OpenRouter.
     pub stream_idle_timeout: String,
@@ -121,7 +122,7 @@ impl Default for Codex {
             issuer: "https://auth.openai.com".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
             originator: "codex_cli_rs".into(),
-            client_version: "0.149.0".into(),
+            client_version: "auto".into(),
             stream_idle_timeout: "120s".into(),
             request_retries: 3,
             reasoning_summary: "auto".into(),

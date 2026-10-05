@@ -349,7 +349,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `providers.codex.issuer` | `"https://auth.openai.com"` | Serveur d'autorisation du compte ChatGPT. |
 | `providers.codex.client_id` | `"app_EMoamEEZ73f0CkXaXp7hrann"` | Identifiant du client OAuth, celui de Codex CLI. |
 | `providers.codex.originator` | `"codex_cli_rs"` | En-tête `originator` envoyé au backend. Le serveur filtre cette valeur : la changer sans raison donne un 403 sur toutes les requêtes. |
-| `providers.codex.client_version` | `"0.149.0"` | Version de client annoncée (`User-Agent`, `?client_version=`). Épinglée, mise à jour à la main quand le backend exige plus récent : le catalogue et certains identifiants de modèle en dépendent, et une version trop ancienne en fait disparaître (issue #148). |
+| `providers.codex.client_version` | `"auto"` | Version de client annoncée (`User-Agent`, `?client_version=`). `auto` : celle du Codex CLI installé (PATH ou application ChatGPT), sinon la dernière connue à la compilation ; une version posée l'épingle. Le catalogue et certains identifiants de modèle en dépendent (issue #148), et une identité en retard coïncide avec des surcharges (issue #313) : `doctor` signale un retard de plus de dix versions. |
 | `providers.codex.stream_idle_timeout` | `"120s"` | Silence toléré pendant un flux, comme pour OpenRouter. |
 | `providers.codex.request_retries` | `3` | Nouvelles tentatives sur erreur transitoire avant le flux (5xx, coupure). Un 429 de quota n'est jamais rejoué. |
 | `providers.codex.reasoning_summary` | `"auto"` | Résumé de raisonnement demandé (`auto`, `concise`, `detailed`, ou vide). |
@@ -701,7 +701,9 @@ penelope model set main openrouter:anthropic/claude-sonnet-4.5
 ```
 
 La modification est écrite dans `config.toml` puis publiée à chaud ; `penelope config
-status` montre que chaque sous-système a pris la nouvelle génération.
+status` montre que chaque sous-système a pris la nouvelle génération. Un `config.toml`
+édité à la main se relit par `penelope config reload`, qui reconstruit aussi les
+fournisseurs : `[providers.*]`, dont `[providers.codex]`, vaut dès le tour suivant (#313).
 
 En fichier, les trois tables correspondantes :
 

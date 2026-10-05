@@ -148,6 +148,17 @@ fn missing_rg_suggests_the_homebrew_formula_name() {
     );
 }
 
+/// #313 : une version annoncée trop en retard sur le Codex CLI installé est signalée ;
+/// sans Codex CLI installé, rien à comparer.
+#[test]
+fn a_lagging_codex_client_version_is_flagged() {
+    let late = client_version_check("0.104.0", Some("0.155.0")).unwrap();
+    assert!(!late.ok, "{late:?}");
+    assert!(late.detail.contains("0.155.0"), "{late:?}");
+    assert!(client_version_check("0.150.0", Some("0.160.0")).unwrap().ok);
+    assert!(client_version_check("0.104.0", None).is_none());
+}
+
 /// #125 : les alias des rôles d'image n'appellent pas d'outils ; un modèle de pointage
 /// sans tool calling peut les servir. Le modèle de conversation, lui, en a besoin.
 #[test]

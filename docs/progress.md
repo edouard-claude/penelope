@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 3 octobre 2026.
+Dernière mise à jour : 5 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,43 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.40
+
+**Codex : l'identité annoncée suit la machine, version d'OS et Codex CLI installé
+compris (#313).** Constat (05/10), pendant les surcharges de #311 : le `User-Agent` valait
+`codex_cli_rs/0.104.0 (macos 0.0.0; aarch64)`. La version client par défaut était
+`0.104.0` alors que la machine porte un Codex CLI `0.155.0` (et `0.160.0` dans
+l'application ChatGPT), la version d'OS venait de `PENELOPE_OS_VERSION`, que le
+LaunchAgent ne définit pas, et le format n'était pas celui du Codex CLI.
+
+Correctif, en quatre points. **Format** : `user_agent` reproduit `get_codex_user_agent`
+d'openai/codex (`codex-rs/login/src/auth/default_client.rs`, commit `7f892275`) :
+`codex_cli_rs/0.160.0 (Mac OS 27.0.0; arm64) unknown`, nom et version à la façon de la
+crate `os_info`, architecture de `uname -m` (`arm64` sur un Mac Apple), puis le jeton du
+terminal, `unknown` pour un daemon sans terminal ; même assainissement des caractères. Un
+test le fige contre l'expression du test macOS amont. **OS** : `penelope_platform::host::
+os_identity` lit `sw_vers -productVersion` une fois par processus (`/etc/os-release` sous
+Linux), complète en trois nombres (`27.0` devient `27.0.0`) ; `PENELOPE_OS_VERSION` reste
+une surcharge. Le système passe au fournisseur par `CodexOptions::os` : `penelope-llm`
+n'y touche pas. **Version client** : `providers.codex.client_version` vaut `auto` par
+défaut, soit la plus récente des Codex CLI installés (`codex` du PATH et
+`ChatGPT.app/Contents/Resources/codex-cli/bin/codex`, sondés par `codex --version` via
+`Platform::discovery`, donc jamais en test), sinon `0.160.0`, dernière publiée. L'inventaire
+machine ne suffisait pas : il ne voit que le `codex` du PATH, ici un Homebrew en `0.46.0`.
+Une valeur posée l'épingle toujours ; `doctor` affiche l'identité résolue et un contrôle
+`provider.codex.version` échoue au-delà de dix versions mineures de retard sur le CLI
+installé. **Rechargement** : `config set` reconstruisait déjà les fournisseurs, pas
+`config reload` ; un `[providers.codex]` édité à la main n'était lu qu'au redémarrage. Le
+rechargement les invalide maintenant. L'accès Codex se construit dans
+`penelope_ops::codex_auth::access` au lieu du daemon, qui perd six lignes.
+
+Tests : format du `User-Agent`, résolution de `auto` et retard en versions mineures,
+identité du système à la façon d'`os_info`, version la plus récente entre PATH et
+application ChatGPT, contrôle `doctor`, et `config reload` qui reconstruit les
+fournisseurs (échoue sans le correctif).
+
+Closes #313.
 
 ### 1.0.39
 

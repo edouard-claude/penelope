@@ -16,6 +16,9 @@ impl Rpc {
             })),
             method::CONFIG_RELOAD => {
                 let g = s.config.reload_from_disk()?;
+                // Un fichier édité à la main vaut un `config set` : les fournisseurs se
+                // reconstruisent avec `[providers.*]` relu (#313).
+                self.daemon.invalidate_providers().await;
                 Ok(json!({"generation": g.generation, "changed": g.changed}))
             }
             method::CONFIG_SET => {

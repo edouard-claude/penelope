@@ -125,6 +125,36 @@ pub async fn dream_power_check(s: &Services) -> DoctorCheck {
     DoctorCheck::ok(ID, LABEL, detail)
 }
 
+/// Retard toléré de la version annoncée sur le Codex CLI installé, en versions mineures :
+/// Codex en publie une par semaine environ.
+pub const CLIENT_VERSION_MAX_LAG: u64 = 10;
+
+/// #313 : la version annoncée au backend contre celle du Codex CLI installé. Annoncer
+/// `0.104.0` quand la machine a `0.155.0` coïncidait avec des heures de surcharge.
+pub fn client_version_check(announced: &str, installed: Option<&str>) -> Option<DoctorCheck> {
+    const ID: &str = "provider.codex.version";
+    const LABEL: &str = "Version du client Codex";
+    let installed = installed?;
+    let lag = penelope_llm::codex::minor_versions_behind(announced, installed)?;
+    Some(if lag <= CLIENT_VERSION_MAX_LAG {
+        DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("client {announced}, Codex CLI installé {installed}"),
+        )
+    } else {
+        DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "client {announced} annoncé, Codex CLI installé {installed} : une identité \
+                 en retard se paie en « servers overloaded »"
+            ),
+            Some("penelope config set providers.codex.client_version auto".into()),
+        )
+    })
+}
+
 /// #142 : état du fournisseur `codex` — connexion, fraîcheur des jetons, périmètre des
 /// alias, et l'avertissement permanent sur l'identité empruntée.
 pub async fn codex_checks(s: &Services) -> Vec<DoctorCheck> {
@@ -181,16 +211,22 @@ pub async fn codex_checks(s: &Services) -> Vec<DoctorCheck> {
     });
 
     // Identité empruntée : un avertissement qui ne se tait jamais.
+    let (os, installed) = crate::codex_auth::machine_identity(s).await;
+    let announced =
+        penelope_llm::codex::resolve_client_version(&c.client_version, installed.as_deref());
     out.push(DoctorCheck::ok(
         "provider.codex.identity",
         "Identité Codex",
         format!(
-            "`originator: {}`, client {} — Pénélope emprunte l'identité de Codex CLI. \
-             Usage toléré par OpenAI, jamais garanti : il peut cesser du jour au \
-             lendemain (repli : une clé d'API sur `openai_compat`).",
-            c.originator, c.client_version
+            "`originator: {}`, client {announced} ({} {}; {}) — Pénélope emprunte \
+             l'identité de Codex CLI. Usage toléré par OpenAI, jamais garanti : il peut \
+             cesser du jour au lendemain (repli : une clé d'API sur `openai_compat`).",
+            c.originator, os.name, os.version, os.arch
         ),
     ));
+    if let Some(check) = client_version_check(&announced, installed.as_deref()) {
+        out.push(check);
+    }
 
     // Périmètre : un alias de rôle de fond qui vise l'abonnement l'aurait contourné.
     let mut hors: Vec<String> = Vec::new();
