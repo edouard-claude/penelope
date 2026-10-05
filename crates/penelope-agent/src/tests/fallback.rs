@@ -50,7 +50,7 @@ async fn a_transient_error_before_the_stream_is_retried_with_openrouter() {
 async fn repeated_connection_timeouts_say_how_many_attempts_were_made() {
     let (_d, s, p) = setup().await;
     p.named("openrouter");
-    for _ in 0..4 {
+    for _ in 0..5 {
         p.push(Scripted::Error(
             LlmErrorKind::Transient,
             "délai de connexion".into(),
@@ -64,12 +64,12 @@ async fn repeated_connection_timeouts_say_how_many_attempts_were_made() {
         .unwrap();
     match out {
         TurnOutcome::Failed { error } => {
-            assert!(error.contains("4 tentatives"), "{error}");
-            assert!(error.contains("7 s"), "{error}");
+            assert!(error.contains("5 tentatives"), "{error}");
+            assert!(error.contains("15 s"), "{error}");
         }
         other => panic!("le tour devait échouer : {other:?}"),
     }
-    assert_eq!(p.call_count(), 4, "trois nouvelles tentatives, pas plus");
+    assert_eq!(p.call_count(), 5, "quatre nouvelles tentatives, pas plus");
 }
 
 /// #50 : `/stop` pendant l'attente arrête le tour sans rappeler le modèle.
@@ -105,23 +105,22 @@ async fn a_stop_during_the_retry_wait_ends_the_turn() {
     assert_eq!(p.call_count(), 1, "aucun nouvel appel après l'arrêt");
 }
 
-/// Issue #5 : une erreur arrivée pendant le flux, avant tout texte, est rejouée puis
-/// passe au modèle de repli ; après du texte, elle est dite telle quelle.
-#[tokio::test]
+/// Issue #5 : une erreur arrivée pendant le flux, avant tout texte, est rejouée jusqu'au
+/// budget (#313) puis passe au modèle de repli ; après du texte, elle est dite telle quelle.
+#[tokio::test(start_paused = true)]
 async fn a_stream_cut_before_any_text_is_retried_then_falls_back() {
     let (_d, s, p) = setup().await;
     let sid = session(&s).await;
     let mut sp = spec(&sid);
     sp.fallback_models = vec!["mock/repli".into()];
 
-    p.push(Scripted::MidStreamError(
-        String::new(),
-        "Too many requests".into(),
-    ));
-    p.push(Scripted::MidStreamError(
-        String::new(),
-        "Too many requests".into(),
-    ));
+    let budget = default_budget(&s).await;
+    for _ in 0..=budget {
+        p.push(Scripted::MidStreamError(
+            String::new(),
+            "Too many requests".into(),
+        ));
+    }
     p.reply("réponse du repli");
     let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
     let out = AgentLoop::new(s.clone(), p.clone())
@@ -133,7 +132,9 @@ async fn a_stream_cut_before_any_text_is_retried_then_falls_back() {
         "{out:?}"
     );
     let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
-    assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+    let mut expected = vec!["mock/model".to_string(); budget + 1];
+    expected.push("mock/repli".into());
+    assert_eq!(models, expected);
 
     // Du texte est déjà parti : pas de relance silencieuse, l'échec le dit.
     p.push(Scripted::MidStreamError(
@@ -155,24 +156,87 @@ async fn a_stream_cut_before_any_text_is_retried_then_falls_back() {
     assert_eq!(p.requests().len(), before + 1, "un seul appel");
 }
 
-/// #311 : Codex rend « servers are currently overloaded » dans le flux, sans code connu.
-/// Avant tout texte, le tour réessaie une fois puis passe au repli, qui répond.
+/// Codex rend « servers are currently overloaded » dans le flux, sans code connu (#311).
+fn overloaded() -> Scripted {
+    Scripted::CodexEvents(vec![
+        json!({"type": "response.created", "response": {"id": "r1"}}).to_string(),
+        json!({"type": "response.failed", "response": {"error": {
+            "message": "Our servers are currently overloaded. Please try again later."}}})
+        .to_string(),
+    ])
+}
+
+/// Budget de relances par défaut : au moins quatre, comme demandé au #313.
+async fn default_budget(s: &AgentServices) -> usize {
+    let n = s.config.config().providers.openrouter.request_retries as usize;
+    assert!(n >= 4, "budget par défaut : {n}");
+    n
+}
+
+/// #313 : avant tout texte, une surcharge relance le **même** modèle, avec une attente
+/// croissante ; trois coupures puis une réponse : pas de repli.
 #[tokio::test(start_paused = true)]
-async fn a_codex_overload_is_retried_then_falls_back() {
+async fn a_codex_overload_retries_the_same_model() {
     let (_d, s, p) = setup().await;
     let sid = session(&s).await;
     let mut sp = spec(&sid);
     sp.fallback_models = vec!["mock/repli".into()];
-    let overloaded = || {
-        Scripted::CodexEvents(vec![
-            json!({"type": "response.created", "response": {"id": "r1"}}).to_string(),
-            json!({"type": "response.failed", "response": {"error": {
-                "message": "Our servers are currently overloaded. Please try again later."}}})
-            .to_string(),
-        ])
-    };
-    p.push(overloaded());
-    p.push(overloaded());
+    for _ in 0..3 {
+        p.push(overloaded());
+    }
+    p.reply("réponse du modèle principal");
+    let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+    let out = AgentLoop::new(s.clone(), p.clone())
+        .run_conversation(&sp, &conv, &exec(false), &NullSink)
+        .await
+        .unwrap();
+    assert!(
+        matches!(out, TurnOutcome::Answered { ref text, .. } if text == "réponse du modèle principal"),
+        "{out:?}"
+    );
+    let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
+    assert_eq!(models, vec!["mock/model"; 4]);
+}
+
+/// #313 : au-delà du budget et sans repli, le tour échoue en disant combien de fois il
+/// a essayé et combien il a attendu.
+#[tokio::test(start_paused = true)]
+async fn a_codex_overload_beyond_the_budget_gives_up_clearly() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let budget = default_budget(&s).await;
+    for _ in 0..=budget {
+        p.push(overloaded());
+    }
+    let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
+    let out = AgentLoop::new(s.clone(), p.clone())
+        .run_conversation(&spec(&sid), &conv, &exec(false), &NullSink)
+        .await
+        .unwrap();
+    match out {
+        TurnOutcome::Failed { error } => {
+            assert!(
+                error.contains(&format!("{} tentatives", budget + 1)),
+                "{error}"
+            );
+            assert!(error.contains("s d'attente"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(p.requests().len(), budget + 1);
+}
+
+/// #311, #313 : avec un repli, la bascule n'a lieu qu'une fois le budget épuisé.
+#[tokio::test(start_paused = true)]
+async fn a_codex_overload_falls_back_after_the_budget() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let budget = default_budget(&s).await;
+    let mut sp = spec(&sid);
+    sp.fallback_models = vec!["mock/repli".into()];
+    for _ in 0..=budget {
+        p.push(overloaded());
+    }
     p.reply("réponse du repli");
     let conv = MemoryConversation::new("Tu es Pénélope.", "salut");
     let out = AgentLoop::new(s.clone(), p.clone())
@@ -184,7 +248,9 @@ async fn a_codex_overload_is_retried_then_falls_back() {
         "{out:?}"
     );
     let models: Vec<String> = p.requests().iter().map(|r| r.model.clone()).collect();
-    assert_eq!(models, vec!["mock/model", "mock/model", "mock/repli"]);
+    let mut expected = vec!["mock/model".to_string(); budget + 1];
+    expected.push("mock/repli".into());
+    assert_eq!(models, expected);
 }
 
 #[tokio::test]

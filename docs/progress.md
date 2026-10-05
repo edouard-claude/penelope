@@ -42,10 +42,27 @@ installé. **Rechargement** : `config set` reconstruisait déjà les fournisseur
 rechargement les invalide maintenant. L'accès Codex se construit dans
 `penelope_ops::codex_auth::access` au lieu du daemon, qui perd six lignes.
 
+**Relances en flux** (décision du propriétaire : rester sur le modèle principal). Une
+coupure en flux avant tout texte, comme le « servers overloaded » de Codex, n'avait droit
+qu'à un nouvel essai avant le repli ou l'abandon. `RetryPlan` relance maintenant le même
+modèle jusqu'à `max_retries` fois, après 2 s, 4 s, 8 s puis 16 s au plus (ou le
+`Retry-After` s'il fait 20 s ou moins), comme Codex CLI (`stream_max_retries`, 5 par
+défaut, `codex-rs/model-provider-info/src/lib.rs`, openai/codex@7f892275), et ne bascule
+qu'ensuite, s'il y a un repli ; un repli reçoit le même budget. Le budget est celui du
+fournisseur du modèle principal : `providers.codex.request_retries`, déclaré mais lu nulle
+part jusqu'ici, vaut **5** par défaut pour un modèle `codex:` ;
+`providers.openrouter.request_retries` passe de 3 à **4** pour les autres, ce qui ajoute
+aussi une attente de 8 s aux erreurs d'avant flux sur le dernier modèle. Les deux se
+règlent par `config set` ; 0 coupe toute relance. Un abandon après des relances en flux
+dit maintenant, comme avant flux, combien de tentatives et combien de secondes d'attente.
+
 Tests : format du `User-Agent`, résolution de `auto` et retard en versions mineures,
 identité du système à la façon d'`os_info`, version la plus récente entre PATH et
 application ChatGPT, contrôle `doctor`, et `config reload` qui reconstruit les
-fournisseurs (échoue sans le correctif).
+fournisseurs (échoue sans le correctif) ; table de `RetryPlan` (relances jusqu'au budget,
+attente plafonnée), et dans la boucle : trois surcharges puis la réponse du même modèle,
+surcharges au-delà du budget sans repli (abandon qui dit `5 tentatives` et l'attente),
+avec repli (bascule après le budget).
 
 Closes #313.
 
