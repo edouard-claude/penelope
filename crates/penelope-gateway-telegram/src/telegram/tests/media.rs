@@ -495,14 +495,11 @@ async fn a_spoken_answer_arrives_as_a_voice_note() {
     );
     let name = v["voice"].as_str().unwrap();
     assert!(name.ends_with(".ogg"), "{name}");
-    let file = g
-        .daemon
-        .services
-        .platform
-        .dirs
-        .data()
-        .join("media/voice")
-        .join(name);
+    // #316 : le vocal envoyé reste, rangé dans le dossier de sa session.
+    let out = penelope_app::media::voice_out_root(&g.daemon.services.platform.dirs.data());
+    let sessions: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().collect();
+    assert_eq!(sessions.len(), 1, "un dossier de session");
+    let file = sessions[0].path().join(name);
     let bytes = std::fs::read(&file).unwrap();
     assert!(
         bytes.starts_with(b"OggS") && bytes.len() > 100,

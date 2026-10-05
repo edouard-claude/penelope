@@ -395,10 +395,10 @@ mod with_fake_binaries {
         assert_eq!(check.fix.as_deref(), Some("brew install ffmpeg"));
     }
 
-    /// Canal qui garde les vocaux reçus (chemin, durée) et les textes.
+    /// Canal qui garde les vocaux reçus (chemin, durée, empreinte) et les textes.
     #[derive(Default)]
     struct VoiceRecorder {
-        voices: Mutex<Vec<(PathBuf, u32)>>,
+        voices: Mutex<Vec<(PathBuf, u32, String)>>,
         texts: Mutex<Vec<String>>,
     }
 
@@ -419,18 +419,26 @@ mod with_fake_binaries {
             duration_s: u32,
             _: Option<&str>,
         ) -> Result<(), String> {
-            assert!(path.is_file(), "{}", path.display());
+            let bytes = std::fs::read(path).expect("le vocal existe à l'envoi");
+            let hash = penelope_kernel::canonical::sha256_hex(&bytes);
             self.voices
                 .lock()
                 .unwrap()
-                .push((path.to_path_buf(), duration_s));
+                .push((path.to_path_buf(), duration_s, hash));
             Ok(())
         }
     }
 
-    /// Ce que le répertoire des vocaux contient : seuls les `.ogg` doivent rester.
+    /// Les vocaux envoyés dans la session `s1` : seuls les `.ogg` doivent rester, et aucun
+    /// intermédiaire (WAV, sortie du post-traitement) à côté d'eux (#316).
     fn media_entries(data: &Path) -> Vec<String> {
-        let mut v: Vec<String> = std::fs::read_dir(data.join("media").join("voice"))
+        let all: Vec<String> = std::fs::read_dir(data.join("media").join("voice"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(all, ["out"], "intermédiaires restés : {all:?}");
+        let mut v: Vec<String> = std::fs::read_dir(penelope_app::media::voice_out_dir(data, "s1"))
             .map(|d| {
                 d.flatten()
                     .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -484,6 +492,13 @@ mod with_fake_binaries {
         assert_eq!(out["postprocess"]["status"], "applied", "{out}");
         assert_eq!(out["postprocess"]["engine"], "resemble_enhance");
         assert_eq!(recorder.voices.lock().unwrap().len(), 1);
+        // #316 : le chemin rendu est celui du fichier envoyé, gardé tel quel.
+        let (sent_path, _, sent_hash) = recorder.voices.lock().unwrap()[0].clone();
+        let path = PathBuf::from(out["path"].as_str().expect("`path` rendu"));
+        assert_eq!(path, sent_path);
+        assert!(path.starts_with(penelope_app::media::voice_out_dir(&data, "s1")));
+        let kept = std::fs::read(&path).expect("le vocal envoyé est gardé");
+        assert_eq!(penelope_kernel::canonical::sha256_hex(&kept), sent_hash);
         let entries = media_entries(&data);
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert!(entries[0].ends_with(".ogg"), "{entries:?}");

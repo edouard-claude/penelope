@@ -618,6 +618,9 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
         let before = std::time::UNIX_EPOCH
             + std::time::Duration::from_millis((now - days as i64 * 86_400_000).max(0) as u64);
         report["mcp_media"] = json!(remove_older(&root, before));
+        // Vocaux envoyés (#316) : rangés par session comme les médias MCP.
+        let root = penelope_app::media::voice_out_root(&s.platform.dirs.data());
+        report["voice_out"] = json!(remove_older(&root, before));
     }
     let total: i64 = report
         .as_object()

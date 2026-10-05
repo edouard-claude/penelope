@@ -617,3 +617,46 @@ async fn retention_removes_old_mcp_media_only() {
     assert!(!old.exists() && !old_dir.exists());
     assert!(recent.exists());
 }
+
+/// #316 : le vocal envoyé, cité par le résultat de `send_voice`, part avec la purge de sa
+/// session ; la rétention retire ceux qui ont passé l'âge.
+#[tokio::test]
+async fn sent_voice_notes_go_with_their_session_and_their_age() {
+    let (_dir, s, clock) = services().await;
+    let sid = chat(&s).await;
+    let data = s.platform.dirs.data();
+    let dir = penelope_app::media::voice_out_dir(&data, &sid);
+    std::fs::create_dir_all(&dir).unwrap();
+    let ogg = dir.join("01K.ogg");
+    std::fs::write(&ogg, b"OggS").unwrap();
+    let result = serde_json::json!({"sent": true, "path": ogg.to_string_lossy()});
+    s.context
+        .history
+        .append(
+            &sid,
+            &ChatMessage::tool_result("c1", "send_voice", result.to_string()),
+            5,
+            0,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let report = session(&s, &sid, "essai").await.unwrap();
+    assert_eq!(report["files"], 1, "{report}");
+    assert!(!ogg.exists());
+
+    clock.advance_ms(91 * 86_400_000);
+    let old = penelope_app::media::voice_out_dir(&data, "s_vieille").join("a.ogg");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, b"OggS").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_760_000_000))
+        .unwrap();
+    let report = retention(&s).await.unwrap();
+    assert_eq!(report["voice_out"], 1, "{report}");
+    assert!(!old.exists() && !old.parent().unwrap().exists());
+}

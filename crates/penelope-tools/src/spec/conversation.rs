@@ -25,7 +25,9 @@ pub(super) fn channel() -> Vec<ToolSpec> {
              en réponse à un vocal si `voice.reply_in_kind` est actif ; jamais pour du code, un \
              tableau ou une réponse longue : un résumé vocal, le détail en texte. Le Markdown, \
              les liens et les emojis sont retirés. Synthèse impossible : la réponse part en \
-             texte avec la raison.",
+             texte avec la raison. Rend `path`, le fichier OGG envoyé : pour transférer un \
+             vocal déjà envoyé ou validé (autre canal, autre outil), réutilise ce `path` tel \
+             quel ; ne le régénère jamais, ni par `send_voice` ni par une autre synthèse.",
             obj(
                 json!({
                     "text": {"type":"string", "description": "Ce qui sera dit."},
