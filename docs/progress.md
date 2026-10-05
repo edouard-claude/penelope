@@ -12,6 +12,32 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.41
+
+**`send_voice` garde le vocal envoyé et rend son chemin (#316).** Constat (05/10) : un
+vocal produit par `send_voice` (Voxtral, Resemble Enhance et preset studio, #299) est
+validé en brouillon sur Telegram, puis le propriétaire demande de l'envoyer sur WhatsApp.
+Le résultat de l'outil ne donnait que `sent`, `seconds`, `chars`, `voice` et
+`postprocess`, aucun chemin : le modèle a régénéré l'audio avec `say -v Flo`, et le
+destinataire a reçu une autre voix, nettement dégradée.
+
+Correctif. L'OGG/Opus réellement envoyé (après post-traitement) est rangé sous
+`{data}/media/voice/out/<session>/<ULID>.ogg` et son chemin rendu dans `path`. Les
+intermédiaires (WAV assemblé, répertoire de travail du post-traitement) sont toujours
+effacés ; l'OGG l'est aussi quand la conversion ou l'envoi échoue, car rien ne le citerait.
+La purge d'une session le trouve dans le résultat de l'outil, comme l'original d'un vocal
+reçu (#308) ; la rétention (`retention.days`) retire les vocaux envoyés plus vieux, par
+dossier de session comme les médias MCP (#304), et le rapport porte `voice_out`. La
+description de `send_voice` dit de réutiliser `path` tel quel pour transférer un vocal déjà
+envoyé ou validé, jamais de le régénérer : le rejeu `outils-soi` (surface et attendus) est
+régénéré en conséquence.
+
+Tests : le chemin rendu est celui du fichier envoyé, même empreinte SHA-256, et seul l'OGG
+reste dans `media/voice` ; la purge de la session efface le vocal cité, la rétention efface
+un dossier de session périmé.
+
+Closes #316.
+
 ### 1.0.40
 
 **Codex : l'identité annoncée suit la machine, version d'OS et Codex CLI installé

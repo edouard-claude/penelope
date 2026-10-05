@@ -5,7 +5,8 @@
 //!  texte ─► lisible (sans Markdown, code, liens, emojis ; « 8,5 % » → « 8,5 pour cent »)
 //!        ─► phrases par tranches ─► /audio/speech (voix `voice.tts_voice`) ─► WAV assemblés
 //!        ─► post-traitement local, s'il est allumé (`postprocess`, #299)
-//!        ─► ffmpeg → OGG/Opus ─► sendVoice
+//!        ─► ffmpeg → OGG/Opus ─► sendVoice ; l'OGG reste sous `media/voice/out/<session>`
+//!           et son chemin est rendu (`path`, #316) : un transfert le réutilise tel quel
 //!  échec ─► la réponse part en texte, avec « vocal indisponible : <raison> »
 //! ```
 
@@ -294,7 +295,9 @@ async fn postprocess_wav(
     (outcome, wav.to_path_buf())
 }
 
-/// Lit `text` en vocal dans la conversation `session_id`. Rend la durée et le fichier.
+/// Lit `text` en vocal dans la conversation `session_id`. Rend la durée et le chemin du
+/// fichier envoyé, gardé pour qu'un autre outil le transmette sans régénérer la voix
+/// (#316) ; les intermédiaires (WAV, sortie du post-traitement) sont effacés.
 #[allow(clippy::too_many_arguments)]
 pub async fn send(
     s: &Services,
@@ -317,8 +320,10 @@ pub async fn send(
     let data_dir = s.platform.dirs.data();
     let dir = data_dir.join("media").join("voice");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let out = penelope_app::media::voice_out_dir(&data_dir, session_id);
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let id = penelope_kernel::ids::Ulid::new().to_string();
-    let (wav_path, ogg_path) = (dir.join(format!("{id}.wav")), dir.join(format!("{id}.ogg")));
+    let (wav_path, ogg_path) = (dir.join(format!("{id}.wav")), out.join(format!("{id}.ogg")));
     // Répertoire de travail du post-traitement, effacé quoi qu'il arrive.
     let work = dir.join(format!("{id}.work"));
     let cleanup = || {
@@ -341,18 +346,29 @@ pub async fn send(
     .map_err(|e| e.to_string())
     .and_then(|r| r);
     cleanup();
-    converted?;
+    if let Err(e) = converted {
+        let _ = std::fs::remove_file(&ogg_path);
+        return Err(e);
+    }
     let post = serde_json::to_value(&post).unwrap_or(Value::Null);
-    let messenger = messenger.ok_or("aucun canal de message disponible")?;
-    messenger
-        .send_session_voice(
-            session_id,
-            origin,
-            &ogg_path,
-            seconds.ceil() as u32,
-            caption,
-        )
-        .await?;
+    // Un vocal qui n'est pas parti n'est cité nulle part : la purge ne le trouverait pas.
+    let sent = match &messenger {
+        Some(m) => {
+            m.send_session_voice(
+                session_id,
+                origin,
+                &ogg_path,
+                seconds.ceil() as u32,
+                caption,
+            )
+            .await
+        }
+        None => Err("aucun canal de message disponible".into()),
+    };
+    if let Err(e) = sent {
+        let _ = std::fs::remove_file(&ogg_path);
+        return Err(e);
+    }
     let _ = s
         .budget
         .record(penelope_kernel::budget::UsageRecord {
@@ -385,6 +401,7 @@ pub async fn send(
         "chars": spoken.chars().count(),
         "voice": voice,
         "postprocess": post,
+        "path": ogg_path.to_string_lossy(),
     }))
 }
 

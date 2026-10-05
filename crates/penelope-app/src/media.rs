@@ -150,6 +150,18 @@ pub fn voice_note(path: &Path) -> String {
     )
 }
 
+/// Vocaux envoyés par `send_voice`, un dossier par session (issue #316) : le fichier
+/// final y reste, son chemin rendu au modèle pour qu'il le transmette sans le régénérer ;
+/// la purge de la session et la rétention l'en retirent.
+pub fn voice_out_root(data: &Path) -> PathBuf {
+    data.join("media").join("voice").join("out")
+}
+
+/// Dossier des vocaux envoyés dans la session `session_id`.
+pub fn voice_out_dir(data: &Path, session_id: &str) -> PathBuf {
+    voice_out_root(data).join(safe_file_name(session_id))
+}
+
 /// Médias rendus par les outils MCP hors workflow, un dossier par session (issue #304) :
 /// l'exécuteur les y pose, la rétention les en retire.
 pub fn mcp_root(data: &Path) -> PathBuf {
