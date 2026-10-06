@@ -16,6 +16,7 @@ use penelope_app::services::Services;
 use penelope_context::CompactionParams;
 use penelope_context::tiers::TileMap;
 use penelope_llm::TokenEstimator;
+use penelope_llm::catalog::WindowSource;
 use penelope_store::rusqlite::OptionalExtension;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -58,6 +59,8 @@ pub struct ContextReport {
     pub window: u64,
     /// Faux : modèle absent du catalogue, la fenêtre est le repli prudent.
     pub window_known: bool,
+    /// D'où vient la fenêtre : fournisseur, configuration ou repli (#324).
+    pub window_source: WindowSource,
     pub background_compaction_at: u64,
     pub compaction_at: u64,
     pub compactions: u64,
@@ -82,7 +85,8 @@ pub async fn report(s: &Services, session_id: &str) -> anyhow::Result<ContextRep
         .map(|r| r.last.model.clone())
         .unwrap_or_default();
     let cfg = s.config.config();
-    let params = CompactionParams::from_config(&cfg, s.catalog.window_of(&model), &model);
+    let (window, window_source) = s.catalog.window(&model);
+    let params = CompactionParams::from_config(&cfg, window, &model);
     let mut reserves = Vec::new();
     let tiles = match &row {
         Some(r) => tiles(s, session_id, r, &mut reserves).await?,
@@ -92,6 +96,7 @@ pub async fn report(s: &Services, session_id: &str) -> anyhow::Result<ContextRep
         session: session_id.to_string(),
         window: params.window,
         window_known: !model.is_empty() && s.catalog.get(&model).is_some(),
+        window_source,
         background_compaction_at: params.background_threshold_tokens(params.background_margin),
         compaction_at: params.threshold_tokens(),
         compactions: compactions(s, session_id).await?,
@@ -129,9 +134,9 @@ pub fn render(r: &ContextReport, fenced: bool) -> String {
         return t;
     };
     let unknown = if r.window_known {
-        ""
+        format!(" ({})", r.window_source.label())
     } else {
-        " (modèle absent du catalogue : repli prudent)"
+        " (modèle absent du catalogue : repli prudent)".to_string()
     };
     t.push_str(&format!(
         "Modèle : `{}` · fenêtre {}{unknown}\n",

@@ -40,7 +40,41 @@ pub struct ModelInfo {
     /// Raisonnement obligatoire : `effort: "none"` serait refusé par le modèle.
     #[serde(default)]
     pub reasoning_mandatory: bool,
+    /// D'où vient `context_window` : le fournisseur, la configuration de l'endpoint, ou
+    /// une valeur par défaut (#324).
+    #[serde(default)]
+    pub window_source: WindowSource,
 }
+
+/// Source de la fenêtre de contexte d'un modèle (#324) : `penelope model list` et
+/// `/context` la montrent à côté du nombre, parce qu'un seuil de compaction calculé sur
+/// un repli n'a pas la même valeur qu'un seuil calculé sur la fenêtre déclarée.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSource {
+    /// Déclarée par le fournisseur (`GET /models` d'OpenRouter, de Codex, de l'endpoint).
+    #[default]
+    Provider,
+    /// `providers.*.context_window` : l'endpoint local ne la déclare pas.
+    Config,
+    /// Valeur par défaut : modèle absent du catalogue, ou fournisseur muet.
+    Fallback,
+}
+
+impl WindowSource {
+    /// Libellé pour le propriétaire.
+    pub fn label(self) -> &'static str {
+        match self {
+            WindowSource::Provider => "fournisseur",
+            WindowSource::Config => "configuration",
+            WindowSource::Fallback => "repli",
+        }
+    }
+}
+
+/// Fenêtre supposée d'un modèle que le catalogue ne connaît pas : prudente, pour que la
+/// compaction parte trop tôt plutôt que trop tard.
+pub const FALLBACK_WINDOW: u64 = 128_000;
 
 impl ModelInfo {
     /// Effort le plus léger pour un appel utilitaire (classifieur) : `none` quand le
@@ -123,6 +157,7 @@ impl ModelInfo {
             price_cache_write: 0.0,
             reasoning_efforts: None,
             reasoning_mandatory: false,
+            window_source: WindowSource::Provider,
         }
     }
 }
@@ -157,13 +192,14 @@ impl Catalog {
     }
 
     /// Remplace le catalogue d'OpenRouter ; les modèles d'un endpoint local, rangés à
-    /// part, restent (#259).
+    /// part (#259), et ceux de Codex restent (#324) : chaque fournisseur est rafraîchi à
+    /// son tour, et celui d'OpenRouter, passé après Codex, effaçait sa fenêtre.
     pub fn replace(&self, models: Vec<ModelInfo>, fetched_at_ms: i64) {
         let mut map: BTreeMap<String, ModelInfo> = self
             .snapshot()
             .models
             .iter()
-            .filter(|(k, _)| k.starts_with(LOCAL_KEY))
+            .filter(|(k, m)| k.starts_with(LOCAL_KEY) || m.provider == "codex")
             .map(|(k, m)| (k.clone(), m.clone()))
             .collect();
         map.extend(models.into_iter().map(|m| (key_of(&m), m)));
@@ -253,7 +289,16 @@ impl Catalog {
 
     /// Fenêtre de contexte, avec repli prudent si le modèle est inconnu.
     pub fn window_of(&self, id: &str) -> u64 {
-        self.get(id).map(|m| m.context_window).unwrap_or(128_000)
+        self.window(id).0
+    }
+
+    /// Fenêtre de contexte et sa source. Une fenêtre nulle (un modèle d'OpenRouter sans
+    /// `context_length`) vaut un modèle inconnu : le repli, plutôt qu'un seuil à zéro.
+    pub fn window(&self, id: &str) -> (u64, WindowSource) {
+        match self.get(id) {
+            Some(m) if m.context_window > 0 => (m.context_window, m.window_source),
+            _ => (FALLBACK_WINDOW, WindowSource::Fallback),
+        }
     }
 }
 
@@ -389,6 +434,7 @@ fn parse_one(m: &Value) -> Option<ModelInfo> {
             .and_then(|r| r.get("mandatory"))
             .and_then(|b| b.as_bool())
             .unwrap_or(false),
+        window_source: WindowSource::Provider,
         id,
     })
 }
@@ -487,6 +533,39 @@ mod tests {
         // Un modèle local absent ne prend pas l'entrée d'OpenRouter.
         c.replace(vec![ModelInfo::minimal("a/b", "openrouter", 1)], 3);
         assert!(c.get("local:a/b").is_none());
+    }
+
+    /// #324 : le catalogue d'OpenRouter, rafraîchi après celui de Codex, ne l'efface
+    /// plus ; chaque fenêtre dit sa source, et une fenêtre nulle vaut le repli.
+    #[test]
+    fn openrouter_refresh_keeps_codex_and_windows_carry_their_source() {
+        let c = Catalog::new();
+        c.upsert(crate::codex::fallback_models(&["gpt-6-astra".into()]));
+        c.upsert(vec![ModelInfo {
+            window_source: WindowSource::Config,
+            ..ModelInfo::minimal("qwen", "openai_compat", 32_768)
+        }]);
+        let mut models = parse_openrouter_models(&sample_body());
+        models[1].context_window = 0;
+        c.replace(models, 1);
+        assert_eq!(c.len(), 4);
+        assert_eq!(
+            c.window("codex:gpt-6-astra"),
+            (crate::codex::DEFAULT_CODEX_WINDOW, WindowSource::Fallback)
+        );
+        assert_eq!(
+            c.window("openrouter:deepseek/deepseek-v4-pro"),
+            (256_000, WindowSource::Provider)
+        );
+        assert_eq!(c.window("local:qwen"), (32_768, WindowSource::Config));
+        assert_eq!(
+            c.window("openrouter:vieux/modele-sans-outils"),
+            (FALLBACK_WINDOW, WindowSource::Fallback)
+        );
+        assert_eq!(
+            c.window("openrouter:inconnu/x"),
+            (FALLBACK_WINDOW, WindowSource::Fallback)
+        );
     }
 
     #[test]

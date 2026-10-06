@@ -57,6 +57,10 @@ async fn an_unknown_window_is_announced_as_a_fallback() {
     let r = report(&s, &sid).await.unwrap();
     assert!(!r.window_known);
     assert_eq!(r.window, 128_000);
+    assert_eq!(
+        r.window_source,
+        penelope_llm::catalog::WindowSource::Fallback
+    );
     assert!(r.tiles.is_empty(), "{:?}", r.tiles);
     assert_eq!(r.reserves.len(), 2, "{:?}", r.reserves);
     let text = render(&r, false);
@@ -84,6 +88,7 @@ fn the_table_is_aligned_with_thin_spaces() {
         }),
         window: 1_048_576,
         window_known: true,
+        window_source: penelope_llm::catalog::WindowSource::Provider,
         background_compaction_at: 256_000,
         compaction_at: 300_000,
         compactions: 2,
@@ -109,7 +114,11 @@ fn the_table_is_aligned_with_thin_spaces() {
         },
     };
     let text = render(&r, true);
-    assert!(text.contains("fenêtre 1\u{202f}048\u{202f}576\n"), "{text}");
+    // #324 : la source de la fenêtre suit le nombre.
+    assert!(
+        text.contains("fenêtre 1\u{202f}048\u{202f}576 (fournisseur)\n"),
+        "{text}"
+    );
     assert!(
         text.contains("Utilisé : 191\u{202f}312 (18 %)  ████░░░░"),
         "{text}"

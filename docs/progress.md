@@ -12,6 +12,33 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.45
+
+**Catalogue chargé pour chaque fournisseur visé par un alias : la fenêtre des modèles
+OpenRouter est connue même quand `main` est sur Codex, et le seuil de compaction la suit
+(#324).** Constat : `penelope model list` ne connaissait que `codex:gpt-5.6-sol` ; les
+modèles OpenRouter des alias affichaient `context null`, et leur seuil de compaction
+retombait sur le repli de 128 000 quelle que soit leur fenêtre réelle (jusqu'à 1 M).
+Cause : la boucle du superviseur ne rafraîchissait que le fournisseur de `chat_default`,
+plus Codex si un alias le visait ; `main` passé sur Codex, OpenRouter n'était plus jamais
+chargé. Et le `replace` d'OpenRouter, passé après Codex, aurait effacé les entrées de
+Codex.
+
+La boucle sort du daemon vers `penelope_app::catalog_refresh` (le daemon garde un appel) :
+chaque endpoint visé par un alias (OpenRouter, Codex, `providers.local`, chaque
+`providers.extra.*`) a son échéance, la cadence de `providers.openrouter.catalog_refresh`
+après un succès, une minute après un échec (clé absente, serveur local arrêté), sans
+relire les autres. `Catalog::replace` garde les modèles de Codex comme ceux de l'endpoint
+local. Chaque fenêtre porte sa source (`WindowSource`) : déclarée par le fournisseur, prise
+de `providers.*.context_window` quand un endpoint local ne la déclare pas, ou repli
+(modèle inconnu, Codex muet, fenêtre nulle d'OpenRouter, qui donnait un seuil à zéro).
+`penelope model list` la donne (`context_source`) et `/context` l'écrit après la fenêtre.
+Le seuil de compaction lisait déjà la fenêtre du modèle routé du tour (alias collant et
+`codex_scope` compris) ; la demande de fin de tour lit maintenant celle du modèle qui a
+réellement répondu, pour qu'un repli vers une petite fenêtre déclenche la compaction.
+
+Closes #324.
+
 ### 1.0.44
 
 **Commande `/context` et `penelope context [session] [--json]` : remplissage de la fenêtre,

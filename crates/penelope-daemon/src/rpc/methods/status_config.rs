@@ -67,10 +67,12 @@ impl Rpc {
                     .iter()
                     .map(|(alias, model)| {
                         let info = s.catalog.get(model);
+                        let (window, source) = s.catalog.window(model);
                         json!({
                             "alias": alias,
                             "model": model,
-                            "context": info.as_ref().map(|i| i.context_window),
+                            "context": info.as_ref().map(|_| window),
+                            "context_source": source,
                             "usd_per_m_in": info.as_ref().map(|i| per_m(i.price_prompt)),
                             "usd_per_m_out": info.as_ref().map(|i| per_m(i.price_completion)),
                             "known": if s.catalog.is_empty() { Value::Null } else { json!(info.is_some()) },
@@ -87,6 +89,7 @@ impl Rpc {
                             json!({
                                 "id": m.id,
                                 "context": m.context_window,
+                                "context_source": m.window_source,
                                 "usd_per_m_in": per_m(m.price_prompt),
                                 "usd_per_m_out": per_m(m.price_completion),
                                 "tools": m.supports_tools(),

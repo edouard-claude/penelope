@@ -322,48 +322,10 @@ async fn sleep_or_shutdown(d: &Daemon, total: Duration) {
     }
 }
 
-/// Catalogue OpenRouter : au démarrage, puis à l'intervalle configuré.
+/// Catalogue de chaque fournisseur visé par un alias (#324) : au démarrage, puis à
+/// l'intervalle configuré.
 async fn catalog_loop(d: Arc<Daemon>) {
-    while !d.handle.is_shutting_down() {
-        let cfg = d.services.config.config();
-        let every =
-            penelope_kernel::config::parse_duration(&cfg.providers.openrouter.catalog_refresh)
-                .unwrap_or(Duration::from_secs(6 * 3600));
-        let default = cfg
-            .alias_model(&cfg.role_alias("chat_default"))
-            .unwrap_or("openrouter:x")
-            .to_string();
-        // Le fournisseur de `chat_default`, plus Codex dès qu'un alias le vise : son
-        // catalogue dit la fenêtre réelle et les efforts acceptés du plan (#142). Chacun
-        // fait un `upsert` : le catalogue OpenRouter n'est jamais écrasé.
-        let mut wanted = vec![default];
-        if cfg.providers.codex.enabled
-            && let Some(codex_alias) = cfg
-                .models
-                .aliases
-                .values()
-                .find(|m| penelope_llm::catalog::provider_of(m) == "codex")
-            && penelope_llm::catalog::provider_of(&wanted[0]) != "codex"
-        {
-            wanted.push(codex_alias.clone());
-        }
-        for model in &wanted {
-            match d.provider_for(model).await {
-                Ok(p) => match p.fetch_models().await {
-                    Ok(models) => tracing::info!(n = models.len(), "catalogue de modèles à jour"),
-                    Err(e) => tracing::warn!(error = %e, "catalogue de modèles indisponible"),
-                },
-                Err(e) => tracing::info!(error = %e, "catalogue en attente d'une clé"),
-            }
-        }
-        // Sans clé, on réessaie vite : elle peut arriver pendant que le daemon tourne.
-        let wait = if d.services.catalog.is_empty() {
-            Duration::from_secs(60)
-        } else {
-            every
-        };
-        sleep_or_shutdown(&d, wait).await;
-    }
+    penelope_app::catalog_refresh::run(&d.services, d.providers.as_ref(), &d.handle).await;
 }
 
 /// Inventaire de la machine (issue #156) : au démarrage, puis toutes les heures.
