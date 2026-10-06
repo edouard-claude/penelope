@@ -12,6 +12,32 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.43
+
+**Telegram : une URL collée à `code=` et `state=` n'est un retour OAuth de Pénélope que si
+une autorisation attend ce `state` ; sinon elle va à l'agent, dans son sujet (#320).**
+Constat (06/10, et deux fois le 30/09) : le propriétaire colle dans un sujet l'URL de
+retour OAuth d'un outil tiers que l'agent pilote (`http://localhost:8080/callback?code=…&state=…`) ;
+l'agent ne la reçoit jamais, et « 🔐 Autorisation impossible : aucune autorisation en
+attente » part dans le sujet Général. Cause : la classification (`penelope-telegram`)
+prenait pour un retour `paste_back` (§8.5) **tout** texte à `code=` et `state=`, et la
+passerelle répondait sans sujet. Ce qui marchait déjà et reste : une adresse de Pénélope
+ne sert qu'une fois, une demande expirée est refusée avec sa raison, le serveur local de
+retour (`loopback`) n'est pas touché et prévient toujours dans la conversation du
+propriétaire.
+
+Correctif. La classification reste syntaxique, mais `Incoming::OAuthCallback` garde le
+sujet, le message d'origine, sa réponse et son transfert. La passerelle demande à
+`penelope_mcp_host::auth::awaits` si une demande attend ce `state` (`mcp.oauth.pending.*`,
+expirée comprise) : sinon le message redevient un `Incoming::Text` (`into_text`) et suit le
+chemin ordinaire (réponse attendue, session du sujet, regroupement), tel quel, sans
+masquage au-delà de la redaction existante. Une adresse attendue passe par `complete` ; le
+compte rendu, succès (`auth::reconnect`, séparé de l'envoi) ou refus, part en réponse au
+message, dans son sujet. Limite : une adresse déjà consommée n'est plus en attente (la
+demande est effacée à l'usage) : collée une seconde fois, elle va à l'agent.
+
+Closes #320.
+
 ### 1.0.42
 
 **Heures calmes : une veille retenue part en un seul tour à la sortie de la plage, et les

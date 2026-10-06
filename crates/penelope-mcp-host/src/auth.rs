@@ -393,6 +393,21 @@ pub async fn start(
     })
 }
 
+/// Une autorisation attend-elle le `state` de cette adresse ? Une URL collée qui a la
+/// forme d'un retour OAuth peut venir d'un outil tiers (issue #320) : sans demande en
+/// attente, elle n'est pas pour nous. Une demande expirée mais non consommée compte :
+/// [`complete`] en dira l'expiration.
+pub async fn awaits(s: &Services, callback: &str) -> bool {
+    let Some(state) = oauth::parse_callback(callback).state else {
+        return false;
+    };
+    s.kv_get(&pending_key(&state))
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|raw| !raw.is_empty())
+}
+
 /// Termine une autorisation à partir de l'URL de retour (collée ou reçue). Renvoie le
 /// nom du serveur autorisé.
 pub async fn complete(s: &Services, callback: &str) -> Result<String, String> {
@@ -667,7 +682,17 @@ pub async fn reconnect_and_tell(
     messenger: Option<Arc<dyn Messenger>>,
     server: &str,
 ) {
-    let text = match mcp {
+    let text = reconnect(mcp, server).await;
+    if let Some(m) = messenger {
+        let origin = penelope_app::helpers::owner_origin_of(s);
+        let _ = m.send_text(&origin, &text).await;
+    }
+}
+
+/// Reconnexion du serveur autorisé ; renvoie le compte rendu, que l'appelant envoie où
+/// l'adresse a été collée (issue #320).
+pub async fn reconnect(mcp: Option<Arc<dyn McpAdmin>>, server: &str) -> String {
+    match mcp {
         Some(sup) => match sup.restart(server).await {
             Ok(st) => format!(
                 "🔐 `{server}` autorisé : {} outil(s) disponible(s).",
@@ -676,10 +701,6 @@ pub async fn reconnect_and_tell(
             Err(e) => format!("🔐 `{server}` autorisé, mais la reconnexion échoue : {e}"),
         },
         None => format!("🔐 `{server}` autorisé."),
-    };
-    if let Some(m) = messenger {
-        let origin = penelope_app::helpers::owner_origin_of(s);
-        let _ = m.send_text(&origin, &text).await;
     }
 }
 

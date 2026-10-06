@@ -78,25 +78,84 @@ async fn start_publishes_announces_polls_and_stops() {
     }
 }
 
-/// Une adresse de retour OAuth collée qui ne correspond à aucune demande est refusée,
-/// avec la raison.
+/// Issue #320 : une URL à `code=` et `state=` d'un outil tiers, qu'aucune autorisation
+/// n'attend, est un message ordinaire : elle part à l'agent, et rien n'est refusé.
 #[tokio::test]
-async fn a_pasted_oauth_callback_without_request_is_refused() {
+async fn a_third_party_callback_url_goes_to_the_agent() {
     let (_d, g, t, _p) = gateway().await;
-    g.process_update(&updates::text_message(
-        5_101,
-        OWNER,
-        OWNER,
-        "http://127.0.0.1:7777/oauth/callback?code=abc&state=inconnu",
+    let s = g.daemon.services.clone();
+    g.process_update(&updates::in_topic(
+        updates::text_message(
+            5_101,
+            OWNER,
+            OWNER,
+            "http://localhost:8080/callback?code=abc&state=inconnu",
+        ),
+        7,
+    ))
+    .await
+    .unwrap();
+    assert!(
+        eventually(|| async { s.turns.pending_count().await.unwrap_or(0) == 1 }).await,
+        "l'adresse devient un tour de l'agent"
+    );
+    g.flush_outbox().await.unwrap();
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(
+        !sent.iter().any(|x| x.contains("Autorisation impossible")),
+        "{sent:?}"
+    );
+}
+
+/// Une adresse dont le `state` est attendu est consommée par l'autorisation, même
+/// expirée ; le refus part dans le sujet d'où elle vient, pas dans Général (#320).
+#[tokio::test]
+async fn an_awaited_callback_is_answered_in_its_topic() {
+    let (_d, g, t, _p) = gateway().await;
+    let s = g.daemon.services.clone();
+    let pending = json!({
+        "request": {
+            "server": "notes", "issuer": "https://as.example", "state": "attendu",
+            "verifier": "v", "redirect_uri": "http://127.0.0.1:7777/oauth/callback",
+            "resource": "https://mcp.example/mcp", "scopes": [],
+            "authorize_url": "https://as.example/authorize", "expires_at_ms": 0
+        },
+        "client_id": "c",
+        "token_endpoint": "https://as.example/token"
+    });
+    s.kv_set("mcp.oauth.pending.attendu", &pending.to_string())
+        .await
+        .unwrap();
+    g.process_update(&updates::in_topic(
+        updates::text_message(
+            5_102,
+            OWNER,
+            OWNER,
+            "http://127.0.0.1:7777/oauth/callback?code=abc&state=attendu",
+        ),
+        7,
     ))
     .await
     .unwrap();
     g.flush_outbox().await.unwrap();
-    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    let calls = t.calls_to(tg::SEND_MESSAGE).await;
+    let refusal = calls
+        .iter()
+        .find(|c| {
+            c["text"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("🔐 Autorisation impossible"))
+        })
+        .unwrap_or_else(|| panic!("{:?}", texts(&calls)));
+    assert!(refusal["text"].as_str().unwrap().contains("expirée"));
+    assert_eq!(refusal["message_thread_id"], json!(7), "{refusal}");
+    assert_eq!(s.turns.pending_count().await.unwrap(), 0, "pas de tour");
     assert!(
-        sent.iter()
-            .any(|x| x.starts_with("🔐 Autorisation impossible")),
-        "{sent:?}"
+        s.kv_get("mcp.oauth.pending.attendu")
+            .await
+            .unwrap()
+            .is_none(),
+        "consommée"
     );
 }
 

@@ -171,7 +171,12 @@ async fn authorization_code_flow_with_paste_back_and_refresh() {
 
     let state = param(&start.url, "state");
     let callback = format!("{}?code=abc&state={state}&iss={base}", start.redirect_uri);
+    // Issue #320 : seule une adresse dont le `state` est attendu est pour nous.
+    assert!(super::awaits(&d, &callback).await);
+    assert!(!super::awaits(&d, "http://localhost:8080/callback?code=c&state=inconnu").await);
+    assert!(!super::awaits(&d, "http://localhost:8080/callback?code=c").await);
     assert_eq!(complete(&d, &callback).await.unwrap(), "suivi");
+    assert!(!super::awaits(&d, &callback).await, "consommée");
     let token_call = seen
         .lock()
         .unwrap()
@@ -238,6 +243,10 @@ async fn authorization_code_flow_with_paste_back_and_refresh() {
     let late = super::start(&d, &cfg, None).await.unwrap();
     clock.advance_ms(REQUEST_TTL_MS + 1);
     let state = param(&late.url, "state");
+    assert!(
+        super::awaits(&d, &format!("?code=x&state={state}")).await,
+        "expirée mais attendue : `complete` dit l'expiration"
+    );
     let err = complete(&d, &format!("?code=x&state={state}"))
         .await
         .unwrap_err();
