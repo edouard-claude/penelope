@@ -436,6 +436,17 @@ impl TelegramGateway {
 
     async fn handle(self: &Arc<Self>, incoming: Incoming) -> anyhow::Result<()> {
         let s = &self.daemon.services;
+        // Une URL à `code=` et `state=` n'est un retour OAuth de Pénélope que si ce
+        // `state` est attendu ; celle d'un outil tiers va à l'agent, dans son sujet
+        // (issue #320).
+        let incoming = match &incoming {
+            Incoming::OAuthCallback { text, .. }
+                if !penelope_mcp_host::auth::awaits(s, text).await =>
+            {
+                incoming.into_text()
+            }
+            _ => incoming,
+        };
         match incoming {
             Incoming::Text {
                 update_id,
@@ -565,25 +576,24 @@ impl TelegramGateway {
                     }
                 });
             }
-            Incoming::OAuthCallback { chat_id, url, .. } => {
+            Incoming::OAuthCallback {
+                chat_id,
+                topic_id,
+                message_id,
+                text,
+                ..
+            } => {
                 // Adresse de retour collée (§8.5, `paste_back`) : elle ne sert qu'une fois.
-                match penelope_mcp_host::auth::complete(&self.daemon.services, &url).await {
+                // Le compte rendu part dans le sujet d'où elle vient (issue #320).
+                let note = match penelope_mcp_host::auth::complete(s, &text).await {
                     Ok(server) => {
-                        let d = &self.daemon;
-                        let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
-                        penelope_mcp_host::auth::reconnect_and_tell(&d.services, mcp, m, &server)
-                            .await
+                        let mcp = self.daemon.hooks.mcp_supervisor();
+                        penelope_mcp_host::auth::reconnect(mcp, &server).await
                     }
-                    Err(e) => {
-                        self.reply(
-                            chat_id,
-                            None,
-                            None,
-                            &format!("🔐 Autorisation impossible : {e}"),
-                        )
-                        .await?
-                    }
-                }
+                    Err(e) => format!("🔐 Autorisation impossible : {e}"),
+                };
+                self.reply(chat_id, topic_id, Some(message_id), &note)
+                    .await?
             }
             Incoming::Edited { .. } => {}
             Incoming::Unauthorized { from_id, .. } => {

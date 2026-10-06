@@ -93,12 +93,21 @@ pub enum Incoming {
         /// Sujet du forum du message cliqué.
         topic_id: Option<i64>,
     },
-    /// URL collée contenant `code=` et `state=` : flux OAuth `paste_back` (§8.5).
+    /// URL collée contenant `code=` et `state=` : peut-être un retour OAuth `paste_back`
+    /// (§8.5). La forme seule ne suffit pas : une URL d'un outil tiers lui ressemble. La
+    /// passerelle vérifie que le `state` est attendu, sinon le message redevient un
+    /// [`Incoming::Text`] ([`Incoming::into_text`]) (issue #320).
     OAuthCallback {
         update_id: i64,
         chat_id: i64,
         from_id: i64,
-        url: String,
+        message_id: i64,
+        /// Sujet d'où vient l'adresse : la réponse y part, pas dans Général.
+        topic_id: Option<i64>,
+        /// Le message tel qu'il a été collé.
+        text: String,
+        reply_to: Option<i64>,
+        forwarded: bool,
     },
     Edited {
         update_id: i64,
@@ -163,6 +172,33 @@ impl Incoming {
             | Incoming::Edited { from_id, .. }
             | Incoming::Unauthorized { from_id, .. } => Some(*from_id),
             _ => None,
+        }
+    }
+
+    /// Un retour OAuth que rien n'attend redevient le message texte qu'il était ; les
+    /// autres variants sont rendus tels quels.
+    pub fn into_text(self) -> Incoming {
+        match self {
+            Incoming::OAuthCallback {
+                update_id,
+                chat_id,
+                from_id,
+                message_id,
+                topic_id,
+                text,
+                reply_to,
+                forwarded,
+            } => Incoming::Text {
+                update_id,
+                chat_id,
+                from_id,
+                message_id,
+                topic_id,
+                text,
+                reply_to,
+                forwarded,
+            },
+            other => other,
         }
     }
 }
@@ -423,12 +459,22 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         };
     }
 
+    let reply_to = msg
+        .get("reply_to_message")
+        .and_then(|r| r.get("message_id"))
+        .and_then(|v| v.as_i64());
+    let forwarded = msg.get("forward_origin").is_some() || msg.get("forward_from").is_some();
+
     if looks_like_oauth_callback(&text) {
         return Incoming::OAuthCallback {
             update_id,
             chat_id,
             from_id,
-            url: text,
+            message_id,
+            topic_id,
+            text,
+            reply_to,
+            forwarded,
         };
     }
 
@@ -451,11 +497,8 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         message_id,
         topic_id,
         text,
-        reply_to: msg
-            .get("reply_to_message")
-            .and_then(|r| r.get("message_id"))
-            .and_then(|v| v.as_i64()),
-        forwarded: msg.get("forward_origin").is_some() || msg.get("forward_from").is_some(),
+        reply_to,
+        forwarded,
     }
 }
 
@@ -741,6 +784,35 @@ mod tests {
             classify(&u, &Access::owner_only(OWNER)),
             Incoming::OAuthCallback { .. }
         ));
+    }
+
+    #[test]
+    fn oauth_callback_keeps_its_topic_and_falls_back_to_text() {
+        // Issue #320 : une URL d'outil tiers collée dans un sujet garde son sujet et son
+        // texte, pour repartir en message ordinaire si aucune autorisation ne l'attend.
+        let url = "http://localhost:8080/callback?code=c&state=s";
+        let u = updates::in_topic(updates::text_message(3, OWNER, OWNER, url), 7);
+        let incoming = classify(&u, &Access::owner_only(OWNER));
+        match &incoming {
+            Incoming::OAuthCallback { topic_id, text, .. } => {
+                assert_eq!(*topic_id, Some(7));
+                assert_eq!(text, url);
+            }
+            other => panic!("{other:?}"),
+        }
+        match incoming.into_text() {
+            Incoming::Text {
+                topic_id,
+                text,
+                message_id,
+                ..
+            } => {
+                assert_eq!(topic_id, Some(7));
+                assert_eq!(text, url);
+                assert_eq!(message_id, 30);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
