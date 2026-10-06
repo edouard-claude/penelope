@@ -22,7 +22,8 @@ pub const DEFAULT_STREAM_IDLE: std::time::Duration = std::time::Duration::from_s
 pub const DEFAULT_LOCAL_WINDOW: u64 = 32_768;
 
 /// Fenêtre d'un modèle local : ce que `GET /models` en dit (vLLM, llama.cpp, LM Studio),
-/// sinon la valeur configurée (issue #53).
+/// sinon la valeur configurée (issue #53). Le catalogue en garde aussi la source (#324).
+#[cfg(test)]
 pub(super) fn local_window(m: &Value, configured: u64) -> u64 {
     announced_window(m).unwrap_or(configured)
 }

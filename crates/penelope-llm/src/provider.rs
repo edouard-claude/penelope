@@ -240,8 +240,10 @@ pub use body::*;
 use openai_compat::embed_openai;
 pub use openai_compat::*;
 pub use openrouter::*;
+#[cfg(test)]
+use stream::local_window;
 pub use stream::*;
-use stream::{announced_window, local_window, map_reqwest_error};
+use stream::{announced_window, map_reqwest_error};
 
 /// Fabrique de providers à partir de la configuration.
 pub struct ProviderSet {

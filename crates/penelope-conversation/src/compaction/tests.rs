@@ -619,3 +619,54 @@ async fn auto_picks_the_cheaper_call() {
         );
     }
 }
+
+/// #324 : le seuil de fin de tour suit le modèle qui a réellement répondu. Un repli vers
+/// un modèle à petite fenêtre demande la compaction que la fenêtre du modèle choisi
+/// n'aurait pas demandée.
+#[tokio::test]
+async fn the_end_of_turn_threshold_follows_the_served_model() {
+    let (_dir, d, _p) = context().await;
+    let s = &d.services;
+    s.catalog.upsert(vec![
+        ModelInfo::minimal("big/model", "test", 1_000_000),
+        ModelInfo::minimal("small/model", "test", 64_000),
+    ]);
+    let sid = long_session(&d).await;
+    let bill = |turn: &str, model: &str| penelope_kernel::budget::UsageRecord {
+        session_id: Some(sid.clone()),
+        turn_id: Some(turn.into()),
+        role: Some("chat".into()),
+        model: model.into(),
+        provider: "openrouter".into(),
+        prompt: 100_000,
+        ..Default::default()
+    };
+    s.budget.record(bill("t1", "small/model")).await.unwrap();
+    assert_eq!(
+        served_model(s, &sid, "t1").await.as_deref(),
+        Some("small/model")
+    );
+    // Un modèle servi que le catalogue ne connaît pas laisse le modèle choisi.
+    s.budget.record(bill("t2", "big/model-2026")).await.unwrap();
+    assert_eq!(served_model(s, &sid, "t2").await, None);
+
+    let requested = |d: &Context| {
+        let (s, sid) = (d.services.clone(), sid.clone());
+        async move {
+            s.events
+                .session_events_of_kind(&sid, "context.compaction_requested")
+                .await
+                .unwrap()
+                .len()
+        }
+    };
+    let before = requested(&d).await;
+    after_answer(&d, &sid, "openrouter:big/model", Some("t2".into()), false).await;
+    assert_eq!(requested(&d).await, before, "100 000 sous le seuil d'1 M");
+    after_answer(&d, &sid, "openrouter:big/model", Some("t1".into()), false).await;
+    assert_eq!(
+        requested(&d).await,
+        before + 1,
+        "le repli à 64 000 la demande"
+    );
+}

@@ -8,6 +8,7 @@
 
 pub mod attempts;
 pub mod bus;
+pub mod catalog_refresh;
 pub mod channel;
 pub mod codex_scope;
 pub mod conversation;

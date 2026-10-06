@@ -15,12 +15,12 @@ pub fn parse_codex_models(body: &Value) -> Vec<ModelInfo> {
 
 fn parse_codex_model(m: &Value) -> Option<ModelInfo> {
     let slug = m.get("slug")?.as_str()?.to_string();
-    let window = m
+    let declared = m
         .get("max_context_window")
         .or_else(|| m.get("context_window"))
         .and_then(|w| w.as_u64())
-        .filter(|w| *w > 0)
-        .unwrap_or(DEFAULT_CODEX_WINDOW);
+        .filter(|w| *w > 0);
+    let window = declared.unwrap_or(DEFAULT_CODEX_WINDOW);
     let list = |k: &str| -> Vec<String> {
         m.get(k)
             .and_then(|v| v.as_array())
@@ -63,6 +63,11 @@ fn parse_codex_model(m: &Value) -> Option<ModelInfo> {
         price_cache_write: 0.0,
         reasoning_efforts: efforts,
         reasoning_mandatory: false,
+        window_source: if declared.is_some() {
+            crate::catalog::WindowSource::Provider
+        } else {
+            crate::catalog::WindowSource::Fallback
+        },
     })
 }
 
@@ -79,6 +84,7 @@ pub fn fallback_models(models: &[String]) -> Vec<ModelInfo> {
                 "medium".into(),
                 "high".into(),
             ]),
+            window_source: crate::catalog::WindowSource::Fallback,
             ..ModelInfo::minimal(slug, "codex", DEFAULT_CODEX_WINDOW)
         })
         .collect()

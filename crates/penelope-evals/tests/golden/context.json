@@ -13,6 +13,7 @@
       },
       "window": "integer",
       "window_known": "bool",
+      "window_source": "string",
       "background_compaction_at": "integer",
       "compaction_at": "integer",
       "compactions": "integer",

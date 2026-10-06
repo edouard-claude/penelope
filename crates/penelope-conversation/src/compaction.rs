@@ -338,7 +338,13 @@ pub async fn after_answer(
     turn_id: Option<String>,
     estimated: bool,
 ) {
-    let threshold = background_threshold(&d.services, model_id);
+    // Le seuil du modèle qui a réellement répondu : après un repli, sa fenêtre n'est pas
+    // celle du modèle choisi au départ (#324).
+    let served = match &turn_id {
+        Some(t) => served_model(&d.services, session_id, t).await,
+        None => None,
+    };
+    let threshold = background_threshold(&d.services, served.as_deref().unwrap_or(model_id));
     let real = last_prompt(&d.services, session_id).await.map(|(p, _)| p);
     let over_real = real.is_some_and(|p| p >= threshold);
     if !estimated && !over_real {
@@ -356,6 +362,35 @@ pub async fn after_answer(
         }),
     )
     .await;
+}
+
+/// Le modèle qui a servi le dernier appel de conversation d'un tour, sous la forme que
+/// le catalogue connaît ; `None` s'il ne le connaît pas (une variante datée d'OpenRouter).
+async fn served_model(s: &Services, session_id: &str, turn_id: &str) -> Option<String> {
+    use penelope_store::rusqlite::OptionalExtension;
+    let (sid, tid) = (session_id.to_string(), turn_id.to_string());
+    let (provider, model): (String, String) = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(provider, ''), model FROM usage
+                 WHERE session_id = ?1 AND turn_id = ?2 AND COALESCE(role, 'chat') = 'chat'
+                 ORDER BY ts DESC, rowid DESC LIMIT 1",
+                [sid, tid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })
+        .await
+        .ok()
+        .flatten()?;
+    let id = match provider.as_str() {
+        "openai_compat" | "local" => {
+            format!("local:{}", strip_provider(&model))
+        }
+        _ => model,
+    };
+    s.catalog.get(&id).is_some().then_some(id)
 }
 
 /// Début d'un tour : une session froide (cache perdu) dont le dernier prompt dépasse le

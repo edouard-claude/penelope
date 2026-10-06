@@ -241,7 +241,15 @@ impl Provider for OpenAiCompatProvider {
                     .filter(|m| m.get("id").and_then(|i| i.as_str()).is_some())
                     .map(|m| {
                         let id = m["id"].as_str().unwrap_or_default();
-                        ModelInfo::minimal(id, "openai_compat", local_window(m, self.window))
+                        // La fenêtre que l'endpoint annonce, sinon celle de la
+                        // configuration (`providers.*.context_window`, #324).
+                        match announced_window(m) {
+                            Some(w) => ModelInfo::minimal(id, "openai_compat", w),
+                            None => ModelInfo {
+                                window_source: crate::catalog::WindowSource::Config,
+                                ..ModelInfo::minimal(id, "openai_compat", self.window)
+                            },
+                        }
                     })
                     .collect()
             })
