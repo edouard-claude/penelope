@@ -14,6 +14,21 @@
 //!   `event` ─► journal relu depuis pushed_from ; `watch_file` ─► empreinte comparée
 //!   fournée + file persistée ─► un message par conversation, en-tête, puis les éléments
 //! ```
+//!
+//! Fusion par planification (#318) : un prompt ou un workflow coûte un tour ou un run, il
+//! ne part qu'**une** fois à la fin de la plage, quel que soit le nombre d'éléments.
+//!
+//! ```text
+//! pendant la plage
+//!   `mcp_poll` retenu, à sa cadence ─► éléments nouveaux ─► sa ligne de quiet_queue,
+//!                                                         complétée (une par planification)
+//! premier passage après la plage
+//!   `mcp_poll`       ─► ligne accumulée + nouveautés du passage ─► un tir
+//!   `mcp_subscribe`  ─► ressource relue tout de suite ─► un tir
+//!   `event`          ─► événements de la nuit ─► un tir, chacun avec son heure
+//!   `cron`/`interval` ─► un tir, « N occurrences manquées » (wake.rs)
+//!   tours relâchés ─► couloir `heures_calmes` : l'un après l'autre
+//! ```
 
 use super::*;
 use penelope_app::quiet as queue;
@@ -60,6 +75,115 @@ pub(super) async fn mark_held(d: &Context, sched: &Schedule) -> anyhow::Result<(
 /// Le créneau retenu est parti : la marque s'efface.
 pub(super) async fn clear_held(s: &Services, id: &str) {
     let _ = s.kv_delete(&held_key(id)).await;
+    let _ = s.kv_delete(&polled_key(id)).await;
+}
+
+/// Couloir des tours relâchés à la fin de la plage (#318) : ils partent l'un après
+/// l'autre, jamais plusieurs à la fois dans un même sujet.
+pub(super) const QUIET_LANE: &str = "heures_calmes";
+
+fn polled_key(id: &str) -> String {
+    format!("scheduler.quiet.polled.{id}")
+}
+
+/// Ce qui coûte un tour ou un run : fusionné en un seul tir à la fin de la plage. Une
+/// notification part déjà dans le message groupé.
+fn costly(sched: &Schedule) -> bool {
+    matches!(
+        sched.target_kind(),
+        Some(TargetKind::Prompt | TargetKind::Workflow)
+    )
+}
+
+/// Les tirs d'un passage : un seul pour une planification coûteuse qui rattrape la plage
+/// (`merge`), sinon le regroupement ordinaire de la planification.
+pub(super) fn groups(
+    s: &Services,
+    sched: &Schedule,
+    items: &[PolledItem],
+    merge: bool,
+) -> Vec<Vec<PolledItem>> {
+    if merge && costly(sched) && !items.is_empty() {
+        return vec![items.to_vec()];
+    }
+    s.schedules.coalesce(sched, items)
+}
+
+/// Vrai si `event` doit fusionner ses événements en un tir (`vars` d'un rattrapage).
+pub(super) fn merges(sched: &Schedule, vars: &BTreeMap<String, String>) -> bool {
+    vars.contains_key(HELD) && costly(sched)
+}
+
+/// L'élément, avec l'heure locale où il a été vu (`observed_at`, « 22h05 »).
+pub(super) fn seen_at(s: &Services, mut item: PolledItem, at: &str) -> PolledItem {
+    let hour = Value::String(queue::local_hour(s, at));
+    item.value = match item.value {
+        Value::Object(mut o) => {
+            o.insert("observed_at".into(), hour);
+            Value::Object(o)
+        }
+        other => json!({"observed_at": hour, "value": other}),
+    };
+    item
+}
+
+fn to_json(item: &PolledItem) -> Value {
+    json!({"id": item.id, "fingerprint": item.fingerprint, "value": item.value})
+}
+
+fn from_json(v: &Value) -> PolledItem {
+    PolledItem {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
+        fingerprint: v["fingerprint"].as_str().unwrap_or_default().to_string(),
+        value: v["value"].clone(),
+    }
+}
+
+/// Ce qu'un `mcp_poll` a accumulé pendant la plage : sa ligne et ses éléments.
+pub(super) async fn accumulated(
+    s: &Services,
+    sched: &Schedule,
+) -> anyhow::Result<Option<(i64, Vec<PolledItem>)>> {
+    Ok(queue::accumulated(s, &sched.id)
+        .await?
+        .map(|(id, items)| (id, items.iter().map(from_json).collect())))
+}
+
+/// Un `mcp_poll` retenu sonde quand même, à sa cadence (#318) : ses éléments nouveaux
+/// rejoignent sa ligne de la file, avec leur heure, sans rien tirer. Une source qui ne
+/// rend que ses derniers éléments ne perd ainsi rien de la nuit. Une planification pas
+/// encore amorcée attend la fin de la plage ; un sondage en échec se tait, le passage de
+/// la fin de la plage le dira.
+pub(super) async fn accumulate(d: &Context, ports: &Ports, sched: &Schedule) -> anyhow::Result<()> {
+    let s = &d.services;
+    if sched.runs == 0 && !backfills(sched) {
+        return Ok(());
+    }
+    let now = s.clock.now_ms();
+    let key = polled_key(&sched.id);
+    let last = s.kv_get(&key).await?.and_then(|v| v.parse::<i64>().ok());
+    let tz = s.config.config().owner.timezone.clone();
+    if last.is_some_and(|t| sched.next_after(t, &tz).is_none_or(|next| next > now)) {
+        return Ok(());
+    }
+    s.kv_set(&key, &now.to_string()).await?;
+    let items = match fetch(d, ports, sched).await {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!(schedule = %sched.id, error = %e, "sondage de nuit en échec");
+            return Ok(());
+        }
+    };
+    let fresh = s
+        .schedules
+        .new_or_changed(&sched.id, &items, retriggers(sched))
+        .await?;
+    let at = s.clock.now_rfc3339();
+    let fresh: Vec<Value> = fresh
+        .into_iter()
+        .map(|i| to_json(&seen_at(s, i, &at)))
+        .collect();
+    queue::accumulate(s, &sched.id, &target_origin(s, sched), fresh).await
 }
 
 /// Variables d'un déclencheur poussé qui rattrape à la fin de la plage.

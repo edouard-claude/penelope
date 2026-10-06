@@ -2112,6 +2112,17 @@ dans la plage et, pendant la plage, ce qui attend (« heures calmes jusqu'à 07:
 retenue(s), 1 livraison(s) en file ») ; le journal porte `schedule.held` (une fois par
 créneau retenu) et `quiet.delivered`.
 
+**Fusion par planification** (1.0.42, #318). Un prompt ou un workflow retenu ne part
+qu'**une** fois à la fin de la plage, quel que soit le nombre d'éléments de la nuit. Un
+`mcp_poll` retenu continue de sonder à sa cadence, sans rien tirer : ses éléments nouveaux
+complètent **sa** ligne de la file (une par planification), avec l'heure où chacun a été
+vu (`observed_at`), et le premier passage après la plage tire un seul tour qui les reçoit
+tous, dans l'ordre. Un `mcp_subscribe` relit sa ressource dès la sortie et tire une fois ;
+un `event` réunit les événements de la nuit en un tir, chacun avec son heure ; un `cron`
+ou un `interval` part une fois, « Les 12 occurrences manquées partent en une seule
+exécution ». Les tours relâchés partent l'un après l'autre (couloir `heures_calmes` de la
+file des tours), jamais plusieurs à la fois dans un sujet.
+
 **Jamais de silence.** Si l'exécution d'un prompt planifié est annulée, échoue ou atteint
 son budget, le propriétaire reçoit « ⚠️ La planification « … » n'a pas pu s'exécuter :
 <raison> » avec « 🔁 Relancer maintenant » et « 📅 Voir la planification ». Une

@@ -5,7 +5,8 @@ use super::*;
 /// `mcp_poll` : appelle un outil MCP en lecture, extrait les éléments, déclenche la cible
 /// pour les nouveaux (ou modifiés). Le premier passage amorce sans déclencher, sauf
 /// `backfill`. `vars` : valeurs du passage (retard, heures calmes), reprises par chaque
-/// tir ; `batch` : la fournée des heures calmes (#296).
+/// tir ; `batch` : la fournée des heures calmes (#296). Ce que la plage a accumulé
+/// (#318) part avec ce passage, en un seul tir pour un prompt ou un workflow.
 pub(super) async fn poll(
     d: &Context,
     ports: &Ports,
@@ -13,6 +14,57 @@ pub(super) async fn poll(
     vars: &BTreeMap<String, String>,
     mut batch: Option<&mut Batch>,
 ) -> anyhow::Result<bool> {
+    let s = &d.services;
+    let items = fetch(d, ports, sched).await?;
+    if sched.runs == 0 && !backfills(sched) {
+        s.schedules.seed(&sched.id, &items, false).await?;
+        return Ok(false);
+    }
+    let fresh = s
+        .schedules
+        .new_or_changed(&sched.id, &items, retriggers(sched))
+        .await?;
+    let stash = quiet::accumulated(s, sched).await?;
+    let merge = stash.is_some() || vars.contains_key(quiet::HELD);
+    let items = match &stash {
+        Some((_, night)) => {
+            let at = s.clock.now_rfc3339();
+            let mut all = night.clone();
+            all.extend(fresh.into_iter().map(|i| quiet::seen_at(s, i, &at)));
+            all
+        }
+        None => fresh,
+    };
+    let groups = quiet::groups(s, sched, &items, merge);
+    for group in &groups {
+        fire(d, ports, sched, group, vars, batch.as_deref_mut()).await?;
+    }
+    if let Some((row, _)) = stash {
+        penelope_app::quiet::forget(s, &[row]).await?;
+    }
+    Ok(!groups.is_empty())
+}
+
+/// `backfill` : le premier passage tire sur les éléments existants au lieu d'amorcer.
+pub(super) fn backfills(sched: &Schedule) -> bool {
+    sched.dedup.get("backfill").and_then(|b| b.as_bool()) == Some(true)
+}
+
+/// `retrigger_on_change` : un élément connu dont l'empreinte change tire de nouveau.
+pub(super) fn retriggers(sched: &Schedule) -> bool {
+    sched
+        .dedup
+        .get("retrigger_on_change")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
+/// L'appel d'un `mcp_poll` : l'outil MCP en lecture, ses éléments extraits et filtrés.
+pub(super) async fn fetch(
+    d: &Context,
+    ports: &Ports,
+    sched: &Schedule,
+) -> anyhow::Result<Vec<PolledItem>> {
     let s = &d.services;
     let spec = &sched.spec;
     let server = spec["server"].as_str().unwrap_or_default();
@@ -44,34 +96,14 @@ pub(super) async fn poll(
         .await
         .map_err(anyhow::Error::msg)?;
     let payload = tool_payload(&result);
-    let items: Vec<PolledItem> = penelope_workflow::schedules::extract_items(
+    Ok(penelope_workflow::schedules::extract_items(
         &payload,
         spec["item_path"].as_str().unwrap_or("$"),
         spec["id_path"].as_str().unwrap_or("id"),
     )
     .into_iter()
     .filter(|i| penelope_workflow::schedules::passes_filter(&i.value, spec.get("filter")))
-    .collect();
-
-    let backfill = sched.dedup.get("backfill").and_then(|b| b.as_bool()) == Some(true);
-    if sched.runs == 0 && !backfill {
-        s.schedules.seed(&sched.id, &items, false).await?;
-        return Ok(false);
-    }
-    let retrigger = sched
-        .dedup
-        .get("retrigger_on_change")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
-    let fresh = s
-        .schedules
-        .new_or_changed(&sched.id, &items, retrigger)
-        .await?;
-    let groups = s.schedules.coalesce(sched, &fresh);
-    for group in &groups {
-        fire(d, ports, sched, group, vars, batch.as_deref_mut()).await?;
-    }
-    Ok(!groups.is_empty())
+    .collect())
 }
 
 /// Empreinte d'un fichier surveillé (date de modification, taille), ou `absent`.
@@ -151,8 +183,29 @@ pub(super) async fn event(
     mut batch: Option<&mut Batch>,
 ) -> anyhow::Result<bool> {
     let wanted = sched.spec["event"].as_str().unwrap_or_default();
+    let matching: Vec<&penelope_kernel::event::Event> =
+        events.iter().filter(|e| e.kind == wanted).collect();
+    // Rattrapage des heures calmes (#318) : un prompt ou un workflow tire une fois, avec
+    // les événements de la nuit en éléments, chacun avec son heure.
+    if quiet::merges(sched, base) && !matching.is_empty() {
+        let items: Vec<PolledItem> = matching
+            .iter()
+            .map(|ev| {
+                let item = PolledItem {
+                    id: ev.id.to_string(),
+                    fingerprint: String::new(),
+                    value: json!({"event": ev.kind, "payload": ev.payload}),
+                };
+                quiet::seen_at(&d.services, item, &ev.ts)
+            })
+            .collect();
+        let mut vars = base.clone();
+        vars.insert("event".to_string(), wanted.to_string());
+        fire(d, ports, sched, &items, &vars, batch).await?;
+        return Ok(true);
+    }
     let mut fired = false;
-    for ev in events.iter().filter(|e| e.kind == wanted) {
+    for ev in matching {
         let mut vars = base.clone();
         vars.insert("event".to_string(), ev.kind.clone());
         vars.insert("payload".to_string(), ev.payload.to_string());

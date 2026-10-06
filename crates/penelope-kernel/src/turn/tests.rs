@@ -455,3 +455,34 @@ async fn recover_on_boot_releases_everything() {
     assert_eq!(q2.recover_on_boot().await.unwrap(), 1);
     assert!(q2.claim("r2").await.unwrap().is_some());
 }
+
+/// #318 : deux tours du même couloir, dans deux sessions, tournent l'un après l'autre ;
+/// un tour sans couloir, ou d'un autre couloir, n'attend pas.
+#[tokio::test]
+async fn turns_of_one_lane_run_one_after_the_other() {
+    let q = queue(Store::open_memory().unwrap(), TestClock::default());
+    for (session, lane) in [("s1", json!("calme")), ("s2", json!("calme"))] {
+        q.enqueue(
+            session,
+            TurnKind::Trigger,
+            json!({"text": "x", "lane": lane}),
+            None,
+            5,
+        )
+        .await
+        .unwrap();
+    }
+    q.enqueue("s3", TurnKind::Trigger, json!({"text": "y"}), None, 0)
+        .await
+        .unwrap();
+    let first = q.claim("r1").await.unwrap().unwrap();
+    assert_eq!(first.session_id, "s1");
+    let other = q.claim("r2").await.unwrap().unwrap();
+    assert_eq!(
+        other.session_id, "s3",
+        "le couloir occupé laisse passer les autres"
+    );
+    assert!(q.claim("r3").await.unwrap().is_none(), "s2 attend son tour");
+    q.complete(&first).await.unwrap();
+    assert_eq!(q.claim("r3").await.unwrap().unwrap().session_id, "s2");
+}

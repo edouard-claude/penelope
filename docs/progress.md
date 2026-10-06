@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 5 octobre 2026.
+Dernière mise à jour : 6 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,47 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.42
+
+**Heures calmes : une veille retenue part en un seul tour à la sortie de la plage, et les
+tours relâchés partent en série (#318).** Constat (06/10, 7 h) : une veille `mcp_poll` à
+la minute, cible `prompt`, vers un sujet Telegram, a vu plusieurs messages pendant les
+heures calmes ; à la fin de la plage, 23 messages sont arrivés dans le sujet en une
+minute (un résumé par message, plusieurs cartes « Approbation demandée », des traces
+d'outils). Cause : le sondage de sortie de plage réunissait bien la nuit, mais le
+regroupement d'un `mcp_poll` (`coalesce`) tire une fois **par élément** pour un prompt ou
+un workflow ; chaque élément donnait son tour, tous lancés en parallèle (une session par
+exécution, #39), chacun avec la mention « 🌙 Pendant les heures calmes ». Ce qui marchait
+déjà et reste : les notifications retenues partent dans un seul message par conversation
+(#296), un `cron` ou un `interval` ne part qu'une fois avec ses créneaux comptés, et une
+planification retenue ne marque `schedule.held` qu'une fois par créneau.
+
+Correctif. Au rattrapage des heures calmes, un prompt ou un workflow tire **une** fois par
+planification (`scheduler/quiet.rs`, `groups`) : `mcp_poll` et `mcp_subscribe` réunissent
+leurs éléments nouveaux en un seul tir, `event` réunit les événements de la nuit en
+éléments (chacun avec son heure). Un `mcp_poll` retenu continue de sonder à sa cadence
+sans rien tirer : ses éléments nouveaux complètent sa ligne de `quiet_queue`, une par
+planification (migration `0027_quiet_queue_schedule` : colonne `schedule`, index unique
+partiel), avec l'heure où chacun a été vu (`observed_at`) ; une source qui ne rend que ses
+derniers éléments ne perd plus rien de la nuit. Le tour de la sortie les reçoit tous, dans
+l'ordre, et la ligne s'efface une fois le tir parti. Un `mcp_subscribe` relit sa ressource
+dès la sortie, sans attendre la fenêtre de ses notifications périmées. Le texte d'un
+créneau retenu dit « Les N occurrences manquées partent en une seule exécution ». Les
+tours relâchés portent le couloir `heures_calmes` : la file des tours (`penelope-kernel`,
+champ `lane` du payload) n'en réclame qu'un à la fois par couloir, les autres tours ne sont
+pas touchés. Risques : un sondage de nuit en échec se tait (le passage de sortie dira
+l'erreur) ; un workflow fusionné reçoit les paramètres de son premier élément, la liste
+complète restant dans `{{items}}`.
+
+Tests : une veille à la minute avec dix messages pendant la plage ne laisse qu'une entrée
+dans la file, puis donne à 7 h un seul tour qui contient les dix, dans l'ordre et avec leur
+heure ; un `cron` et un `interval` retenus donnent deux tours, un « 12 occurrences
+manquées », lancés l'un après l'autre ; trois événements de la nuit donnent un tour ; la
+file des tours fait attendre un couloir occupé sans retenir les autres ; une planification
+complète sa ligne de la file au lieu d'en ajouter une.
+
+Closes #318.
 
 ### 1.0.41
 

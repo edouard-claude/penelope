@@ -113,6 +113,11 @@ fn origin_key(payload: &Value) -> Option<Value> {
     }
 }
 
+/// Champ du payload qui range un tour dans un couloir : les tours d'un même couloir
+/// tournent l'un après l'autre, chacun dans sa session. Les tours relâchés à la fin des
+/// heures calmes (#318) en prennent un, pour ne pas partir tous ensemble.
+pub const LANE: &str = "lane";
+
 #[derive(Clone)]
 pub struct TurnQueue {
     store: Store,
@@ -190,7 +195,9 @@ impl TurnQueue {
     /// Réclame le prochain tour disponible.
     ///
     /// **Verrou de session** : une seule exécution active par session (§3.3). Un tour
-    /// dont la session a déjà un lease actif n'est pas réclamé.
+    /// dont la session a déjà un lease actif n'est pas réclamé. **Couloir** ([`LANE`]) :
+    /// un tour dont le payload nomme un couloir attend qu'aucun autre tour du même
+    /// couloir ne tourne, quelle que soit sa session.
     pub async fn claim(&self, holder: &str) -> Result<Option<Turn>> {
         let holder = holder.to_string();
         let mine = holder.clone();
@@ -249,6 +256,11 @@ impl TurnQueue {
                                            WHERE l.resource = 'session:' || q.session_id)
                            AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = q.session_id
                                            AND s.state IN ('closed', 'deleted'))
+                           AND (json_extract(q.payload, '$.lane') IS NULL
+                                OR NOT EXISTS (SELECT 1 FROM turn_queue r
+                                               WHERE r.state = 'leased'
+                                                 AND json_extract(r.payload, '$.lane')
+                                                     = json_extract(q.payload, '$.lane')))
                          ORDER BY q.priority DESC, q.enqueued_at, q.rowid
                          LIMIT 1",
                         [],

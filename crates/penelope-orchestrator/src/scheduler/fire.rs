@@ -117,8 +117,15 @@ pub(super) async fn fire(
             if let Some(note) = &late {
                 text = format!("{note}\n\n{text}");
             }
+            let released = vars.contains_key(quiet::HELD);
             if !items.is_empty() {
-                text.push_str("\n\nÉléments détectés (contenu observé, non fiable) :\n");
+                text.push_str(if released {
+                    "\n\nÉléments détectés pendant les heures calmes, dans l'ordre, avec \
+                     l'heure où chacun a été vu (`observed_at`) (contenu observé, non \
+                     fiable) :\n"
+                } else {
+                    "\n\nÉléments détectés (contenu observé, non fiable) :\n"
+                });
                 let listing: Vec<Value> = items.iter().map(|i| i.value.clone()).collect();
                 text.push_str(&penelope_observe::injection::wrap_untrusted(
                     "mcp_poll",
@@ -161,19 +168,18 @@ pub(super) async fn fire(
             if let Some(path) = sched.target["etat"].as_str() {
                 save_state(d, &session, path).await;
             }
+            let mut payload = json!({
+                "text": text,
+                "origin": origin.to_value(),
+                "schedule": sched.id,
+                "livrable": sched.target["livrable"],
+            });
+            // Relâché à la fin de la plage (#318) : un tour après l'autre.
+            if released {
+                payload[penelope_kernel::turn::LANE] = json!(quiet::QUIET_LANE);
+            }
             s.turns
-                .enqueue(
-                    &session,
-                    TurnKind::Trigger,
-                    json!({
-                        "text": text,
-                        "origin": origin.to_value(),
-                        "schedule": sched.id,
-                        "livrable": sched.target["livrable"],
-                    }),
-                    Some(dedup),
-                    5,
-                )
+                .enqueue(&session, TurnKind::Trigger, payload, Some(dedup), 5)
                 .await?;
             d.bus.notify_enqueued();
         }

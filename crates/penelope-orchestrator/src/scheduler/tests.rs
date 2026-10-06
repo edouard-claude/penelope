@@ -29,6 +29,7 @@ mod agenda;
 mod alerts;
 mod mcp_subscribe;
 mod quiet;
+mod quiet_merge;
 mod wake;
 
 #[tokio::test]
