@@ -7,11 +7,12 @@
     "result": {
       "aliases": [
         {
-          "context": "null",
           "usd_per_m_in": "null",
           "usd_per_m_out": "null",
           "alias": "string",
           "model": "string",
+          "context": "null",
+          "context_source": "string",
           "known": "null"
         }
       ],
