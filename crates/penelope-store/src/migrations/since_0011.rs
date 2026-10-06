@@ -194,3 +194,13 @@ SELECT 'store.messages_fts_pending', 'appels d''outils (#300)',
 WHERE EXISTS (SELECT 1 FROM messages)
 ON CONFLICT(k) DO NOTHING;
 "#;
+
+/// Heures calmes, fusion par planification (#318) : un `mcp_poll` retenu continue de
+/// sonder la nuit et range ses éléments nouveaux dans **une** ligne de `quiet_queue` par
+/// planification (`schedule`), complétée à chaque passage, au lieu d'en ajouter une ; à la
+/// fin de la plage, la planification tire une fois avec tout. Les lignes sans
+/// `schedule` restent les livraisons retenues de #296.
+pub(super) const SQL_0027: &str = r#"
+ALTER TABLE quiet_queue ADD COLUMN schedule TEXT;
+CREATE UNIQUE INDEX quiet_queue_schedule ON quiet_queue(schedule) WHERE schedule IS NOT NULL;
+"#;

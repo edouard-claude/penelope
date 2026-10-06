@@ -134,16 +134,16 @@ async fn night_schedules_wait_and_leave_grouped_once_at_the_end_of_quiet_hours()
     assert_eq!(
         grouped[0].1,
         "🌙 Pendant les heures calmes :\n\n\
-         📰 Veille\n(prévue à 4h30 ; les 6 créneaux manqués partent en une seule livraison)\n\n\
+         📰 Veille\n(prévue à 4h30 ; les 6 occurrences manquées partent en une seule livraison)\n\n\
          ⏰ Appeler Paul\n(prévue à 5h00)\n\n\
-         Revue de presse (prévue à 5h00 ; les 3 créneaux manqués partent en une seule \
-         livraison) : elle part maintenant, sa réponse suivra."
+         Revue de presse (prévue à 5h00 ; les 3 occurrences manquées partent en une \
+         seule livraison) : elle part maintenant, sa réponse suivra."
     );
     let turn = s.turns.claim("t").await.unwrap().expect("tour du prompt");
     assert_eq!(
         turn.payload["text"],
-        "🌙 Pendant les heures calmes : prévue à 5h00, retenue jusqu'à 7h00. Les 3 créneaux \
-         manqués partent en une seule exécution.\n\nPrépare la revue de presse"
+        "🌙 Pendant les heures calmes : prévue à 5h00, retenue jusqu'à 7h00. Les 3 \
+         occurrences manquées partent en une seule exécution.\n\nPrépare la revue de presse"
     );
     assert_eq!(
         s.schedules.get(&paul.id).await.unwrap().unwrap().state,
@@ -435,10 +435,10 @@ fn a_held_slot_is_always_announced_and_says_so() {
     assert_eq!(
         late_text(&late, next_day, tz),
         "🌙 Pendant les heures calmes : prévue le 01/01 à 6h58, retenue jusqu'à 8h58. Les 2 \
-         créneaux manqués partent en une seule exécution."
+         occurrences manquées partent en une seule exécution."
     );
     assert_eq!(
         held_text(&late, next_day, tz),
-        "prévue le 01/01 à 6h58 ; les 2 créneaux manqués partent en une seule livraison"
+        "prévue le 01/01 à 6h58 ; les 2 occurrences manquées partent en une seule livraison"
     );
 }

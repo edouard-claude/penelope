@@ -133,6 +133,9 @@ pub async fn tick_after(
         // passage après la plage, une fois, par le chemin des créneaux manqués.
         if quiet::holds(s, &sched) {
             quiet::mark_held(d, &sched).await?;
+            if sched.kind == TriggerKind::McpPoll {
+                quiet::accumulate(d, ports, &sched).await?;
+            }
             report.held.push(sched.id.clone());
             continue;
         }
@@ -229,7 +232,9 @@ pub async fn tick_after(
                     }
                     _ => &events,
                 };
-                subscribe(d, ports, &sched, window, false, &vars, Some(&mut batch)).await
+                // À la fin de la plage, la ressource est relue tout de suite (#318) : les
+                // notifications de la nuit sont vieilles, la fenêtre n'a rien à attendre.
+                subscribe(d, ports, &sched, window, held, &vars, Some(&mut batch)).await
             }
             _ => continue,
         };
@@ -354,8 +359,8 @@ use quiet::Batch;
 use templating::{items_lines, substitute, template_params, tool_payload};
 pub use triggers::mcp_subscribe::{SubscribeState, resource_payload, subscription_state};
 use triggers::{
-    event, event_cursor, events_between, last_event_id, poll, subscribe, watch_file,
-    watch_file_seed,
+    backfills, event, event_cursor, events_between, fetch, last_event_id, poll, retriggers,
+    subscribe, watch_file, watch_file_seed,
 };
 use wake::LATE;
 pub use wake::{Late, Wake, WakeWatch, health, held_text, late_of, late_text, wake_check};

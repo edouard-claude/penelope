@@ -217,8 +217,13 @@ pub fn late_text(late: &Late, now_ms: i64, tz: &str) -> String {
     }
     text.push('.');
     if late.missed > 1 {
+        let what = if late.quiet {
+            "occurrences manquées"
+        } else {
+            "créneaux manqués"
+        };
         text.push_str(&format!(
-            " Les {} créneaux manqués partent en une seule exécution.",
+            " Les {} {what} partent en une seule exécution.",
             late.missed
         ));
     }
@@ -226,14 +231,14 @@ pub fn late_text(late: &Late, now_ms: i64, tz: &str) -> String {
 }
 
 /// Mention courte d'un créneau retenu, pour la livraison groupée de la fin des heures
-/// calmes (#296) : « prévue à 23h00 », « prévue le 01/01 à 23h00 ; les 5 créneaux manqués
-/// partent en une seule livraison ».
+/// calmes (#296) : « prévue à 23h00 », « prévue le 01/01 à 23h00 ; les 5 occurrences
+/// manquées partent en une seule livraison » (#318).
 pub fn held_text(late: &Late, now_ms: i64, tz: &str) -> String {
     let (when, _) = planned_and_now(late, now_ms, tz);
     let mut text = format!("prévue {when}");
     if late.missed > 1 {
         text.push_str(&format!(
-            " ; les {} créneaux manqués partent en une seule livraison",
+            " ; les {} occurrences manquées partent en une seule livraison",
             late.missed
         ));
     }

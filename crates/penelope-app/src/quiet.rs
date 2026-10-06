@@ -83,12 +83,14 @@ pub async fn deliver_or_hold(
     Ok(false)
 }
 
-/// Tout ce qui attend, dans l'ordre d'arrivée.
+/// Tout ce qui attend, dans l'ordre d'arrivée, hors des éléments accumulés par une
+/// planification ([`accumulate`]), qui partent avec son tir.
 pub async fn held(s: &Services) -> anyhow::Result<Vec<Held>> {
     Ok(s.store
         .read(|c| {
             let mut st = c.prepare(
-                "SELECT id, created_at, kind, origin, text FROM quiet_queue ORDER BY id",
+                "SELECT id, created_at, kind, origin, text FROM quiet_queue
+                 WHERE schedule IS NULL ORDER BY id",
             )?;
             let rows = st.query_map([], |r| {
                 let origin: String = r.get(3)?;
@@ -107,6 +109,67 @@ pub async fn held(s: &Services) -> anyhow::Result<Vec<Held>> {
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
         .await?)
+}
+
+/// Range les éléments d'une planification retenue (#318) dans **sa** ligne de la file :
+/// la première fois, une ligne neuve ; ensuite, la même ligne, complétée dans l'ordre.
+/// Une planification qui sonde toute la nuit ne laisse ainsi qu'une entrée.
+pub async fn accumulate(
+    s: &Services,
+    schedule: &str,
+    origin: &Origin,
+    items: Vec<serde_json::Value>,
+) -> anyhow::Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let (schedule, origin) = (schedule.to_string(), origin.to_value().to_string());
+    let now = s.clock.now_rfc3339();
+    s.store
+        .write(move |tx| {
+            let known: Option<String> = tx
+                .query_row(
+                    "SELECT text FROM quiet_queue WHERE schedule = ?1",
+                    [&schedule],
+                    |r| r.get(0),
+                )
+                .ok();
+            let mut all: Vec<serde_json::Value> = known
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_default();
+            all.extend(items);
+            let text = serde_json::Value::Array(all).to_string();
+            tx.execute(
+                "INSERT INTO quiet_queue(created_at, kind, origin, text, schedule)
+                 VALUES(?1, 'schedule_items', ?2, ?3, ?4)
+                 ON CONFLICT(schedule) WHERE schedule IS NOT NULL DO UPDATE SET text = ?3",
+                params![now, origin, text, schedule],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(())
+}
+
+/// Les éléments accumulés par une planification : la ligne (pour [`forget`] une fois le
+/// tir parti) et les éléments dans l'ordre.
+pub async fn accumulated(
+    s: &Services,
+    schedule: &str,
+) -> anyhow::Result<Option<(i64, Vec<serde_json::Value>)>> {
+    let schedule = schedule.to_string();
+    let row: Option<(i64, String)> = s
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT id, text FROM quiet_queue WHERE schedule = ?1",
+                [&schedule],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok())
+        })
+        .await?;
+    Ok(row.map(|(id, text)| (id, serde_json::from_str(&text).unwrap_or_default())))
 }
 
 /// Nombre de livraisons en attente.
@@ -276,6 +339,42 @@ mod tests {
 
         forget(&s, &[waiting[0].id]).await.unwrap();
         assert!(held(&s).await.unwrap().is_empty());
+    }
+
+    /// #318 : une planification complète sa ligne au lieu d'en ajouter une ; ses éléments
+    /// gardent leur ordre et ne partent pas avec les livraisons groupées.
+    #[tokio::test]
+    async fn a_schedule_completes_its_own_entry() {
+        let (_dir, s, _clock) = services("22:00-07:00").await;
+        let origin = crate::helpers::owner_origin_of(&s);
+        for batch in [
+            vec![serde_json::json!(1), serde_json::json!(2)],
+            vec![serde_json::json!(3)],
+        ] {
+            accumulate(&s, "sch_a", &origin, batch).await.unwrap();
+        }
+        accumulate(&s, "sch_b", &origin, vec![serde_json::json!("b")])
+            .await
+            .unwrap();
+        accumulate(&s, "sch_c", &origin, vec![]).await.unwrap();
+        let (id, items) = accumulated(&s, "sch_a").await.unwrap().unwrap();
+        assert_eq!(
+            items,
+            vec![
+                serde_json::json!(1),
+                serde_json::json!(2),
+                serde_json::json!(3)
+            ]
+        );
+        assert!(accumulated(&s, "sch_c").await.unwrap().is_none());
+        assert_eq!(
+            held_count(&s).await.unwrap(),
+            2,
+            "une ligne par planification"
+        );
+        assert!(held(&s).await.unwrap().is_empty());
+        forget(&s, &[id]).await.unwrap();
+        assert!(accumulated(&s, "sch_a").await.unwrap().is_none());
     }
 
     /// Sans plage réglée, rien n'est jamais retenu.

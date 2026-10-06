@@ -207,7 +207,7 @@ pub(in crate::scheduler) async fn subscribe(
     let capped_kind = sched.target_kind() != Some(TargetKind::Notify);
     let mut overflow: Vec<PolledItem> = Vec::new();
     let mut fired = false;
-    for group in s.schedules.coalesce(sched, &fresh) {
+    for group in quiet::groups(s, sched, &fresh, base.contains_key(quiet::HELD)) {
         if capped_kind && st.fired_ms.len() >= max_per_hour {
             overflow.extend(group);
             continue;
