@@ -1,0 +1,37 @@
+{
+  "method": "context",
+  "params": {
+    "session": "$session"
+  },
+  "response": {
+    "result": {
+      "session": "string",
+      "last": {
+        "model": "string",
+        "prompt": "integer",
+        "cached": "integer"
+      },
+      "window": "integer",
+      "window_known": "bool",
+      "background_compaction_at": "integer",
+      "compaction_at": "integer",
+      "compactions": "integer",
+      "tiles": [
+        {
+          "name": "string",
+          "label": "string",
+          "tokens": "integer"
+        }
+      ],
+      "reserves": [],
+      "totals": {
+        "calls": "integer",
+        "prompt": "integer",
+        "completion": "integer",
+        "reasoning": "integer",
+        "cached": "integer"
+      },
+      "text": "string"
+    }
+  }
+}

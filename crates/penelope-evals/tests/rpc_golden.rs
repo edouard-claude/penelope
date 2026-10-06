@@ -451,6 +451,7 @@ fn params_of(m: &str) -> Value {
         method::EXPORT => json!({"what": "session", "id": "$session"}),
         method::AUDIT_SHOW => json!({"session": "$session"}),
         method::USAGE => json!({"by": "session", "limit": 5}),
+        method::CONTEXT => json!({"session": "$session"}),
         // Le retour arrière manuel est local : sans version précédente, il le dit.
         method::UPGRADE => json!({"rollback": true}),
         _ => json!({}),

@@ -129,6 +129,8 @@ scenario_cases! {
     // Le gate « vas-y » vu depuis la conversation (#302) : clic, « vas-y » tapé, refus
     // de `workflow_start` avant toute carte, arrêt du tour au deuxième.
     plan_clic_puis_vas_y_tape => "plan-clic-puis-vas-y-tape",
+    // Fenêtre de contexte (#322) : la méthode `context` après un tour, `/context` à vide.
+    commande_contexte => "commande-contexte",
 }
 
 #[test]

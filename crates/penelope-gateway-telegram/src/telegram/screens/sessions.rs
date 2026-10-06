@@ -179,6 +179,27 @@ impl TelegramGateway {
         Ok(screen)
     }
 
+    /// Écran `context` (#322) : la fenêtre de la session du sujet, à rafraîchir d'un bouton.
+    pub(super) async fn screen_context(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        name: &str,
+        _args: &Value,
+    ) -> anyhow::Result<Screen> {
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: None,
+        };
+        let sid = self.daemon.chat_session_for(&origin).await?;
+        let r = penelope_conversation::context_report::report(&self.daemon.services, &sid).await?;
+        let mut sc = Screen::new(penelope_conversation::context_report::render(&r, true));
+        sc.rows
+            .push(vec![self.nav("🔄 Rafraîchir", name, json!({})).await?]);
+        Ok(sc)
+    }
+
     /// Écran `config`.
     pub(super) async fn screen_config(
         &self,

@@ -12,6 +12,31 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.44
+
+**Commande `/context` et `penelope context [session] [--json]` : remplissage de la fenêtre,
+part de chaque tuile, distance à la compaction, cache et totaux de la session (#322).**
+Besoin (inspiré d'Hermes) : voir d'un coup d'œil où en est la fenêtre d'une session.
+Les morceaux existaient séparément : le prompt et le cache du dernier appel (`usage`), la
+fenêtre (`catalog`), les seuils (`context.*`), les compactions (`context.compacted`) et
+les tuiles reconstituées par `penelope audit show` ; `/status` et `/budget` n'en donnaient
+qu'une ligne. Ce qui reste : `/usage` pour les coûts, `/status` pour l'état général,
+`/context` ne les double pas.
+
+Le rapport vit dans `penelope_conversation::context_report` : le prompt et le cache tels
+que le fournisseur les a comptés, la barre sur vingt cases, le seuil de la compaction de
+fond (et sa distance) puis le seuil forcé, la part de chaque tuile en **estimation
+locale** (T0 à T2 depuis l'instantané du prompt, T3 et T4 depuis la requête repliée du
+journal, l'écart au prompt réel, surtout les définitions d'outils, par différence), les
+totaux de la session. Un modèle absent du catalogue est signalé avec la fenêtre de repli ;
+ce qui ne se relit plus (instantané purgé, appel antérieur au journal) est dit en
+réserve, jamais estimé. Des nombres seulement : aucun texte de la conversation n'en sort.
+Méthode RPC `context` (sans session : celle de la CLI) routée en une ligne vers le crate
+de la conversation, le daemon ne grossit pas ; écran Telegram avec 🔄 Rafraîchir.
+Nombres à espaces fines. Scénario de rejeu `commande-contexte`.
+
+Closes #322.
+
 ### 1.0.43
 
 **Telegram : une URL collée à `code=` et `state=` n'est un retour OAuth de Pénélope que si

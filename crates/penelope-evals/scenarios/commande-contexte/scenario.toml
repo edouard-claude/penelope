@@ -1,0 +1,19 @@
+name = "commande-contexte"
+description = """Fenêtre de contexte (#322) : après un tour joué, `penelope context` (méthode
+`context`, session de la CLI retrouvée sans identifiant) rend le prompt et le cache du
+dernier appel, la découpe par tuile estimée localement, les seuils de compaction et les
+totaux de la session ; `/context` dans un sujet neuf dit qu'il n'y a rien à mesurer,
+avec le bouton 🔄 pour rafraîchir. Aucun texte de la conversation n'est affiché."""
+pin_model = "main"
+
+[[steps]]
+kind = "message"
+text = "bonjour"
+
+[[steps]]
+kind = "rpc"
+method = "context"
+
+[[steps]]
+kind = "telegram"
+text = "/context"

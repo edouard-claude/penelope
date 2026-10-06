@@ -31,6 +31,7 @@ impl Rpc {
             "mem" | "vault" | "intent" | "onboard" => self.memory(method, p).await,
             "wf" | "schedule" => self.workflows(method, p).await,
             "skill" => self.skills(method, p).await,
+            "context" => penelope_conversation::context_report::rpc(self.services(), p).await,
             "approvals" | "approve" | "deny" | "quiet" | "policies" | "policy" => {
                 self.approvals(method, p).await
             }

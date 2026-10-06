@@ -118,6 +118,7 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             m::USAGE,
             json!({"by": by, "session": session, "since": since, "limit": limit}),
         ),
+        Command::Context { session } => (m::CONTEXT, json!({"session": session})),
         Command::AuditVerify => (m::AUDIT_VERIFY, json!({})),
         Command::History(HistoryCmd::Verify { session }) => {
             (m::HISTORY_VERIFY, json!({"session": session}))

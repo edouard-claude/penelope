@@ -468,6 +468,7 @@ impl TelegramGateway {
             "intentions" => self.screen_intentions(chat_id, topic_id, name, args).await,
             "policies" => self.screen_policies(chat_id, topic_id, name, args).await,
             "status" => self.screen_status(chat_id, topic_id, name, args).await,
+            "context" => self.screen_context(chat_id, topic_id, name, args).await,
             "doctor" => self.screen_doctor(chat_id, topic_id, name, args).await,
             "config" => self.screen_config(chat_id, topic_id, name, args).await,
             "logs" => self.screen_logs(chat_id, topic_id, name, args).await,
