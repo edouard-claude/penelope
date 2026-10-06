@@ -180,6 +180,12 @@ pub enum Command {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+    /// Fenêtre de contexte d'une session : remplissage, part de chaque tuile, distance à
+    /// la compaction, cache et totaux. Sans session, celle de la CLI.
+    Context {
+        /// Identifiant de la session.
+        session: Option<String>,
+    },
     /// Vérifie la chaîne d'audit.
     #[command(name = "audit-verify")]
     AuditVerify,

@@ -231,6 +231,25 @@ rétention n'efface que ce que plus aucune ligne ne cite. `penelope doctor` dit 
 gardé et le nombre de changements de préfixe des dernières 24 h : au-delà de cinq, c'est
 un rechargement qui casse le cache, et le contrôle nomme la tuile.
 
+### Mesurer la fenêtre : `penelope context`
+
+```bash
+penelope context                 # la session de la CLI
+penelope context s_01K5... --json
+```
+
+`penelope context` et `/context` (#322) disent où en est la fenêtre, en nombres
+seulement : modèle et fenêtre du catalogue (un modèle absent prend le repli prudent de
+128 000, signalé), prompt et cache du **dernier appel** tels que le fournisseur les a
+comptés, distance au seuil de la compaction de fond et au seuil forcé, compactions
+passées, puis les totaux de la session (appels, entrée, sortie, raisonnement, cache
+moyen). La part de chaque tuile est une **estimation locale** : T0 à T2 depuis
+l'instantané du prompt, T3 (conversation, résumés et contextes figés compris) et T4 (le
+contexte volatil du dernier message) depuis la requête repliée du journal ; l'écart au
+prompt réel, surtout les définitions d'outils que seule leur empreinte garde, est donné
+par différence. Ce qui ne se relit plus (instantané purgé, appel antérieur au journal)
+est dit en réserve, jamais estimé à la place.
+
 ## Le journal
 
 Tout ce que le modèle a lu est dans le journal d'événements (décision

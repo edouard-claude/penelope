@@ -237,7 +237,7 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 
 ```
 /new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop /home
-/model /models /mode /projet /budget /usage
+/model /models /mode /projet /budget /usage /context
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
 /skills /skill
@@ -281,6 +281,7 @@ Workflows (4)
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
 | `/quiet`, `/secret`, `/p` | plages proposées (pendant la plage, planifications sans `urgent`, alertes MCP et relances d'approbation attendent, puis partent groupées sous « 🌙 Pendant les heures calmes : » ; une réponse au propriétaire et le digest partent toujours, #296) ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
 | `/retiens`, `/recall`, `/note`, `/title` | ✏️ bouton qui copie la commande à compléter |
+| `/context` | fenêtre de contexte de la session : modèle et fenêtre (repli prudent signalé pour un modèle absent du catalogue), prompt et cache du dernier appel tels que le fournisseur les compte, barre sur vingt cases, distance à la compaction et compactions passées ; part de chaque tuile T0 à T4 en **estimation locale**, l'écart au prompt réel (définitions d'outils) par différence, puis les totaux de la session ; 🔄 rafraîchir ; des nombres seulement, aucun texte de la conversation ; en CLI `penelope context [session] [--json]` (#322) |
 | `/budget session <montant>` | plafond propre à la session ; au plafond, carte « continuer ? » avec +5 $, +20 $, Arrêter |
 
 `/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une

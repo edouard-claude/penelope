@@ -160,6 +160,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         | Command::Mem(MemCmd::Reclaim { .. })
         | Command::Vault(VaultCmd::Lint)
         | Command::Import(_)
+        | Command::Context { .. }
             if !cli.json =>
         {
             println!("{}", value["text"].as_str().unwrap_or_default());

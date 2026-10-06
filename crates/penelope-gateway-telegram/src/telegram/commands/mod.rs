@@ -167,7 +167,7 @@ impl TelegramGateway {
                     .await
             }
             "wf" | "runs" | "skills" | "intentions" | "policies" | "status" | "doctor"
-            | "config" => {
+            | "config" | "context" => {
                 self.cmd_screen(chat_id, topic_id, message_id, command, args)
                     .await
             }

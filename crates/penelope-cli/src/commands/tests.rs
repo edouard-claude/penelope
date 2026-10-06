@@ -111,6 +111,8 @@ fn commands_route_to_rpc_methods() {
         (vec!["schedule", "list"], m::SCHEDULE_LIST),
         (vec!["mem", "search", "x"], m::MEM_SEARCH),
         (vec!["mem", "audit"], m::MEM_AUDIT),
+        (vec!["context"], m::CONTEXT),
+        (vec!["context", "s_1"], m::CONTEXT),
         (vec!["mem", "retry-rejected"], m::MEM_RETRY_REJECTED),
         (
             vec![
@@ -151,6 +153,7 @@ fn every_routed_method_exists_in_the_contract() {
         vec!["deny", "a_1"],
         vec!["policies"],
         vec!["usage"],
+        vec!["context"],
         vec!["audit-verify"],
         vec!["audit", "show", "--turn", "t_1"],
         vec!["history", "verify", "--session", "s_1"],

@@ -247,6 +247,8 @@ pub mod method {
     pub const HISTORY_REINDEX: &str = "history.reindex";
     pub const STORE_REBUILD: &str = "store.rebuild";
     pub const USAGE: &str = "usage";
+    /// Remplissage de la fenêtre de contexte d'une session, par tuile (#322).
+    pub const CONTEXT: &str = "context";
     pub const TAIL: &str = "tail";
     pub const EVAL_RUN: &str = "eval.run";
     pub const UPGRADE: &str = "upgrade";
@@ -365,6 +367,7 @@ pub mod method {
         HISTORY_REINDEX,
         STORE_REBUILD,
         USAGE,
+        CONTEXT,
         TAIL,
         EVAL_RUN,
         UPGRADE,

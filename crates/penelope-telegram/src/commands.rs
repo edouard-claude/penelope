@@ -181,6 +181,13 @@ fn model_commands() -> Vec<Command> {
             "/usage turn",
             m::USAGE,
         ),
+        c(
+            "context",
+            "Modèles",
+            "Fenêtre de contexte : remplissage, tuiles, compaction, cache",
+            "/context",
+            m::CONTEXT,
+        ),
     ]
 }
 
