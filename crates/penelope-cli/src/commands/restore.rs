@@ -3,6 +3,7 @@
 //! réinstallé, démarré, et `doctor`. `restore-all` en est l'alias ; un fichier `.db` donne
 //! l'ancienne restauration de la seule base.
 
+use super::console::{Console, Terminal};
 use super::*;
 
 /// Restauration hors ligne : refusée daemon en marche, base actuelle mise de côté.
@@ -279,24 +280,9 @@ pub(super) fn source_of(
     }
 }
 
-/// Une ligne lue à l'invite, avec sa valeur par défaut.
-fn ask(question: &str, default: &str) -> CliResult<String> {
-    if default.is_empty() {
-        eprint!("{question} : ");
-    } else {
-        eprint!("{question} [{default}] : ");
-    }
-    let _ = std::io::Write::flush(&mut std::io::stderr());
-    let mut line = String::new();
-    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
-        .map_err(|e| CliError::Io(e.to_string()))?;
-    let line = line.trim();
-    Ok(if line.is_empty() { default } else { line }.to_string())
-}
-
 /// Machine neuve, rien de configuré : le fournisseur se demande. Pour S3, l'adresse et
 /// le bucket complètent l'argument (`s3://bucket/prefixe`) et `--endpoint`.
-fn ask_source(args: &mut RestoreArgs) -> CliResult<Source> {
+fn ask_source(io: &mut dyn Console, args: &mut RestoreArgs) -> CliResult<Source> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(CliError::Usage(
             "aucune configuration sur cette machine : donner la source, `penelope restore \
@@ -308,15 +294,15 @@ fn ask_source(args: &mut RestoreArgs) -> CliResult<Source> {
     eprintln!(
         "Aucune configuration sur cette machine : où est la sauvegarde ? (le kit de secours le dit)"
     );
-    match ask("Fournisseur (s3, dir, icloud)", "s3")?.as_str() {
+    match io.ask("Fournisseur (s3, dir, icloud)", "s3")?.as_str() {
         "s3" => {
-            let endpoint = ask(
+            let endpoint = io.ask(
                 "Adresse S3",
                 penelope_ops::backup::provider::SCALEWAY_ENDPOINT,
             )?;
-            let region = ask("Région", penelope_ops::backup::provider::SCALEWAY_REGION)?;
-            let bucket = ask("Bucket", "")?;
-            let prefix = ask("Préfixe", "penelope/")?;
+            let region = io.ask("Région", penelope_ops::backup::provider::SCALEWAY_REGION)?;
+            let bucket = io.ask("Bucket", "")?;
+            let prefix = io.ask("Préfixe", "penelope/")?;
             args.endpoint = Some(endpoint);
             args.region = Some(region);
             Ok(Source::S3(format!("s3://{bucket}/{prefix}")))
@@ -326,16 +312,15 @@ fn ask_source(args: &mut RestoreArgs) -> CliResult<Source> {
             let drive = home
                 .map(|h| h.join(penelope_ops::backup::provider::ICLOUD_DRIVE))
                 .unwrap_or_default();
-            let sub = ask(
+            let sub = io.ask(
                 "Sous-dossier d'iCloud Drive",
                 penelope_ops::backup::provider::ICLOUD_DEFAULT_DIR,
             )?;
             Ok(Source::Dir(drive.join(sub)))
         }
-        "dir" => Ok(Source::Dir(PathBuf::from(ask(
-            "Dossier des sauvegardes",
-            "",
-        )?))),
+        "dir" => Ok(Source::Dir(PathBuf::from(
+            io.ask("Dossier des sauvegardes", "")?,
+        ))),
         other => Err(CliError::Usage(format!(
             "fournisseur `{other}` inconnu : s3, dir ou icloud"
         ))),
@@ -353,7 +338,16 @@ impl Drop for Download {
 
 /// `penelope restore` : remonte une instance entière depuis une sauvegarde chiffrée
 /// (#42, #329). Se fait daemon arrêté ; finit par le service démarré et `doctor`.
-pub(super) async fn restore(cli: &Cli, mut args: RestoreArgs) -> CliResult<()> {
+pub(super) async fn restore(cli: &Cli, args: RestoreArgs) -> CliResult<()> {
+    restore_with(cli, args, &mut Terminal).await
+}
+
+/// [`restore`] sur une invite donnée : le terminal, ou un double scripté dans les tests.
+pub(super) async fn restore_with(
+    cli: &Cli,
+    mut args: RestoreArgs,
+    io: &mut dyn Console,
+) -> CliResult<()> {
     if let Some(db) = args.source.as_deref().filter(|s| s.ends_with(".db")) {
         return restore_offline(cli, std::path::Path::new(db)).await;
     }
@@ -377,7 +371,7 @@ pub(super) async fn restore(cli: &Cli, mut args: RestoreArgs) -> CliResult<()> {
     .map_err(CliError::Usage)?
     {
         Some(s) => s,
-        None => ask_source(&mut args)?,
+        None => ask_source(io, &mut args)?,
     };
     let download = Download(dirs.data().join("backups").join(format!(
         "telechargement-{}",
@@ -421,12 +415,8 @@ pub(super) async fn restore(cli: &Cli, mut args: RestoreArgs) -> CliResult<()> {
     }
 
     // Phrase de passe : à l'invite, masquée, jamais en argument (#328).
-    let pass = penelope_platform::terminal::read_secret(
-        "Phrase de passe de la sauvegarde (rien ne s'affiche) : ",
-    )
-    .map_err(|e| CliError::Io(e.to_string()))?;
-    let pass = pass.trim().to_string();
-    let store = match penelope_platform::backend::secret_store(dirs.as_ref()) {
+    let pass = io.secret("Phrase de passe de la sauvegarde (rien ne s'affiche) : ")?;
+    let store = match io.store(dirs.as_ref()) {
         Ok(s) => Some(s),
         Err(e) => {
             eprintln!("⚠️ magasin de secrets indisponible ({e}) : les secrets seront à ressaisir.");

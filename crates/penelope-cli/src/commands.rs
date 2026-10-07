@@ -269,7 +269,10 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 
 mod approval_stats;
 mod backup_setup;
+#[cfg(test)]
+mod backup_tests;
 mod cli;
+mod console;
 mod dataset;
 mod interactive;
 mod local;
