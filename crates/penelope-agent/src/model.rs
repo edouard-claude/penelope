@@ -203,6 +203,7 @@ impl AgentLoop {
             {
                 Ok(r) => {
                     s.llm_state.completed(&llm_id).await?;
+                    watch_served(s, spec, &model_id, plan.is_primary(), attempts, &r.model).await;
                     let requested = penelope_llm::catalog::strip_provider(&model_id);
                     if !r.model.is_empty() && r.model != requested {
                         // Repli fait par OpenRouter : on le dit, rien n'est silencieux.
@@ -302,6 +303,55 @@ impl AgentLoop {
             }
         }
     }
+}
+
+/// #333 : un repli qui répond est dit une fois dans la conversation, le retour au modèle
+/// du tour aussi (`model_watch`). Un repli fait par OpenRouter compte quand il sert l'un
+/// des replis demandés ; ailleurs, un nom de modèle servi qui diffère n'est pas un écart.
+async fn watch_served(
+    s: &AgentServices,
+    spec: &TurnSpec,
+    model_id: &str,
+    primary: bool,
+    attempts: &Attempts,
+    upstream: &str,
+) {
+    let failed = attempts.take_failures();
+    use penelope_app::model_watch::{Place, Watch, fallback_key, short};
+    let by_server = spec
+        .fallback_models
+        .iter()
+        .find(|f| primary && penelope_llm::catalog::strip_provider(f) == upstream);
+    let served = by_server.map_or(model_id, String::as_str);
+    let watch = Watch {
+        store: &s.store,
+        events: &s.events,
+        now_ms: s.clock.now_ms(),
+    };
+    let place = Place {
+        session: Some(&spec.session_id),
+        origin: None,
+    };
+    let key = fallback_key(&spec.session_id);
+    if served == spec.model_id {
+        let text = format!("✅ retour sur `{}`", short(served));
+        watch.settle(&place, &key, served, &text).await;
+        return;
+    }
+    let why = match failed {
+        (0, _) => "en échec, repli fait par le fournisseur".to_string(),
+        (n, e) => format!(
+            "en échec après {n} tentative{} ({})",
+            if n > 1 { "s" } else { "" },
+            e.as_deref().unwrap_or("panne")
+        ),
+    };
+    let text = format!(
+        "⚠️ repli sur `{}` : `{}` {why}",
+        short(served),
+        short(&spec.model_id)
+    );
+    watch.deviate(&place, &key, served, &text).await;
 }
 
 /// Budget de tentatives : celui du fournisseur du modèle principal (#313) ;

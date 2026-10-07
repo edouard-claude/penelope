@@ -1,28 +1,37 @@
-//! Périmètre du fournisseur `codex` (décision 2 de l'issue #142).
+//! Périmètre du fournisseur `codex` (décision 2 de l'issue #142), devenu un réglage du
+//! profil en #333 (décision 0021).
 //!
 //! OpenAI tolère « un compte, un humain, un usage interactif », et traque la conversion
-//! d'un abonnement en trafic automatisé. L'abonnement ne sert donc que les tours **ouverts
-//! par le propriétaire** — un message Telegram ou CLI, et les sous-agents de ce tour.
+//! d'un abonnement en trafic automatisé. Avec `codex_background = "deny"` (la valeur de
+//! toute configuration migrée), l'abonnement ne sert que les tours **ouverts par le
+//! propriétaire** : un message Telegram ou CLI, les sous-agents de ce tour, un run de
+//! workflow qu'il lance lui-même (gate « vas-y », `/run`, CLI).
 //!
-//! Tout ce qui tourne sans lui — planification à cible `prompt`, rêve nocturne, veille,
-//! résumeur de compaction, relecture d'épisode, consolidation, classifieur, embeddings,
-//! transcription, synthèse vocale, titre automatique, run de workflow — se replie sur le
-//! modèle OpenRouter de l'alias, sans carte ni bruit, en laissant un événement.
+//! Tout ce qui tourne sans lui (planification, rêve nocturne, veille, résumeur de
+//! compaction, relecture d'épisode, consolidation, classifieur, embeddings, transcription,
+//! synthèse vocale, titre automatique, run de workflow planifié) passe sur le modèle de
+//! repli, **en le disant** une fois dans la conversation (`model_watch`). Avec `allow`,
+//! tout passe par l'abonnement, et le risque est écrit une fois, dans `/model` et la doc.
 //!
 //! La garde est **unique** et se pose juste avant le choix du fournisseur : un travail de
 //! fond nomme ce qu'il est, et reçoit en retour le modèle qu'il a le droit d'appeler.
 
+use crate::bus::Origin;
+use crate::model_route::watch;
+use crate::model_watch::{Place, short};
 use crate::services::Services;
 use penelope_kernel::config::Config;
 use penelope_kernel::event::EventDraft;
 use serde_json::json;
 
-/// Rôles qui tournent sans le propriétaire : leur alias ne doit jamais viser `codex:`.
+/// Rôles qui tournent sans le propriétaire : sous la garde, ils ne visent pas `codex:`.
 ///
-/// Les autres rôles (`chat_default`, `code`, `image_*`) servent **dans** un tour du
-/// propriétaire : ils restent autorisés.
+/// Les autres rôles (`chat_default`, `code`, `workflow`, `image_*`) servent **dans** un
+/// tour du propriétaire ; un run planifié est gardé par son origine, pas par son rôle.
 pub const BACKGROUND_ROLES: &[&str] = &[
     "classifier",
+    "title",
+    "dream",
     "compaction",
     "memory_review",
     "approval_judge",
@@ -37,15 +46,40 @@ pub fn is_codex(model_id: &str) -> bool {
 }
 
 /// Modèle effectivement appelable par un travail de fond. `work` nomme le travail, pour
-/// la trace : `rêve`, `compaction`, `classifieur`, `workflow`…
+/// la trace et l'annonce : `rêve`, `compaction`, `classifieur`, `workflow`…
 ///
-/// Rend le modèle tel quel quand il ne vise pas l'abonnement — le cas courant, sans
+/// Rend le modèle tel quel quand il ne vise pas l'abonnement : le cas courant, sans
 /// aucun coût.
 pub async fn background(s: &Services, model_id: &str, work: &str) -> String {
+    guarded(s, model_id, work, "travail de fond", None).await
+}
+
+/// [`background`], en disant pourquoi le travail est gardé et où l'annoncer (`None` : le
+/// foyer du propriétaire).
+pub async fn guarded(
+    s: &Services,
+    model_id: &str,
+    work: &str,
+    why: &str,
+    origin: Option<&Origin>,
+) -> String {
     if !is_codex(model_id) {
         return model_id.to_string();
     }
     let cfg = s.config.config();
+    let (watch, key) = (watch(s), format!("guard.{work}"));
+    let place = Place {
+        session: None,
+        origin,
+    };
+    if cfg.codex_background_allowed() {
+        let text = format!(
+            "✅ `{work}` repasse par `{}` : garde Codex levée",
+            short(model_id)
+        );
+        watch.settle(&place, &key, model_id, &text).await;
+        return model_id.to_string();
+    }
     let replaced = replacement(&cfg, model_id);
     let _ = s
         .events
@@ -60,11 +94,15 @@ pub async fn background(s: &Services, model_id: &str, work: &str) -> String {
         ))
         .await;
     match replaced {
-        Some(m) => m,
+        Some(m) => {
+            let text = format!("⚠️ `{work}` part sur `{}` : garde Codex ({why})", short(&m));
+            watch.deviate(&place, &key, &m, &text).await;
+            m
+        }
         None => {
-            // Aucun modèle hors abonnement dans toute la configuration : `model set`
-            // refuse d'en arriver là, et `doctor` le signale. Plutôt que d'arrêter le
-            // travail de fond, on le laisse passer, tracé.
+            // Aucun modèle hors abonnement dans le profil : `model set` refuse d'en
+            // arriver là, et `doctor` le signale. Plutôt que d'arrêter le travail de
+            // fond, on le laisse passer, tracé.
             tracing::warn!(
                 work,
                 model = model_id,
@@ -76,44 +114,54 @@ pub async fn background(s: &Services, model_id: &str, work: &str) -> String {
 }
 
 /// Modèle appelable pour un tour, d'après son origine : un message du propriétaire
-/// (canal, CLI) garde l'abonnement, tout autre tour — planification à cible `prompt`,
-/// veille, travail interne — se replie.
-pub async fn for_origin(s: &Services, model_id: &str, origin: &crate::bus::Origin) -> String {
+/// (canal, CLI) garde l'abonnement, tout autre tour (planification à cible `prompt`,
+/// veille, travail interne) passe par la garde.
+pub async fn for_origin(s: &Services, model_id: &str, origin: &Origin) -> String {
     match origin {
-        crate::bus::Origin::Internal { source } => background(s, model_id, source).await,
+        Origin::Internal { source } => guarded(s, model_id, source, "tâche planifiée", None).await,
         _ => model_id.to_string(),
     }
 }
 
-/// Modèle de repli d'un modèle `codex:` : la chaîne `models.routing.fallback` de son
-/// alias d'abord, le modèle de conversation ensuite, rien enfin.
+/// Ce que la garde ferait d'un travail de fond sur ce modèle, sans rien appeler ni
+/// annoncer : `Some(repli)` quand elle s'applique (`/model`, « Tout voir »).
+pub fn preview(cfg: &Config, model_id: &str) -> Option<String> {
+    (is_codex(model_id) && !cfg.codex_background_allowed())
+        .then(|| replacement(cfg, model_id))
+        .flatten()
+}
+
+/// Modèle de repli d'un modèle `codex:` : la chaîne du profil actif pour son alias
+/// d'abord, le principal ensuite, rien enfin.
 fn replacement(cfg: &Config, model_id: &str) -> Option<String> {
     let alias = cfg
         .models
         .aliases
         .iter()
         .find(|(_, m)| m.as_str() == model_id)
-        .map(|(a, _)| a.clone());
-    if let Some(alias) = &alias {
-        for to in cfg.models.routing.fallback.get(alias).into_iter().flatten() {
-            if let Some(m) = cfg.alias_model(to).filter(|m| !is_codex(m)) {
-                return Some(m.to_string());
-            }
+        .map(|(a, _)| a.clone())
+        .unwrap_or_else(|| model_id.to_string());
+    for to in cfg.fallback_labels(&alias) {
+        if let Some(m) = cfg.alias_model(&to).filter(|m| !is_codex(m)) {
+            return Some(m.to_string());
         }
     }
-    cfg.alias_model(&cfg.role_alias("chat_default"))
+    cfg.alias_model(&cfg.primary_label())
         .filter(|m| !is_codex(m))
         .map(String::from)
 }
 
-/// Rôles de fond servis par cet alias, s'il y en a : `model set` refuse de leur donner
-/// l'abonnement, et `doctor` signale ceux qui l'auraient contourné.
+/// Rôles de fond servis par cet alias dans le profil actif, s'il y en a : sous la garde,
+/// `model set` refuse de leur donner l'abonnement, et `doctor` signale ceux qui
+/// l'auraient contourné. Garde levée : aucun.
 pub fn background_roles_of(cfg: &Config, alias: &str) -> Vec<String> {
-    cfg.models
-        .roles
+    if cfg.codex_background_allowed() {
+        return Vec::new();
+    }
+    BACKGROUND_ROLES
         .iter()
-        .filter(|(role, a)| a.as_str() == alias && BACKGROUND_ROLES.contains(&role.as_str()))
-        .map(|(role, _)| role.clone())
+        .filter(|role| cfg.role_alias(role) == alias)
+        .map(|role| role.to_string())
         .collect()
 }
 
@@ -187,9 +235,12 @@ mod tests {
         let c = cfg();
         assert_eq!(
             background_roles_of(&c, "fast"),
-            ["approval_judge", "classifier", "memory_review"]
+            ["classifier", "title", "memory_review", "approval_judge"]
         );
-        assert_eq!(background_roles_of(&c, "summarizer"), ["compaction"]);
+        assert_eq!(
+            background_roles_of(&c, "summarizer"),
+            ["dream", "compaction"]
+        );
         assert!(
             background_roles_of(&c, "main").is_empty(),
             "la conversation"

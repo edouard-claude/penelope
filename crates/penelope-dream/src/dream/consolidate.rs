@@ -100,11 +100,11 @@ pub(super) async fn consolidate(
     let cfg = s.config.config();
     let alias = match alias_override {
         Some(a) => a.to_string(),
-        None => cfg.role_alias("compaction"),
+        None => cfg.role_alias("dream"),
     };
     let model = cfg
         .alias_model(&alias)
-        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour `{alias}`, rôle `dream`"))?
         .to_string();
     let model = crate::codex_scope::background(&d.services, &model, "rêve").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;

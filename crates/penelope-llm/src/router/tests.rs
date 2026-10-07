@@ -74,21 +74,6 @@ fn router() -> Router {
 }
 
 #[test]
-fn image_attachment_routes_to_vision() {
-    let d = router()
-        .route_deterministic(
-            &cfg(),
-            &RouteInput {
-                has_image_attachment: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert_eq!(d.reason, RouteReason::Vision);
-    assert_eq!(d.alias, "vision");
-}
-
-#[test]
 fn image_request_routes_to_image_model() {
     let d = router()
         .route_deterministic(
@@ -146,7 +131,7 @@ fn step_model_wins_over_everything() {
         .route_deterministic(
             &cfg(),
             &RouteInput {
-                has_image_attachment: true,
+                message: "génère une image d'un chat".into(),
                 step_model: Some("reasoning".into()),
                 ..Default::default()
             },
@@ -287,16 +272,35 @@ fn ca_10_3_fallback_chain_is_used_on_transient_failure() {
     );
 }
 
+/// #332 : un profil dont les étages sont vides n'appelle pas le classifieur, tout passe
+/// par le principal ; une chaîne de repli se lit dans le profil actif.
 #[test]
-fn escalation_goes_one_rung_up_only() {
+fn a_profile_without_tiers_skips_the_classifier() {
     let r = router();
-    let c = cfg();
-    assert_eq!(r.escalation(&c, "fast").unwrap().alias, "main");
-    assert_eq!(r.escalation(&c, "main").unwrap().alias, "reasoning");
-    assert!(
-        r.escalation(&c, "reasoning").is_none(),
-        "pas d'escalade au-delà du rang le plus haut"
+    let mut c = cfg();
+    let p = penelope_kernel::config::ModelProfile {
+        primary: "reasoning".into(),
+        fallback: [("reasoning".to_string(), vec!["fast".to_string()])].into(),
+        ..Default::default()
+    };
+    c.models.profiles.insert("x".into(), p);
+    c.models.profile = "x".into();
+    let d = r
+        .route_deterministic(
+            &c,
+            &RouteInput {
+                message: "explique-moi la relativité générale en détail".into(),
+                ..Default::default()
+            },
+        )
+        .expect("aucun classifieur à appeler");
+    assert_eq!(
+        (d.alias.as_str(), d.reason),
+        ("reasoning", RouteReason::Default)
     );
+    let chain = r.fallback_chain(&c, "reasoning");
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].alias, "fast");
 }
 
 #[test]

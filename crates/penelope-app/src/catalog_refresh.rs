@@ -49,10 +49,17 @@ pub fn endpoint_of(cfg: &Config, model: &str) -> Option<String> {
 /// Les endpoints à rafraîchir, chacun avec le premier modèle d'alias qui le vise : celui
 /// de `chat_default` d'abord, puis les alias dans l'ordre (les rôles nomment des alias).
 pub fn targets(cfg: &Config) -> BTreeMap<String, String> {
-    let main = cfg.alias_model(&cfg.role_alias("chat_default"));
-    let mut out = BTreeMap::new();
-    for model in main
+    // Les modèles du profil actif d'abord (#332 : un profil peut citer un identifiant
+    // sans alias), puis les alias dans l'ordre.
+    let resolved: Vec<String> = cfg
+        .resolve_all(&penelope_kernel::config::NoCaps)
         .into_iter()
+        .filter_map(|r| r.model)
+        .collect();
+    let mut out = BTreeMap::new();
+    for model in resolved
+        .iter()
+        .map(String::as_str)
         .chain(cfg.models.aliases.values().map(String::as_str))
     {
         if let Some(endpoint) = endpoint_of(cfg, model) {

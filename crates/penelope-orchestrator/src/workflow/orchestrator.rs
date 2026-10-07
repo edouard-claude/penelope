@@ -182,7 +182,6 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
         let model_id = cfg
             .alias_model(&alias)
             .map(String::from)
-            .or_else(|| alias.contains(':').then(|| alias.clone()))
             .ok_or_else(|| format!("alias de modèle inconnu `{alias}`"))?;
         // Le sous-agent hérite du périmètre de son tour : l'abonnement ChatGPT sert ceux
         // du propriétaire, pas une planification qui passerait par là (#142).

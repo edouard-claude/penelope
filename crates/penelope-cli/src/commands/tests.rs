@@ -25,6 +25,47 @@ fn model_list_shows_the_routing_in_force() {
     assert!(out.contains("models.routing.classifier false"), "{out}");
     assert!(out.contains("main → fast"), "{out}");
 }
+
+/// #334 : `model list` dit d'abord le profil actif, puis rôle par rôle le modèle qui
+/// tourne et pourquoi, la garde appliquée et les écarts en cours.
+#[test]
+fn model_list_shows_the_profile_and_each_role() {
+    let v = json!({
+        "profile": "defaut",
+        "primary": {"label": "main", "model": "codex:gpt-5.6-sol"},
+        "codex_background": "deny",
+        "profiles": [
+            {"name": "defaut", "active": true, "derived": true},
+            {"name": "Codex (crédits)", "active": false, "derived": false}
+        ],
+        "roles": [
+            {"role": "chat_default", "model": "codex:gpt-5.6-sol", "icon": "✓",
+             "why": "suit le principal", "guarded": null},
+            {"role": "dream", "model": "codex:gpt-5.6-sol", "icon": "⛔",
+             "why": "garde Codex", "guarded": "openrouter:deepseek/deepseek-v4.1-flash"}
+        ],
+        "deviations": [{"text": "⚠️ `rêve` part sur `deepseek-v4.1-flash` : garde Codex"}],
+        "aliases": [],
+        "models": [],
+        "note": ""
+    });
+    let out = render_model_list(&v);
+    assert!(
+        out.starts_with("Profil actif : « defaut » · principal main"),
+        "{out}"
+    );
+    assert!(
+        out.contains("● defaut (déduit") && out.contains("○ Codex (crédits)"),
+        "{out}"
+    );
+    assert!(out.contains("✓ chat_default"), "{out}");
+    assert!(
+        out.contains("⛔ dream")
+            && out.contains("→ openrouter:deepseek/deepseek-v4.1-flash sous la garde"),
+        "{out}"
+    );
+    assert!(out.contains("Écarts en cours (24 h)"), "{out}");
+}
 use clap::CommandFactory;
 
 fn parse(args: &[&str]) -> Cli {
@@ -106,6 +147,9 @@ fn commands_route_to_rpc_methods() {
         (vec!["config", "get"], m::CONFIG_GET),
         (vec!["secret", "list"], m::SECRET_LIST),
         (vec!["model", "list"], m::MODEL_LIST),
+        (vec!["model", "set", "classifier", "fast"], m::MODEL_SET),
+        (vec!["model", "unset", "classifier"], m::MODEL_UNSET),
+        (vec!["model", "profile", "use", "defaut"], m::MODEL_PROFILE),
         (vec!["model", "auth", "codex"], m::MODEL_AUTH),
         (vec!["wf", "list"], m::WF_LIST),
         (vec!["schedule", "list"], m::SCHEDULE_LIST),

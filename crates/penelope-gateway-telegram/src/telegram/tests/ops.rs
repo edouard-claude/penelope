@@ -140,7 +140,7 @@ async fn routing_and_costs_are_readable_from_telegram() {
     g.process_update(&updates::text_message(41, OWNER, OWNER, "/model auto off"))
         .await
         .unwrap();
-    g.process_update(&updates::text_message(42, OWNER, OWNER, "/model"))
+    g.process_update(&updates::text_message(42, OWNER, OWNER, "/model session"))
         .await
         .unwrap();
 
@@ -198,7 +198,7 @@ async fn model_buttons_pin_the_session_then_give_it_back_to_the_router() {
     let main = cfg.alias_model("main").unwrap().to_string();
     let reasoning = cfg.alias_model("reasoning").unwrap().to_string();
 
-    g.process_update(&updates::text_message(70, OWNER, OWNER, "/model"))
+    g.process_update(&updates::text_message(70, OWNER, OWNER, "/model session"))
         .await
         .unwrap();
     drain(&g).await;

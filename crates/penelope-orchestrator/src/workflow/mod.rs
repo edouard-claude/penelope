@@ -51,6 +51,8 @@ pub struct State {
     wake: tokio::sync::Notify,
     /// Branchements reçus de la composition, lus au moment de s'en servir.
     pub ports: Ports,
+    /// Compactions en cours des sessions de run (#335).
+    pub compaction: Arc<penelope_conversation::compaction::State>,
 }
 
 /// Ce que le moteur de workflows reçoit au lieu des branchements du daemon : canal du
@@ -146,6 +148,26 @@ fn origin_key(run_id: &str) -> String {
     format!("wf.origin.{run_id}")
 }
 
+tokio::task_local! {
+    /// Planification qui lance le run en cours de démarrage (#333).
+    static SCHEDULED: String;
+}
+
+/// Démarre un run pour une planification : le run, et ses sous-workflows, restent sous
+/// la garde Codex ; un run lancé par le propriétaire ne l'est pas (#333).
+pub async fn scheduled<F: std::future::Future>(schedule_id: &str, start: F) -> F::Output {
+    SCHEDULED.scope(schedule_id.to_string(), start).await
+}
+
+fn scheduled_key(run_id: &str) -> String {
+    format!("wf.scheduled.{run_id}")
+}
+
+/// La planification qui a lancé ce run, s'il en vient une.
+pub async fn scheduled_by(s: &Services, run_id: &str) -> Option<String> {
+    s.kv_get(&scheduled_key(run_id)).await.ok().flatten()
+}
+
 /// Canal du run : là où partent questions, approbations et carte de progression.
 pub async fn origin_of(s: &Services, run_id: &str) -> Origin {
     match s.kv_get(&origin_key(run_id)).await.ok().flatten() {
@@ -225,7 +247,7 @@ pub use start::{resolve_params, start_run, start_run_briefed};
 pub use step_agent::{SubAgentTask, run_sub_agent};
 use step_agent::{agent_step, extract_json, send_approval_once, sub_agent_step};
 use step_compose::{parallel_step, wait_step, workflow_step};
-use step_ctx::{StepCtx, execute_step};
+use step_ctx::{StepCtx, execute_step, fallbacks_of};
 use step_shell_tool::{shell_step, tool_step};
 use step_user::user_step;
 use step_verify::verify_step;

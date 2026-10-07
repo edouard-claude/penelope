@@ -99,7 +99,7 @@ impl TelegramGateway {
                 let how = if view["classifier"].as_bool().unwrap_or(false) {
                     "le classifieur choisit à chaque message"
                 } else {
-                    "tout passe par `main`"
+                    "tout passe par le principal"
                 };
                 let why = view["last_boundary"]
                     .as_str()

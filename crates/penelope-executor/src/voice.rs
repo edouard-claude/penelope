@@ -28,16 +28,11 @@ const CHUNK_CHARS: usize = 600;
 /// Délai d'une synthèse, par tranche.
 const SPEAK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// Modèle de synthèse : alias du rôle `tts`, sinon l'alias `tts`, sinon le défaut livré.
-/// Le rôle ne se replie jamais sur le modèle de conversation, qui ne sait pas parler.
+/// Modèle de synthèse : le rôle `tts` de `[voice]`, par la résolution unique (#332). Il
+/// ne suit jamais le modèle principal, qui ne sait pas parler.
 pub fn tts_model(cfg: &penelope_kernel::config::Config) -> String {
-    cfg.models
-        .roles
-        .get("tts")
-        .and_then(|alias| cfg.alias_model(alias))
-        .or_else(|| cfg.alias_model("tts"))
-        .unwrap_or(penelope_kernel::config::DEFAULT_TTS_MODEL)
-        .to_string()
+    cfg.role_model("tts")
+        .unwrap_or_else(|| penelope_kernel::config::DEFAULT_TTS_MODEL.to_string())
 }
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -239,14 +234,9 @@ pub async fn synthesize(
 ) -> Result<Wav, String> {
     let cfg = s.config.config();
     let model = tts_model(&cfg);
-    if penelope_llm::catalog::provider_of(&model) != "openrouter"
-        && !cfg.providers.local.enabled
-        && providers.provider_override_active().is_none()
-    {
-        return Err(format!(
-            "la synthèse vise un serveur local (`{model}`) mais `providers.local` n'est pas \
-             activé : `penelope config set providers.local.enabled true`"
-        ));
+    // Endpoint de `providers.extra` ou `providers.local`, comme le texte (#335).
+    if providers.provider_override_active().is_none() {
+        cfg.providers.check_local(&model)?;
     }
     let model = penelope_app::codex_scope::background(s, &model, "synthèse vocale").await;
     let provider = providers.provider_for(&model).await?;

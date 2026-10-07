@@ -646,8 +646,8 @@ impl ReasoningBudget {
         }
         if !on_fallback && let Some(next) = reasoning_fallback(cfg) {
             report.warnings.push(format!(
-                "bascule sur l'alias `{next}` pour le reste de la passe : le \
-                 modèle du rôle `compaction` dépense son budget en \
+                "bascule sur `{next}` pour le reste de la passe : le \
+                 modèle du rôle `dream` dépense son budget en \
                  raisonnement"
             ));
             self.fallback_alias = Some(next);

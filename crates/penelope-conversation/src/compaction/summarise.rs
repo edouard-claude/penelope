@@ -100,11 +100,8 @@ pub(super) async fn summarise_or_recover(
     }
     let cfg = s.config.config();
     let Some(fallback) = cfg
-        .models
-        .routing
-        .fallback
-        .get(&cfg.role_alias("compaction"))
-        .and_then(|v| v.first())
+        .fallback_labels(&cfg.role_alias("compaction"))
+        .first()
         .and_then(|a| cfg.alias_model(a))
         .map(String::from)
         .filter(|m| m != model)

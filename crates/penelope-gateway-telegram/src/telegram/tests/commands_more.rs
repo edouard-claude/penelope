@@ -109,8 +109,9 @@ async fn model_routing_and_account_subcommands() {
     let out = say(&g, &t, "/model auto on").await;
     assert!(out[0].contains("Routage adaptatif activé"), "{out:?}");
     assert!(s.config.config().models.routing.classifier);
+    // Aucun « Usage : » (docs/telegram.md) : un écran à deux boutons.
     let out = say(&g, &t, "/model auto peut-être").await;
-    assert!(out[0].starts_with("Usage"), "{out:?}");
+    assert!(out[0].contains("Routage adaptatif"), "{out:?}");
     let out = say(&g, &t, "/model auth status").await;
     assert!(out[0].contains("Aucun compte ChatGPT connecté"), "{out:?}");
     let out = say(&g, &t, "/model auth --logout").await;

@@ -171,6 +171,8 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Un alias de conversation vers un modèle sans tool calling ne marchera pas (#54).
     checks.push(tool_calling_check(s).await);
+    // Profil actif, migration des clés d'avant, alias que rien ne lit (#332, #335).
+    checks.push(profiles_check(&s.config.config()));
     // Le serveur local d'un alias de texte : joignable, modèles servis, cache (#259).
     checks.extend(local_inference_checks(s).await);
 

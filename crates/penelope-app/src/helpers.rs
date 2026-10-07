@@ -195,11 +195,8 @@ pub async fn pinned_model(s: &Services, session_id: &str) -> Option<penelope_llm
         .flatten()
         .filter(|a| !a.is_empty())?;
     let cfg = s.config.config();
-    match cfg.alias_model(&alias) {
-        Some(id) => Some(penelope_llm::StickyModel {
-            alias,
-            model_id: id.to_string(),
-        }),
+    match cfg.alias_model(&alias).map(String::from) {
+        Some(model_id) => Some(penelope_llm::StickyModel { alias, model_id }),
         None => {
             tracing::warn!(session = session_id, alias = %alias, "alias épinglé disparu de la configuration");
             None

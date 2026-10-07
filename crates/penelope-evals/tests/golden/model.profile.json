@@ -1,0 +1,25 @@
+{
+  "method": "model.profile",
+  "params": {
+    "action": "copy",
+    "name": "essai"
+  },
+  "response": {
+    "result": {
+      "generation": "integer",
+      "action": "string",
+      "profile": "string",
+      "profiles": [
+        {
+          "codex_background": "string",
+          "name": "string",
+          "active": "bool",
+          "derived": "bool",
+          "primary": "string",
+          "model": "string",
+          "overrides": "integer"
+        }
+      ]
+    }
+  }
+}

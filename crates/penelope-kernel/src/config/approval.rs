@@ -41,16 +41,11 @@ impl JudgeMode {
 pub const APPROVAL_JUDGE_ROLE: &str = "approval_judge";
 
 impl Config {
-    /// Alias du modèle du juge : le rôle `approval_judge`, sinon `fast`, sinon celui du
-    /// classifieur. Jamais le modèle de conversation par défaut : une configuration
-    /// écrite avant le rôle ne doit pas payer un grand modèle pour chaque carte.
+    /// Alias du modèle du juge : celui du rôle `approval_judge`, par la résolution
+    /// unique (#332). Le profil déduit des clés d'avant y garde `fast`, sinon le
+    /// classifieur : une configuration écrite avant le rôle ne paie pas un grand modèle
+    /// pour chaque carte.
     pub fn judge_alias(&self) -> String {
-        if let Some(alias) = self.models.roles.get(APPROVAL_JUDGE_ROLE) {
-            return alias.clone();
-        }
-        if self.models.aliases.contains_key("fast") {
-            return "fast".into();
-        }
-        self.role_alias("classifier")
+        self.role_alias(APPROVAL_JUDGE_ROLE)
     }
 }

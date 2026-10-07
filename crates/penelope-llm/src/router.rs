@@ -1,22 +1,25 @@
-//! Routage par complexité, modèle collant, repli et escalade (§10.3).
+//! Routage par complexité, modèle collant et repli (§10.3).
 //!
 //! Ordre imposé par le PRD :
-//! 1. règles déterministes (image, génération d'image, modèle d'étape, rôle d'étape) ;
+//! 1. règles déterministes (génération d'image, modèle d'étape, rôle d'étape) ;
 //! 2. classifieur pour les messages de chat ambigus ;
 //! 3. **sticky** : le modèle est figé pour la session, hors frontières explicites ;
-//! 4. escalade vers un sub-agent, sans changer le modèle de la session ;
-//! 5. repli d'alias sur panne.
+//! 4. repli sur panne, par la chaîne du profil actif.
+//!
+//! Chaque rôle passe par la résolution unique du profil actif (#332,
+//! `Config::resolve_role`). L'escalade vers un étage supérieur, jamais appelée, est
+//! retirée, comme la règle « image jointe » que le moteur ne nourrissait pas : une photo
+//! est montrée au modèle de la session s'il lit les images, décrite sinon (#335).
 
 use crate::catalog::Catalog;
 use crate::types::{LlmError, LlmErrorKind, Result};
-use penelope_kernel::config::Config;
+use penelope_kernel::config::{Config, Tier};
 use serde::{Deserialize, Serialize};
 
 /// Ce que le harnais sait du tour au moment de router.
 #[derive(Debug, Clone, Default)]
 pub struct RouteInput {
     pub message: String,
-    pub has_image_attachment: bool,
     pub wants_image_generation: bool,
     /// Modèle explicitement demandé par une étape de workflow.
     pub step_model: Option<String>,
@@ -49,8 +52,6 @@ pub struct Decision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteReason {
-    /// Pièce jointe image.
-    Vision,
     /// Demande de génération d'image.
     ImageGeneration,
     /// Modèle explicite d'une étape de workflow.
@@ -69,8 +70,6 @@ pub enum RouteReason {
     Default,
     /// Repli après panne.
     Fallback,
-    /// Escalade après échec qualifié.
-    Escalation,
 }
 
 /// Sortie attendue du classifieur (JSON validé, ≤ 200 tokens).
@@ -292,11 +291,6 @@ impl Router {
                 reason: RouteReason::StepModel,
             });
         }
-        if input.has_image_attachment
-            && let Some(d) = self.by_role(cfg, "image_describe", RouteReason::Vision)
-        {
-            return Some(d);
-        }
         if (input.wants_image_generation || looks_like_image_request(&input.message))
             && let Some(d) = self.by_role(cfg, "image_generate", RouteReason::ImageGeneration)
         {
@@ -327,7 +321,8 @@ impl Router {
                 reason: RouteReason::Sticky,
             });
         }
-        if !cfg.models.routing.classifier {
+        // Classifieur éteint, ou sans autre choix que le principal (#332).
+        if !cfg.adaptive_routing() {
             return Some(self.default_decision(cfg));
         }
         // « ok », « merci », « salut » : pas la peine de payer un aller-retour de
@@ -340,64 +335,54 @@ impl Router {
         None
     }
 
-    /// Applique la sortie du classifieur.
+    /// Applique la sortie du classifieur : l'étage du profil, sinon le principal.
     pub fn route_with_classification(&self, cfg: &Config, c: &Classification) -> Decision {
-        let alias = match c.complexity {
-            Complexity::Low => &cfg.models.routing.low,
-            Complexity::Medium => &cfg.models.routing.medium,
-            Complexity::High => &cfg.models.routing.high,
-        };
-        Decision {
-            alias: alias.clone(),
-            model_id: cfg
-                .alias_model(alias)
-                .map(String::from)
-                .unwrap_or_else(|| alias.clone()),
-            reason: RouteReason::Classifier,
-        }
-    }
-
-    pub fn default_decision(&self, cfg: &Config) -> Decision {
-        let alias = cfg.role_alias("chat_default");
+        let alias = cfg.routing_label(match c.complexity {
+            Complexity::Low => Tier::Low,
+            Complexity::Medium => Tier::Medium,
+            Complexity::High => Tier::High,
+        });
         Decision {
             model_id: cfg
                 .alias_model(&alias)
                 .map(String::from)
                 .unwrap_or_else(|| alias.clone()),
             alias,
+            reason: RouteReason::Classifier,
+        }
+    }
+
+    pub fn default_decision(&self, cfg: &Config) -> Decision {
+        let r = cfg.resolve_role("chat_default");
+        Decision {
+            model_id: r.model.unwrap_or_else(|| r.label.clone()),
+            alias: r.label,
             reason: RouteReason::Default,
         }
     }
 
+    /// Un rôle de sous-système, résolu par le profil actif.
     fn by_role(&self, cfg: &Config, role: &str, reason: RouteReason) -> Option<Decision> {
-        let alias = cfg.models.roles.get(role)?;
-        let id = cfg.alias_model(alias)?;
+        let r = cfg.resolve_role_with(role, &self.catalog);
         Some(Decision {
-            alias: alias.clone(),
-            model_id: id.to_string(),
+            model_id: r.model?,
+            alias: r.label,
             reason,
         })
     }
 
-    /// Chaîne de repli d'un alias (§10.3 point 5).
+    /// Chaîne de repli d'un modèle ou alias de départ, dans le profil actif (§10.3).
     pub fn fallback_chain(&self, cfg: &Config, alias: &str) -> Vec<Decision> {
-        cfg.models
-            .routing
-            .fallback
-            .get(alias)
-            .map(|chain| {
-                chain
-                    .iter()
-                    .filter_map(|a| {
-                        cfg.alias_model(a).map(|id| Decision {
-                            alias: a.clone(),
-                            model_id: id.to_string(),
-                            reason: RouteReason::Fallback,
-                        })
-                    })
-                    .collect()
+        cfg.fallback_labels(alias)
+            .iter()
+            .filter_map(|a| {
+                cfg.alias_model(a).map(|id| Decision {
+                    alias: a.clone(),
+                    model_id: id.to_string(),
+                    reason: RouteReason::Fallback,
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Vrai si l'erreur justifie un repli d'alias.
@@ -406,26 +391,6 @@ impl Router {
             err.kind,
             LlmErrorKind::Transient | LlmErrorKind::RateLimited | LlmErrorKind::UnknownModel
         )
-    }
-
-    /// Modèle d'escalade pour un sub-agent (§10.3 point 4) : le rang supérieur, jamais
-    /// le modèle de la session.
-    pub fn escalation(&self, cfg: &Config, current_alias: &str) -> Option<Decision> {
-        let ladder = [
-            cfg.models.routing.low.as_str(),
-            cfg.models.routing.medium.as_str(),
-            cfg.models.routing.high.as_str(),
-        ];
-        let pos = ladder.iter().position(|a| *a == current_alias)?;
-        let next = ladder.get(pos + 1)?;
-        if *next == current_alias {
-            return None;
-        }
-        cfg.alias_model(next).map(|id| Decision {
-            alias: next.to_string(),
-            model_id: id.to_string(),
-            reason: RouteReason::Escalation,
-        })
     }
 
     /// Vérifie qu'un alias pointe vers un modèle présent au catalogue (§10.2 :

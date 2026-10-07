@@ -189,13 +189,13 @@ pub(super) async fn fire(
                 .get()
                 .ok_or_else(|| anyhow::anyhow!("moteur de workflows non démarré"))?;
             let params = template_params(&sched.target["params"], &vars, items.first());
-            orchestrator
-                .start_workflow(
-                    sched.target["workflowId"].as_str().unwrap_or_default(),
-                    params,
-                    None,
-                    &origin,
-                )
+            let start = orchestrator.start_workflow(
+                sched.target["workflowId"].as_str().unwrap_or_default(),
+                params,
+                None,
+                &origin,
+            );
+            crate::workflow::scheduled(&sched.id, start)
                 .await
                 .map_err(anyhow::Error::msg)?;
         }

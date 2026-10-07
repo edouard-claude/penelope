@@ -375,8 +375,7 @@ pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome
             Ok(m) => m,
             Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
         };
-        let model_id =
-            penelope_app::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
+        let model_id = ctx.guard(&model_id).await;
         let mut workspaces = vec![ctx.workdir()];
         for root in penelope_executor::executor::default_workspaces(s) {
             if !workspaces.contains(&root) {

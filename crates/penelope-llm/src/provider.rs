@@ -270,7 +270,8 @@ impl ProviderSet {
                 .map(|p| p as Arc<dyn Provider>)
                 .or_else(|| self.compat.clone().map(|p| p as Arc<dyn Provider>)),
             // Même règle que `Providers::local_endpoint` : l'endpoint supplémentaire qui
-            // liste le modèle, sinon `providers.local` (#259).
+            // liste le modèle, sinon `providers.local` (#259). Jamais OpenRouter : un
+            // modèle local ne part pas en ligne, il échoue en le disant (#335).
             _ => {
                 let bare = crate::catalog::strip_provider(model_id);
                 self.extra
@@ -278,9 +279,24 @@ impl ProviderSet {
                     .find(|(models, _)| models.iter().any(|m| m == bare))
                     .map(|(_, p)| p.clone() as Arc<dyn Provider>)
                     .or_else(|| self.compat.clone().map(|p| p as Arc<dyn Provider>))
-                    .or_else(|| self.openrouter.clone().map(|p| p as Arc<dyn Provider>))
             }
         }
+    }
+
+    /// Le fournisseur d'un modèle, ou pourquoi il n'y en a pas, en clair.
+    pub fn resolve(&self, model_id: &str) -> std::result::Result<Arc<dyn Provider>, String> {
+        self.get(model_id)
+            .ok_or_else(|| match crate::catalog::provider_of(model_id) {
+                "local" | "openai_compat" => format!(
+                    "aucun endpoint local ne sert `{model_id}` : l'ajouter à la liste `models` \
+                     d'un `providers.extra.*` actif, ou activer `providers.local`. Un modèle \
+                     local ne part jamais en ligne"
+                ),
+                "codex" => format!(
+                    "`{model_id}` : aucun compte ChatGPT connecté (`penelope model auth codex`)"
+                ),
+                _ => format!("aucun provider configuré pour `{model_id}`"),
+            })
     }
 }
 

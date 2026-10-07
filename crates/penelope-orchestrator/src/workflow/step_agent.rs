@@ -72,8 +72,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id =
-        penelope_app::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
+    let model_id = ctx.guard(&model_id).await;
     let provider = match ctx.d.provider_for(&model_id).await {
         Ok(p) => p,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
@@ -97,7 +96,7 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         run_id: Some(run.id.clone()),
         turn_id: None,
         model_id: model_id.clone(),
-        fallback_models: Vec::new(),
+        fallback_models: fallbacks_of(&s.config.config(), &model_id),
         tools,
         allowed_tools: allowed,
         cancel: ctx.cancel.clone(),
@@ -112,7 +111,9 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         // journal (source de vérité, épopée #208), dans une étape comme dans un chat.
         let held = penelope_conversation::prefix::held_prefix(s, &session).await?;
         penelope_conversation::prefix::settle(s, &session, held, &mut tiers).await?;
-        let conv = SessionConversation::new(s.clone(), &session, &model_id, tiers, 0);
+        // Une étape longue se compacte comme une conversation (#335).
+        let conv = SessionConversation::new(s.clone(), &session, &model_id, tiers, 0)
+            .with_compactor(Arc::new(compactor(ctx.d)));
         let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
             .run_conversation(&spec, &conv, &exec, &NullSink)
             .await?;
@@ -247,6 +248,19 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
 
 /// Lance un sous-agent en contexte neuf ; renvoie son texte final.
 /// Demande faite à un sous-agent.
+/// Compaction sur dépassement de fenêtre d'une étape, comme celle d'un tour (#335).
+fn compactor(d: &Context) -> penelope_conversation::compaction::OverflowCompactor {
+    penelope_conversation::compaction::OverflowCompactor {
+        context: penelope_conversation::compaction::Context {
+            services: d.services.clone(),
+            providers: d.providers.clone(),
+            bus: d.bus.clone(),
+            compaction: d.workflows.compaction.clone(),
+        },
+        turn_id: None,
+    }
+}
+
 pub struct SubAgentTask<'a> {
     pub session_id: &'a str,
     pub run_id: Option<&'a str>,
@@ -298,7 +312,7 @@ pub async fn run_sub_agent(
         run_id: run_id.map(String::from),
         turn_id: None,
         model_id: model_id.to_string(),
-        fallback_models: Vec::new(),
+        fallback_models: fallbacks_of(&s.config.config(), model_id),
         tools,
         allowed_tools: allowed,
         cancel: cancel.clone(),
@@ -353,8 +367,7 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
         Ok(m) => m,
         Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
     };
-    let model_id =
-        penelope_app::codex_scope::background(&ctx.d.services, &model_id, "workflow").await;
+    let model_id = ctx.guard(&model_id).await;
     let mut prompt = with_brief(ctx, ctx.render(&step.prompt).await).await;
     if let Some(schema) = &step.output_schema {
         prompt.push_str(&format!(

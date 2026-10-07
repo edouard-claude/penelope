@@ -21,18 +21,11 @@ use std::path::Path;
 
 pub use penelope_app::vision::Task;
 
-/// Alias du modèle d'une tâche. `image_locate` absent d'une configuration antérieure :
-/// celui de `image_describe`, jamais le modèle de conversation.
-pub fn alias_for(cfg: &Config, task: Task) -> String {
-    match task {
-        Task::Locate => cfg
-            .models
-            .roles
-            .get("image_locate")
-            .cloned()
-            .unwrap_or_else(|| cfg.role_alias("image_describe")),
-        _ => cfg.role_alias("image_describe"),
-    }
+/// Ce que le profil actif nomme pour une tâche, par la résolution unique (#332) : la
+/// surcharge du rôle, sinon le modèle de la capacité `vision`, sinon le principal s'il lit
+/// les images. Le pointage d'une configuration d'avant y garde l'alias de la lecture.
+pub fn alias_for(cfg: &Config, catalog: &penelope_llm::Catalog, task: Task) -> String {
+    cfg.resolve_role_with(task.role(), catalog).label
 }
 
 /// Consigne de description : pour un modèle de conversation qui ne voit pas l'image.
@@ -96,7 +89,7 @@ pub async fn ask(
     turn_id: &str,
 ) -> Result<Answer, String> {
     let cfg = s.config.config();
-    let alias = alias_for(&cfg, task);
+    let alias = alias_for(&cfg, &s.catalog, task);
     let model = cfg
         .alias_model(&alias)
         .ok_or_else(|| {
@@ -533,14 +526,20 @@ mod tests {
             .roles
             .insert("image_describe".into(), "vision".into());
         assert_eq!(
-            alias_for(&cfg, Task::Locate),
+            alias_for(&cfg, &penelope_llm::Catalog::new(), Task::Locate),
             "vision",
             "défaut : l'alias de vision"
         );
         cfg.models
             .roles
             .insert("image_locate".into(), "pointage".into());
-        assert_eq!(alias_for(&cfg, Task::Locate), "pointage");
-        assert_eq!(alias_for(&cfg, Task::Describe), "vision");
+        assert_eq!(
+            alias_for(&cfg, &penelope_llm::Catalog::new(), Task::Locate),
+            "pointage"
+        );
+        assert_eq!(
+            alias_for(&cfg, &penelope_llm::Catalog::new(), Task::Describe),
+            "vision"
+        );
     }
 }

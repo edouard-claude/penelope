@@ -96,6 +96,8 @@
           "tts": "string",
           "vision": "string"
         },
+        "profile": "string",
+        "profiles": {},
         "roles": {
           "approval_judge": "string",
           "chat_default": "string",
@@ -292,6 +294,9 @@
         "archive_base_url": "string"
       },
       "voice": {
+        "stt": "string",
+        "tts": "string",
+        "narrator": "string",
         "tts_voice": "string",
         "max_chars": "integer",
         "reply_in_kind": "bool",

@@ -390,11 +390,9 @@ async fn summarise(
 ) -> Result<Summary, String> {
     let s = &d.services;
     let cfg = s.config.config();
-    let alias = cfg.role_alias("memory_review");
     let model = cfg
-        .alias_model(&alias)
-        .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `memory_review`"))?
-        .to_string();
+        .role_model("memory_review")
+        .ok_or_else(|| "aucun modèle pour le rôle `memory_review`".to_string())?;
     let provider = d.provider_for(&model).await?;
     let info = s.catalog.get(&model);
     let effort = info.as_ref().and_then(|i| i.lightest_effort());

@@ -31,6 +31,7 @@ mod ops;
 mod prompt_forms;
 mod screens_admin;
 mod screens_memory;
+mod screens_models;
 mod screens_more;
 mod screens_runs;
 mod sessions;

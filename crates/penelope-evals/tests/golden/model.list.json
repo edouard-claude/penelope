@@ -5,6 +5,44 @@
   },
   "response": {
     "result": {
+      "profile": "string",
+      "profiles": [
+        {
+          "name": "string",
+          "active": "bool",
+          "derived": "bool",
+          "primary": "string",
+          "model": "string",
+          "codex_background": "string",
+          "overrides": "integer"
+        }
+      ],
+      "primary": {
+        "label": "string",
+        "model": "string"
+      },
+      "codex_background": "string",
+      "codex_risk": "string",
+      "roles": [
+        {
+          "family": "string",
+          "name": "string",
+          "label": "string",
+          "model": "string",
+          "reason": "string",
+          "icon": "string",
+          "why": "string",
+          "role": "string",
+          "guarded": "null"
+        }
+      ],
+      "voice_roles": [
+        "string"
+      ],
+      "capabilities": [
+        "string"
+      ],
+      "deviations": [],
       "aliases": [
         {
           "usd_per_m_in": "null",
@@ -18,6 +56,7 @@
       ],
       "routing": {
         "classifier": "bool",
+        "adaptive": "bool",
         "default": {
           "alias": "string",
           "model": "string"

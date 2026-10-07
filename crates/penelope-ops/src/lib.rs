@@ -15,6 +15,7 @@ pub mod codex_quota;
 pub mod doctor;
 pub mod hermes;
 pub mod lifecycle;
+pub mod models;
 pub mod purge;
 pub mod session_ops;
 pub mod skill_deps;

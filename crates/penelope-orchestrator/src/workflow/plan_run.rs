@@ -241,19 +241,15 @@ async fn launch(
     Ok((run, true))
 }
 
-/// Le modèle d'une phase est un alias (`reasoning`, `main`) ou un rôle (`code`) : il est
-/// résolu ici, sur la configuration du moment, et figé dans la définition du run. Un nom
-/// que la configuration ne connaît pas cède au modèle de conversation.
+/// Le modèle d'une phase est un alias (`reasoning`, `main`), un identifiant ou un rôle
+/// (`code`) : il est résolu ici par le profil actif (#332), et figé dans la définition du
+/// run. Un nom que la configuration ne connaît pas prend le rôle `workflow`.
 fn resolve_models(wf: &mut Workflow, cfg: &penelope_kernel::config::Config) {
     for step in wf.steps.iter_mut().filter(|s| !s.model.is_empty()) {
         if cfg.alias_model(&step.model).is_some() {
             continue;
         }
-        step.model = if cfg.models.roles.contains_key(&step.model) {
-            cfg.role_alias(&step.model)
-        } else {
-            cfg.role_alias("chat_default")
-        };
+        step.model = cfg.role_alias(super::step_ctx::step_role(cfg, &step.model));
     }
 }
 

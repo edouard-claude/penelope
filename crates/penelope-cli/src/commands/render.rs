@@ -121,9 +121,67 @@ pub(super) fn keychain_cell(s: &Value) -> &'static str {
     }
 }
 
-/// `penelope model list` : alias, routage en vigueur, puis recherche au catalogue.
+/// Le profil actif, les autres, la table des rôles et les écarts des 24 h.
+fn render_profiles(v: &Value) -> String {
+    let Some(name) = v["profile"].as_str() else {
+        return String::new();
+    };
+    let mut out = format!(
+        "Profil actif : « {name} » · principal {} ({}) · garde Codex : {}\n",
+        v["primary"]["label"].as_str().unwrap_or("?"),
+        v["primary"]["model"].as_str().unwrap_or("?"),
+        v["codex_background"].as_str().unwrap_or("deny"),
+    );
+    let profiles: Vec<String> = v["profiles"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    let mark = if p["active"].as_bool().unwrap_or(false) {
+                        "●"
+                    } else {
+                        "○"
+                    };
+                    let derived = if p["derived"].as_bool().unwrap_or(false) {
+                        " (déduit des clés d'avant 1.0.47)"
+                    } else {
+                        ""
+                    };
+                    format!("{mark} {}{derived}", p["name"].as_str().unwrap_or("?"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.push_str(&format!("Profils : {}\n\nRôles\n", profiles.join(" · ")));
+    for r in v["roles"].as_array().cloned().unwrap_or_default() {
+        let guarded = r["guarded"]
+            .as_str()
+            .map(|g| format!(" → {g} sous la garde"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  {} {:<16} {}{guarded} ({})\n",
+            r["icon"].as_str().unwrap_or(" "),
+            r["role"].as_str().unwrap_or("?"),
+            r["model"].as_str().unwrap_or("aucun"),
+            r["why"].as_str().unwrap_or(""),
+        ));
+    }
+    let deviations = v["deviations"].as_array().cloned().unwrap_or_default();
+    if !deviations.is_empty() {
+        out.push_str("\nÉcarts en cours (24 h)\n");
+        for d in deviations {
+            out.push_str(&format!("  {}\n", d["text"].as_str().unwrap_or("?")));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+/// `penelope model list` : profil actif, rôle par rôle le modèle effectif et sa raison,
+/// écarts en cours, alias, routage, puis recherche au catalogue (#334).
 pub(super) fn render_model_list(v: &Value) -> String {
-    let mut out = String::from("Alias\n");
+    let mut out = render_profiles(v);
+    out.push_str("Alias\n");
     if let Some(a) = v["aliases"].as_array() {
         out.push_str(&output::table(a));
     }

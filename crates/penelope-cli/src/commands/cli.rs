@@ -481,14 +481,33 @@ pub enum SecretCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum ModelCmd {
+    /// Profil actif, rôle par rôle le modèle qui tourne et pourquoi, écarts des 24 h,
+    /// alias ; `--filter` cherche au catalogue.
     List {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// Donne un modèle (alias ou `fournisseur:modèle`) à `primary`, un rôle
+    /// (`classifier`), une capacité (`vision`), une voix (`stt`), un étage du
+    /// classifieur (`routing.high`) ou un alias (`main`).
     Set {
-        alias: String,
+        target: String,
         model: String,
+        /// Profil à modifier ; par défaut, l'actif.
+        #[arg(long)]
+        profile: Option<String>,
     },
+    /// Retire la surcharge d'un rôle, une capacité, un étage ou une voix : il revient au
+    /// principal.
+    Unset {
+        target: String,
+        /// Profil à modifier ; par défaut, l'actif.
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Profils : basculer, créer, dupliquer, renommer, supprimer, régler la garde Codex.
+    #[command(subcommand)]
+    Profile(ProfileCmd),
     /// Connecte un fournisseur à compte (`codex` : abonnement ChatGPT).
     Auth {
         /// Fournisseur à connecter.
@@ -501,6 +520,39 @@ pub enum ModelCmd {
         #[arg(long)]
         status: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProfileCmd {
+    /// Bascule sur un profil, sans redémarrage.
+    Use { name: String },
+    /// Crée un profil autour d'un modèle principal.
+    New {
+        name: String,
+        /// Modèle principal (alias ou `fournisseur:modèle`) ; par défaut, celui de l'actif.
+        #[arg(long)]
+        primary: Option<String>,
+        /// Garde Codex du travail de fond : `deny` ou `allow` ; obligatoire pour un
+        /// principal Codex.
+        #[arg(long)]
+        codex_background: Option<String>,
+        /// Bascule aussitôt sur le profil créé.
+        #[arg(long = "use")]
+        switch: bool,
+    },
+    /// Duplique un profil (par défaut, l'actif).
+    Copy {
+        name: String,
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Renomme un profil.
+    Rename { name: String, to: String },
+    /// Supprime un profil qui n'est pas l'actif.
+    Rm { name: String },
+    /// Garde Codex d'un profil : `deny` (le travail de fond passe ailleurs, en le disant)
+    /// ou `allow` (tout passe par Codex).
+    Guard { name: String, value: String },
 }
 
 #[derive(Subcommand, Debug)]

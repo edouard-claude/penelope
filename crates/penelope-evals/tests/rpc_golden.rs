@@ -403,6 +403,8 @@ fn params_of(m: &str) -> Value {
             json!({"alias": "main", "model": "openrouter:anthropic/claude-sonnet-4"})
         }
         method::MODEL_ROUTE_TEST => json!({"text": "explique-moi la relativité générale"}),
+        method::MODEL_UNSET => json!({"target": "classifier"}),
+        method::MODEL_PROFILE => json!({"action": "copy", "name": "essai"}),
         method::MODEL_AUTH => json!({"provider": "codex", "action": "status"}),
         method::MODEL_LIST => json!({"filter": "claude"}),
         // Aucun superviseur MCP dans un daemon de test : le cas d'erreur documenté.

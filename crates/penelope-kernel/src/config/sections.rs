@@ -723,6 +723,15 @@ impl Default for Skills {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Voice {
+    /// Modèle de transcription (alias ou `fournisseur:modèle`, #332) ; vide : l'ancien
+    /// rôle `stt`, sinon l'alias `stt`. Jamais le modèle principal.
+    pub stt: String,
+    /// Modèle de synthèse vocale ; vide : l'ancien rôle `tts`, sinon l'alias `tts`, sinon
+    /// Voxtral en local.
+    pub tts: String,
+    /// Modèle de la narration de la trace ; vide : l'ancien rôle `trace`, sinon le premier
+    /// alias `local:` de texte.
+    pub narrator: String,
     /// Voix préréglée du modèle de synthèse (rôle `tts`).
     pub tts_voice: String,
     /// Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal.
@@ -736,6 +745,9 @@ pub struct Voice {
 impl Default for Voice {
     fn default() -> Self {
         Voice {
+            stt: String::new(),
+            tts: String::new(),
+            narrator: String::new(),
             tts_voice: "fr_female".into(),
             max_chars: 1_500,
             reply_in_kind: false,

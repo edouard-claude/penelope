@@ -228,24 +228,35 @@ pub async fn codex_checks(s: &Services) -> Vec<DoctorCheck> {
         out.push(check);
     }
 
-    // Périmètre : un alias de rôle de fond qui vise l'abonnement l'aurait contourné.
+    // Périmètre : sous la garde (#333), un rôle de fond qui vise l'abonnement se replie à
+    // chaque appel ; garde levée, il y passe, et le risque est dit.
     let mut hors: Vec<String> = Vec::new();
-    for (alias, model) in &codex_aliases {
-        let roles = crate::codex_scope::background_roles_of(&cfg, alias);
-        if !roles.is_empty() {
-            hors.push(format!("`{alias}` → `{model}` ({})", roles.join(", ")));
+    for role in crate::codex_scope::BACKGROUND_ROLES {
+        let r = cfg.resolve_role(role);
+        if let Some(model) = r.model.filter(|m| crate::codex_scope::is_codex(m)) {
+            hors.push(format!("`{role}` → `{model}`"));
         }
     }
-    if !hors.is_empty() {
+    if cfg.codex_background_allowed() {
+        out.push(DoctorCheck::ok(
+            "provider.codex.scope",
+            "Périmètre Codex",
+            format!(
+                "garde levée (`codex_background = \"allow\"`) : tout passe par \
+                 l'abonnement. {}",
+                penelope_kernel::config::CODEX_RISK
+            ),
+        ));
+    } else if !hors.is_empty() {
         out.push(DoctorCheck::fail(
             "provider.codex.scope",
             "Périmètre Codex",
             format!(
-                "{} : ces rôles tournent sans le propriétaire ; l'abonnement ne les sert \
-                 pas, chaque appel se replie",
+                "{} : ces rôles tournent sans le propriétaire ; sous la garde, chaque \
+                 appel se replie, et le repli est annoncé",
                 hors.join(", ")
             ),
-            Some("penelope model set <alias> openrouter:<modèle>".into()),
+            Some("penelope model set <rôle> openrouter:<modèle>".into()),
         ));
     }
 
@@ -285,19 +296,64 @@ const TOOLLESS_ROLES: &[&str] = &[
     "embedding",
 ];
 
-/// Vrai si cet alias sert un rôle (ou un palier de routage) qui appelle des outils.
+/// Vrai si cet alias (ou identifiant) sert, dans le profil actif, un rôle ou un étage du
+/// classifieur qui appelle des outils.
 pub fn alias_needs_tools(cfg: &penelope_kernel::config::Config, alias: &str) -> bool {
-    let routing = &cfg.models.routing;
-    if [&routing.low, &routing.medium, &routing.high]
-        .iter()
-        .any(|a| a.as_str() == alias)
+    use penelope_kernel::config::{ROLES, Tier, VOICE_ROLES};
+    if [Tier::Low, Tier::Medium, Tier::High]
+        .into_iter()
+        .any(|t| cfg.routing_label(t) == alias)
     {
         return true;
     }
-    cfg.models
-        .roles
+    let overrides = cfg.models.active().overrides.clone();
+    ROLES
         .iter()
-        .any(|(role, a)| a == alias && !TOOLLESS_ROLES.contains(&role.as_str()))
+        .map(|r| r.name)
+        .chain(overrides.keys().map(String::as_str))
+        .filter(|r| !TOOLLESS_ROLES.contains(r) && !VOICE_ROLES.contains(r))
+        .any(|r| cfg.role_alias(r) == alias)
+}
+
+/// #332, #335 : le profil actif, d'où il vient, et les alias que plus rien ne lit.
+pub fn profiles_check(cfg: &penelope_kernel::config::Config) -> DoctorCheck {
+    use penelope_kernel::config::DEFAULT_PROFILE;
+    const ID: &str = "models.profiles";
+    const LABEL: &str = "Profils de modèles";
+    let m = &cfg.models;
+    let name = m.active_name();
+    let p = m.active();
+    let guard = if cfg.codex_background_allowed() {
+        "garde Codex levée"
+    } else {
+        "garde Codex active"
+    };
+    let mut detail = format!(
+        "profil « {name} », principal `{}` ({}), {guard}",
+        p.primary,
+        cfg.alias_model(&p.primary).unwrap_or("?")
+    );
+    if m.is_derived(DEFAULT_PROFILE) {
+        detail.push_str(
+            " ; `defaut` est déduit des clés d'avant 1.0.47 (`models.roles`, \
+             `models.routing`), rôle par rôle : rien n'a changé, et la première \
+             modification par `/model` ou `penelope model` l'écrit en \
+             `[models.profiles.defaut]`",
+        );
+    }
+    let unused = m.unused_aliases(&cfg.voice);
+    if unused.is_empty() {
+        return DoctorCheck::ok(ID, LABEL, detail);
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!(
+            "{detail} ; alias lus par aucun rôle, profil ni repli : `{}`",
+            unused.join("`, `")
+        ),
+        Some("penelope model set <rôle> <alias>, ou retirer l'alias".into()),
+    )
 }
 
 /// #54 : un alias de conversation qui vise un modèle sans tool calling ne marchera pas,

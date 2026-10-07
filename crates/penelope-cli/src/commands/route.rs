@@ -50,9 +50,19 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Secret(SecretCmd::Rm { name }) => (m::SECRET_RM, json!({"name": name})),
 
         Command::Model(ModelCmd::List { filter }) => (m::MODEL_LIST, json!({"filter": filter})),
-        Command::Model(ModelCmd::Set { alias, model }) => {
-            (m::MODEL_SET, json!({"alias": alias, "model": model}))
-        }
+        Command::Model(ModelCmd::Set {
+            target,
+            model,
+            profile,
+        }) => (
+            m::MODEL_SET,
+            json!({"target": target, "model": model, "profile": profile}),
+        ),
+        Command::Model(ModelCmd::Unset { target, profile }) => (
+            m::MODEL_UNSET,
+            json!({"target": target, "profile": profile}),
+        ),
+        Command::Model(ModelCmd::Profile(cmd)) => (m::MODEL_PROFILE, profile_params(cmd)),
         // `model auth` sans option passe par `model_auth` (code affiché, puis attente) ;
         // cette route sert la parité CLI↔RPC et le mode `--json`.
         Command::Model(ModelCmd::Auth {
@@ -326,4 +336,29 @@ pub(super) fn parse_scalar(raw: &str) -> Value {
         return v;
     }
     Value::String(raw.to_string())
+}
+
+/// Paramètres de `model.profile` pour une sous-commande `penelope model profile`.
+fn profile_params(cmd: &ProfileCmd) -> Value {
+    match cmd {
+        ProfileCmd::Use { name } => json!({"action": "use", "name": name}),
+        ProfileCmd::New {
+            name,
+            primary,
+            codex_background,
+            switch,
+        } => json!({
+            "action": "new",
+            "name": name,
+            "primary": primary,
+            "codex_background": codex_background,
+            "use": switch,
+        }),
+        ProfileCmd::Copy { name, from } => json!({"action": "copy", "name": name, "from": from}),
+        ProfileCmd::Rename { name, to } => json!({"action": "rename", "name": name, "to": to}),
+        ProfileCmd::Rm { name } => json!({"action": "rm", "name": name}),
+        ProfileCmd::Guard { name, value } => {
+            json!({"action": "guard", "name": name, "codex_background": value})
+        }
+    }
 }

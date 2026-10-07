@@ -12,6 +12,79 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.47
+
+**Modèles : ce que tu choisis est ce qui tourne. Un modèle principal par profil, une
+résolution unique pour tous les rôles, la voix à part ; la garde Codex devient un réglage,
+un workflow lancé par le propriétaire suit le principal, tout écart est annoncé ; `/model`
+refondu et son équivalent CLI ; défauts relevés par l'état des lieux (#332, #333, #334,
+#335).** Décision [0021](decisions/0021-profils-de-modeles.md).
+
+Constat (07/10) : `main` sur `codex:gpt-5.6-sol`, le propriétaire se croyait « sur Codex ».
+Tous les autres alias visaient DeepSeek Flash, le classifieur envoyait les messages
+difficiles sur `reasoning`, et `codex_scope` remplaçait Codex sans un mot pour tout travail
+de fond, runs de workflow lancés par le propriétaire compris. Chaque site avait son repli
+(titre et juge sur `fast`, rêve sur `compaction`, `memoire` lu comme un rôle qui
+n'existait pas, pointage sur la vision), et rien ne disait ce qui tournait.
+
+- **Profils et résolution unique** (#332). `[models.profiles.<nom>]` : `primary`,
+  `overrides.<rôle>`, `capabilities.<capacité>` (`image_generate`, `vision`,
+  `embedding`), étages `routing.*`, chaînes `fallback`, `codex_background` ;
+  `models.profile` nomme l'actif, bascule à chaud. `Config::resolve_role_with` (noyau) est
+  appelée par tous les sites : moteur, classifieur, titre, juge, compaction (et son
+  repli), rêve (rôle `dream`), mémoire, épisodes, ingestion, embeddings, vision, images,
+  voix, narration, étapes et phases de workflow, sous-agents, catalogue. Surcharge, sinon
+  voix, sinon capacité (posée, puis le principal si le catalogue dit qu'il sait faire, puis
+  le modèle livré), sinon le principal ; un rôle inconnu suit le principal. La voix vit
+  dans `voice.stt`, `voice.tts`, `voice.narrator`. Le classifieur n'est appelé que si un
+  étage du profil nomme un autre modèle que le principal. Un profil cite un alias ou un
+  identifiant ; `alias_model` rend un identifiant tel quel.
+- **Migration transparente** (#332). Sans `[models.profiles.defaut]`, le profil `defaut`
+  est déduit à chaque lecture de `models.roles` et `models.routing`, rôle par rôle comme
+  l'ancien code, garde `deny` : rien n'est écrit au démarrage. La première modification
+  d'un profil l'écrit en entier. Un test fige, sur la configuration de l'instance (`main`
+  sur Codex, le reste sur DeepSeek Flash, images sur Gemini, embeddings sur OpenRouter,
+  transcription sur `extra.mlx`, narrateur Qwen3 local, `fallback.main = []`), la table
+  rôle → modèle effectif d'avant. `doctor` (`models.profiles`) dit d'où vient le profil et
+  nomme les alias que rien ne lit (`juge`, `memoire`, `pointage` : signalés, pas
+  convertis, ce qui changerait ce qui tourne).
+- **Garde Codex et annonces** (#333). `codex_background = "allow" | "deny"` par profil ;
+  `deny` à la migration, choix exigé à la création d'un profil Codex, risque écrit une fois
+  (doc, `/model`, `doctor`). Un run lancé par le propriétaire (gate, `/run`, CLI, outil de
+  son tour) suit le principal ; seuls les runs planifiés, marqués au démarrage par leur
+  planification et transmis aux sous-workflows, restent sous la garde. Tout écart est dit
+  une fois par changement d'état dans la conversation concernée (`model_watch`, événement
+  `model.notice`, écrit par le canal) : repli après panne avec le motif et le nombre de
+  tentatives, garde appliquée, principal injoignable, puis « ✅ retour sur … ». Un modèle
+  épinglé n'a plus de repli : il échoue en le disant. Les relances Codex de la 1.0.40 sont
+  inchangées (le repli n'arrive qu'après le budget).
+- **`/model` refondu et CLI** (#334). Écran : profil actif et principal, ● l'actif
+  (dupliquer, renommer, garde confirmée, supprimer confirmé), ○ les autres (bascule
+  confirmée), « + Nouveau profil » ; familles Conversation, Travail de fond, Médias,
+  Local / voix, chaque rôle avec son modèle effectif et sa raison (✓ ✎ ⚡ 🏠 ⛔), « suivre
+  le principal » ou « choisir un modèle » (fournisseur, puis modèle, prix et fenêtre) ;
+  🔁 principal, 📋 tout voir, ⚠️ écarts des 24 h, 📌 cette session. Plus de « Usage : »
+  sous `/model auto`. CLI : `penelope model list`, `set <cible> <modèle>`, `unset
+  <cible>`, `profile use|new|copy|rename|rm|guard`, sortie `--json`. Les méthodes
+  `model.*` sortent du daemon vers `penelope_ops::models` (le daemon perd 170 lignes),
+  avec `model.unset` et `model.profile`.
+- **Défauts** (#335). Les étapes de workflow et les sous-agents ont la chaîne de repli du
+  profil et la compaction sur dépassement ; un principal sans fournisseur cède au premier
+  repli joignable, annoncé, au lieu de faire échouer le tour avant la chaîne ; transcription
+  et synthèse suivent `providers.extra` comme le texte ; `ProviderSet::get` ne route plus
+  un modèle `local:` ou `openai_compat:` sans endpoint vers OpenRouter, il échoue en le
+  disant ; `Router::escalation`, jamais appelé, et la règle « image jointe », jamais
+  nourrie, sont retirés.
+
+Clés nouvelles : `models.profile`, `models.profiles.<nom>.*`, `voice.stt`, `voice.tts`,
+`voice.narrator`. Méthodes nouvelles : `model.unset`, `model.profile`. Commandes nouvelles :
+`penelope model unset`, `penelope model profile …`, `/model profil …`, `/model session`.
+
+Closes #332.
+Closes #333.
+Closes #334.
+Closes #335.
+
 ### 1.0.46
 
 **Sauvegarde clé en main : une archive complète vers un fournisseur unique (S3, dossier ou

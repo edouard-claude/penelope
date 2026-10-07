@@ -118,6 +118,15 @@ pub async fn start_run_briefed(
     let _ = s
         .kv_set(&origin_key(&run.id), &origin.to_value().to_string())
         .await;
+    // Lancé par une planification, ou sous-workflow d'un run qui l'est : sous la garde.
+    let schedule = match (SCHEDULED.try_with(Clone::clone).ok(), parent) {
+        (Some(id), _) => Some(id),
+        (None, Some(p)) => scheduled_by(s, p).await,
+        (None, None) => None,
+    };
+    if let Some(id) = schedule {
+        let _ = s.kv_set(&scheduled_key(&run.id), &id).await;
+    }
     if let Some(brief) = brief.map(str::trim).filter(|b| !b.is_empty()) {
         let brief: String = brief.chars().take(BRIEF_CHARS).collect();
         let _ = s.kv_set(&brief_key(&run.id), &brief).await;
