@@ -251,6 +251,34 @@ async fn a_codex_overload_falls_back_after_the_budget() {
     let mut expected = vec!["mock/model".to_string(); budget + 1];
     expected.push("mock/repli".into());
     assert_eq!(models, expected);
+
+    // #333 : le repli est dit dans la conversation, une fois ; le retour aussi.
+    let notices = |s: Arc<AgentServices>, sid: String| async move {
+        s.events
+            .session_events_of_kind(&sid, penelope_app::model_watch::NOTICE_EVENT)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.payload["text"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+    };
+    let said = notices(s.clone(), sid.clone()).await;
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with("⚠️ repli sur `repli` : `model` en échec après")
+            && said[0].contains("overloaded"),
+        "{said:?}"
+    );
+    p.reply("de nouveau le principal");
+    let conv = MemoryConversation::new("Tu es Pénélope.", "encore");
+    AgentLoop::new(s.clone(), p.clone())
+        .run_conversation(&sp, &conv, &exec(false), &NullSink)
+        .await
+        .unwrap();
+    assert_eq!(
+        notices(s.clone(), sid.clone()).await[1..],
+        ["✅ retour sur `model`".to_string()]
+    );
 }
 
 #[tokio::test]

@@ -46,6 +46,7 @@ mod forms;
 mod keys;
 mod media;
 mod menus;
+mod notices;
 mod onboarding;
 mod outbox;
 mod screens;
@@ -236,7 +237,7 @@ impl TelegramGateway {
         }
         // Surveillées : une panique relance la boucle au lieu de rendre le bot muet (#84).
         let (a, b, c, m) = (self.clone(), self.clone(), self.clone(), self.clone());
-        let t = self.clone();
+        let (t, n) = (self.clone(), self.clone());
         let sup = self.daemon.supervision();
         Ok(vec![
             penelope_app::tasks::spawn_supervised(&sup, "telegram.poll", move || {
@@ -253,6 +254,9 @@ impl TelegramGateway {
             }),
             penelope_app::tasks::spawn_supervised(&sup, "telegram.maintenance", move || {
                 m.clone().maintenance_loop()
+            }),
+            penelope_app::tasks::spawn_supervised(&sup, "telegram.notices", move || {
+                n.clone().notice_loop()
             }),
         ])
     }

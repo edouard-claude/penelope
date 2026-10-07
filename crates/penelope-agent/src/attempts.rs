@@ -37,6 +37,9 @@ pub(super) struct Attempts {
     retry_prompt: Mutex<Option<&'static str>>,
     /// La ligne `llm_requests` du dernier appel parti : celle d'une réponse vide.
     last_request: Mutex<Option<String>>,
+    /// Échecs depuis la dernière réponse, et le dernier motif : ce que l'annonce d'un
+    /// repli dit (#333).
+    failures: Mutex<(u32, Option<String>)>,
 }
 
 impl Attempts {
@@ -60,10 +63,19 @@ impl Attempts {
             Some(llm_request_id.to_string());
     }
 
+    /// Les échecs depuis la dernière réponse, remis à zéro : une réponse vient d'arriver.
+    pub(super) fn take_failures(&self) -> (u32, Option<String>) {
+        std::mem::take(&mut *self.failures.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
     /// Garde une tentative par le port. Le partiel et l'erreur sont rédigés (#134).
     /// Au-delà du plafond, seule la ligne de journal reste. Un échec d'écriture ne change
     /// pas l'issue de l'appel : il ne coûte que la trace.
     pub(super) async fn record(&self, s: &AgentServices, spec: &TurnSpec, mut p: Attempt) {
+        if let Some(e) = &p.error {
+            let mut f = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+            *f = (f.0 + 1, Some(e.chars().take(100).collect()));
+        }
         p.turn = spec.turn_id.clone();
         p.step = self.step.load(Ordering::SeqCst);
         // Une tentative est toujours celle du dernier appel parti : une réponse vide
