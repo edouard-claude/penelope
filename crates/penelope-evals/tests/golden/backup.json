@@ -1,10 +1,45 @@
 {
   "method": "backup",
-  "params": {},
+  "params": {
+    "push": false
+  },
   "response": {
     "result": {
-      "path": "string",
-      "snapshot_ms": "integer"
+      "archive": "string",
+      "bytes": "integer",
+      "sha256": "string",
+      "manifest": {
+        "version": "string",
+        "created_at": "string",
+        "day": "string",
+        "db_bytes": "integer",
+        "db_full_bytes": "integer",
+        "derived_excluded": [
+          "string"
+        ],
+        "contents": [
+          {
+            "name": "string",
+            "bytes": "integer"
+          }
+        ],
+        "excluded": [
+          {
+            "name": "string",
+            "items": [
+              "string"
+            ],
+            "why": "string"
+          }
+        ],
+        "media_included": "bool",
+        "secrets_included": [
+          "string"
+        ],
+        "secrets_expected": []
+      },
+      "snapshot_ms": "integer",
+      "duration_ms": "integer"
     }
   }
 }

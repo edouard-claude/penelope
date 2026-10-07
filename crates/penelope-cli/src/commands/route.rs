@@ -134,16 +134,24 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             }
             (m::AUDIT_SHOW, json!({"turn": turn, "session": session}))
         }
-        Command::Backup { push, full, media } => (
-            m::BACKUP,
-            json!({"push": push, "full": *full || *push, "media": media}),
-        ),
+        Command::Backup {
+            local, db, media, ..
+        } => (m::BACKUP, backup_params(*local, *db, *media)),
         Command::Export { what, id } => (m::EXPORT, json!({"what": what, "id": id})),
         Command::Store(StoreCmd::Rebuild) => (m::STORE_REBUILD, json!({})),
         other => {
             return Err(CliError::Usage(format!("commande non routée : {other:?}")));
         }
     })
+}
+
+/// `penelope backup` : l'archive complète, envoyée au fournisseur ; `--local` la garde
+/// ici, `--db` ne prend que la base. Sans `--media`, `backup.include_media` décide (#327).
+pub(super) fn backup_params(local: bool, db: bool, media: bool) -> Value {
+    if db {
+        return json!({"snapshot": true});
+    }
+    json!({"push": !local, "media": media.then_some(true)})
 }
 
 /// Sessions : ouvrir, nommer, borner, forker, rembobiner.

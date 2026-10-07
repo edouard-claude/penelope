@@ -162,6 +162,7 @@
         "vault_path": "string",
         "vault_git_autocommit": "string",
         "vault_git_remote": "string",
+        "vault_git_push": "bool",
         "profile_budget_tokens": "integer",
         "core_budget_tokens": "integer",
         "project_budget_tokens": "integer",
@@ -312,13 +313,14 @@
         "memory_history_days": "integer"
       },
       "backup": {
-        "git_remote": "string",
+        "provider": "string",
+        "dir": "string",
         "cron": "string",
         "keep_daily": "integer",
         "keep_weekly": "integer",
         "keep_monthly": "integer",
+        "keep_local": "integer",
         "include_media": "bool",
-        "max_push_bytes": "integer",
         "s3": {
           "endpoint": "string",
           "bucket": "string",

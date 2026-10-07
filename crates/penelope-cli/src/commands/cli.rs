@@ -195,17 +195,24 @@ pub enum Command {
     /// L'historique de la conversation contre le journal d'événements.
     #[command(subcommand)]
     History(HistoryCmd),
-    /// Sauvegarde cohérente. `--push` : archive chiffrée complète, poussée dans le dépôt
-    /// privé de `backup.git_remote` et, ou, le bucket de `[backup.s3]`.
+    /// Sauvegarde complète chiffrée (base, vault, configuration, skills, workflows,
+    /// `mcp.d`, workspace, `mcp-data`, secrets), envoyée au fournisseur de `backup.provider`.
     Backup {
+        /// Garder l'archive dans `backups/`, sans l'envoyer.
+        #[arg(long, conflicts_with = "db")]
+        local: bool,
+        /// Le seul instantané de la base, dans `backups/` (`penelope restore <fichier.db>`).
         #[arg(long)]
-        push: bool,
-        /// Archive complète (base, vault, skills, workflows, `mcp.d`, configuration).
-        #[arg(long)]
-        full: bool,
-        /// Inclure artefacts et médias reçus.
+        db: bool,
+        /// Inclure artefacts et médias reçus ; sans l'option, `backup.include_media`.
         #[arg(long)]
         media: bool,
+        /// Ancienne option, sans effet : l'envoi est le défaut.
+        #[arg(long, hide = true)]
+        push: bool,
+        /// Ancienne option, sans effet : l'archive complète est le défaut.
+        #[arg(long, hide = true)]
+        full: bool,
     },
     /// Restaure **tout** depuis une sauvegarde chiffrée (archive locale, dépôt privé ou
     /// bucket S3), daemon arrêté, sur une machine neuve.

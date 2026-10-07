@@ -101,3 +101,4 @@ daemon par la socket locale.
 - [0017](decisions/0017-journal-source-unique.md) : le journal d'événements est la source unique de la conversation ; les tables de messages sont des caches que seul `penelope-context` écrit.
 - [0018](decisions/0018-agenda-caldav-en-lecture.md) : l'agenda, hors PRD, entre par CalDAV en lecture seule, dans un serveur MCP à part servi par le même binaire (`penelope agenda-mcp`) ; rien n'en entre en mémoire durable.
 - [0019](decisions/0019-webhook-entrant.md) : un déclencheur `webhook` entrant, signé en HMAC, sur un listener local dédié (`[webhooks]`) ; le mode webhook de Telegram est refusé plutôt que promis.
+- [0020](decisions/0020-sauvegarde-fournisseur-unique.md) : une sauvegarde, un fournisseur (S3, dossier ou iCloud Drive) ; GitHub retiré, les secrets dans l'archive sous une seconde couche, le vault en clair plus poussé par défaut.

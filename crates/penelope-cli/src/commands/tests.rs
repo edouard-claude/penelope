@@ -675,3 +675,24 @@ fn agenda_mcp_is_an_offline_command() {
         "pas de méthode RPC : la commande sert le protocole MCP elle-même"
     );
 }
+
+/// #327 : `penelope backup` envoie l'archive complète au fournisseur ; sans `--media`, la
+/// CLI laisse `backup.include_media` décider (elle envoyait toujours `false`) ; `--db`
+/// ne prend que la base ; les anciennes options `--push` et `--full` restent admises.
+#[test]
+fn backup_lets_the_configuration_decide_on_media() {
+    let params = |args: &[&str]| {
+        let mut v = vec!["penelope", "backup"];
+        v.extend_from_slice(args);
+        route(&Cli::try_parse_from(v).unwrap().command).unwrap().1
+    };
+    assert_eq!(params(&[]), json!({"push": true, "media": null}));
+    assert_eq!(
+        params(&["--push", "--full"]),
+        json!({"push": true, "media": null})
+    );
+    assert_eq!(params(&["--media"]), json!({"push": true, "media": true}));
+    assert_eq!(params(&["--local"]), json!({"push": false, "media": null}));
+    assert_eq!(params(&["--db"]), json!({"snapshot": true}));
+    assert!(Cli::try_parse_from(["penelope", "backup", "--local", "--db"]).is_err());
+}

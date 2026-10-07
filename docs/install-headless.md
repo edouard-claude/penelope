@@ -443,7 +443,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `memory.vault_path` | `"{data}/vault"` | Répertoire du vault (`{data}` : répertoire de données). |
 | `memory.vault_git_autocommit` | `"15m"` | Période de commit du vault sous git ; `0s` : désactivé. |
-| `memory.vault_git_remote` | `""` | Remote git où pousser le vault ; vide : aucun. |
+| `memory.vault_git_remote` | `""` | Remote git du vault, poussé seulement si `vault_git_push` est vrai : le vault y part **en clair** (#327). La sauvegarde chiffrée, elle, passe par `[backup]`. |
+| `memory.vault_git_push` | `false` | Pousser le vault vers `vault_git_remote` après chaque commit. Désactivé par défaut : l'historique git reste local, la sauvegarde chiffrée couvre le vault (#327). |
 | `memory.profile_budget_tokens` | `600` | Budget du profil injecté (`profil.md`), en jetons. |
 | `memory.core_budget_tokens` | `1200` | Budget du niveau Cœur injecté (`memoire.md`), en jetons. |
 | `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
@@ -618,13 +619,14 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `backup.git_remote` | `""` | Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault. |
+| `backup.provider` | `""` | Où partent les sauvegardes : `s3` (section `[backup.s3]`), `dir` (`backup.dir`) ou `icloud` (iCloud Drive) ; vide : `s3` si `[backup.s3]` est renseignée, sinon aucun (`penelope backup setup` le choisit). |
+| `backup.dir` | `""` | Dossier des sauvegardes : chemin absolu pour `dir` (`~` admis) ; pour `icloud`, sous-dossier d'iCloud Drive (défaut `Penelope`). |
 | `backup.cron` | `"0 4 * * *"` | Heure de la sauvegarde nocturne (cron à cinq champs) ; vide : aucune. |
-| `backup.keep_daily` | `7` | Sauvegardes quotidiennes gardées. |
-| `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées. |
-| `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées. |
+| `backup.keep_daily` | `7` | Sauvegardes quotidiennes gardées chez le fournisseur. |
+| `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées chez le fournisseur. |
+| `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées chez le fournisseur. |
+| `backup.keep_local` | `1` | Archives gardées dans le dossier local `backups/` (instantanés de base compris) ; les plus anciennes sont effacées après chaque sauvegarde réussie. |
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
-| `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée dans le dépôt git, en octets (limite de fichier de GitHub) ; sans effet sur S3. |
 | `backup.s3.endpoint` | `""` | Adresse du service (`https://s3.exemple.net`, `http://127.0.0.1:9000` en local) ; vide : pas de destination S3. |
 | `backup.s3.bucket` | `""` | Bucket, créé d'avance et réservé aux sauvegardes. |
 | `backup.s3.prefix` | `"penelope/"` | Préfixe des objets dans le bucket. |

@@ -98,13 +98,22 @@ pub fn warning(s: &Services) -> Option<String> {
 pub fn doctor_check(s: &Services) -> DoctorCheck {
     const ID: &str = "vault_git";
     const LABEL: &str = "Historique git du vault";
+    let memory = &s.config.config().memory;
+    // Un remote resté configuré n'est plus poussé (#327) : le dire, une fois, sans alarme.
+    let push = match (memory.vault_git_remote.trim(), memory.vault_git_push) {
+        ("", _) => String::new(),
+        (_, true) => " ; poussé en clair vers `memory.vault_git_remote`".into(),
+        (_, false) => " ; historique local seulement (`memory.vault_git_remote` n'est plus \
+                       poussé sans `memory.vault_git_push = true`)"
+            .into(),
+    };
     match (autocommit_interval(s), warning(s)) {
-        (None, _) => DoctorCheck::ok(ID, LABEL, "autocommit désactivé"),
+        (None, _) => DoctorCheck::ok(ID, LABEL, format!("autocommit désactivé{push}")),
         (Some(_), Some(w)) => DoctorCheck::fail(ID, LABEL, w, Some("penelope vault sync".into())),
         (Some(d), None) => DoctorCheck::ok(
             ID,
             LABEL,
-            format!("autocommit toutes les {} min", d.as_secs() / 60),
+            format!("autocommit toutes les {} min{push}", d.as_secs() / 60),
         ),
     }
 }
@@ -202,7 +211,8 @@ pub async fn diff(s: &Services, since_dream: bool) -> Result<Value, String> {
     }))
 }
 
-/// Commit du vault s'il est sous git, puis push si un remote est configuré.
+/// Commit du vault s'il est sous git, puis push si un remote est configuré **et**
+/// `memory.vault_git_push` le demande : le vault y part en clair (#327).
 pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
     let cfg = s.config.config();
     let vault = penelope_app::helpers::vault_dir(s);
@@ -219,11 +229,80 @@ pub async fn vault_sync(s: &Services, message: &str) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let mut out = json!({"git": true, "commit": committed});
     let remote = cfg.memory.vault_git_remote.trim();
-    if !remote.is_empty() && committed["committed"].as_bool() == Some(true) {
+    if !remote.is_empty()
+        && cfg.memory.vault_git_push
+        && committed["committed"].as_bool() == Some(true)
+    {
         match penelope_tools::git::push(&vault, remote, "HEAD").await {
             Ok(v) => out["push"] = v,
             Err(e) => out["push_error"] = json!(e.to_string()),
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// #327 : un remote configuré n'est plus poussé par défaut, le vault y partirait en
+    /// clair ; `memory.vault_git_push = true` le rétablit. L'historique, lui, reste local.
+    #[tokio::test]
+    async fn the_vault_is_not_pushed_unless_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            Arc::new(penelope_kernel::clock::TestClock::default());
+        let s = Services::for_tests(dir.path().join("p"), clock)
+            .await
+            .unwrap();
+        let bare = dir.path().join("vault.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "--bare", "--quiet"])
+            .current_dir(&bare)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let remote = bare.display().to_string();
+        s.publish_config("test", move |c| {
+            c.memory.vault_git_autocommit = "15m".into();
+            c.memory.vault_git_remote = remote;
+            Ok(vec!["memory.vault_git_remote".into()])
+        })
+        .unwrap();
+        let vault = penelope_app::helpers::vault_dir(&s);
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("memoire.md"), "- un souvenir\n").unwrap();
+        let out = vault_sync(&s, "test").await.unwrap();
+        assert_eq!(out["git"], true, "{out}");
+        assert!(
+            out["push"].is_null() && out["push_error"].is_null(),
+            "{out}"
+        );
+        let refs = |bare: &Path| {
+            let o = std::process::Command::new("git")
+                .args(["for-each-ref"])
+                .current_dir(bare)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).to_string()
+        };
+        assert!(refs(&bare).trim().is_empty(), "rien n'est poussé");
+        assert!(
+            doctor_check(&s)
+                .detail
+                .contains("historique local seulement")
+        );
+
+        s.publish_config("test", |c| {
+            c.memory.vault_git_push = true;
+            Ok(vec!["memory.vault_git_push".into()])
+        })
+        .unwrap();
+        std::fs::write(vault.join("memoire.md"), "- un autre souvenir\n").unwrap();
+        let out = vault_sync(&s, "test").await.unwrap();
+        assert!(out["push_error"].is_null(), "{out}");
+        assert!(!refs(&bare).trim().is_empty(), "{out}");
+    }
 }

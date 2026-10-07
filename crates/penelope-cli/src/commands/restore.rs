@@ -266,20 +266,11 @@ pub(super) async fn restore_all(cli: &Cli, args: RestoreAllArgs) -> CliResult<()
             None => return Ok(()),
         }
     } else {
-        let repo = work.join("depot");
-        println!("Clonage de {source}…");
-        penelope_platform::process::git_sync_repo(&repo, &source)
-            .map_err(|e| CliError::Io(e.to_string()))?;
-        let mut found: Vec<PathBuf> = std::fs::read_dir(&repo)
-            .map_err(|e| CliError::Io(e.to_string()))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.to_string_lossy().ends_with(".tar.gz.enc"))
-            .collect();
-        found.sort();
-        found.pop().ok_or_else(|| {
-            CliError::Validation(format!("aucune sauvegarde chiffrée dans {source}"))
-        })?
+        return Err(CliError::Usage(format!(
+            "`{source}` : une archive `.tar.gz.enc` ou `s3` est attendue. GitHub n'est plus une \
+             destination de sauvegarde (#327) : `git clone` l'ancien dépôt, puis donner \
+             l'archive voulue"
+        )));
     };
     if !archive.is_file() {
         return Err(CliError::Validation(format!(

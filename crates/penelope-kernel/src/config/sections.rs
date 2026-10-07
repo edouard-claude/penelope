@@ -155,8 +155,12 @@ pub struct Memory {
     pub vault_path: String,
     /// Période de commit du vault sous git ; `0s` : désactivé.
     pub vault_git_autocommit: String,
-    /// Remote git où pousser le vault ; vide : aucun.
+    /// Remote git du vault, poussé seulement si `vault_git_push` est vrai : le vault y
+    /// part **en clair** (#327). La sauvegarde chiffrée, elle, passe par `[backup]`.
     pub vault_git_remote: String,
+    /// Pousser le vault vers `vault_git_remote` après chaque commit. Désactivé par défaut :
+    /// l'historique git reste local, la sauvegarde chiffrée couvre le vault (#327).
+    pub vault_git_push: bool,
     /// Budget du profil injecté (`profil.md`), en jetons.
     pub profile_budget_tokens: usize,
     /// Budget du niveau Cœur injecté (`memoire.md`), en jetons.
@@ -218,6 +222,7 @@ impl Default for Memory {
             vault_path: "{data}/vault".into(),
             vault_git_autocommit: "15m".into(),
             vault_git_remote: String::new(),
+            vault_git_push: false,
             profile_budget_tokens: 600,
             core_budget_tokens: 1200,
             project_budget_tokens: 800,
@@ -805,41 +810,62 @@ impl Default for VoicePostprocess {
     }
 }
 
-/// Sauvegarde complète vers un dépôt privé (issue #42) et, ou, un stockage S3 (#289).
+/// Fournisseurs de sauvegarde admis par `backup.provider` (#327).
+pub const BACKUP_PROVIDERS: &[&str] = &["s3", "dir", "icloud"];
+
+/// Sauvegarde complète chiffrée (issue #42) vers **un** fournisseur (#327) : un stockage
+/// S3, un dossier (disque, NAS, volume monté) ou iCloud Drive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Backup {
-    /// Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault.
-    pub git_remote: String,
+    /// Où partent les sauvegardes : `s3` (section `[backup.s3]`), `dir` (`backup.dir`) ou
+    /// `icloud` (iCloud Drive) ; vide : `s3` si `[backup.s3]` est renseignée, sinon
+    /// aucun (`penelope backup setup` le choisit).
+    pub provider: String,
+    /// Dossier des sauvegardes : chemin absolu pour `dir` (`~` admis) ; pour `icloud`,
+    /// sous-dossier d'iCloud Drive (défaut `Penelope`).
+    pub dir: String,
     /// Heure de la sauvegarde nocturne (cron à cinq champs) ; vide : aucune.
     pub cron: String,
-    /// Sauvegardes quotidiennes gardées.
+    /// Sauvegardes quotidiennes gardées chez le fournisseur.
     pub keep_daily: u32,
-    /// Sauvegardes hebdomadaires gardées.
+    /// Sauvegardes hebdomadaires gardées chez le fournisseur.
     pub keep_weekly: u32,
-    /// Sauvegardes mensuelles gardées.
+    /// Sauvegardes mensuelles gardées chez le fournisseur.
     pub keep_monthly: u32,
+    /// Archives gardées dans le dossier local `backups/` (instantanés de base compris) ;
+    /// les plus anciennes sont effacées après chaque sauvegarde réussie.
+    pub keep_local: u32,
     /// Inclure les artefacts et les médias reçus. Lourd, et reconstructible.
     pub include_media: bool,
-    /// Taille maximale d'une archive poussée dans le dépôt git, en octets (limite de
-    /// fichier de GitHub) ; sans effet sur S3.
-    pub max_push_bytes: u64,
-    /// Stockage S3 (MinIO, Scaleway, AWS…) ; actif dès que `endpoint` et `bucket` sont
-    /// renseignés. Avec un dépôt git aussi, les deux reçoivent chaque sauvegarde.
+    /// Stockage S3 (Scaleway, AWS, MinIO…), quand `provider = "s3"`.
     pub s3: BackupS3,
 }
 
 impl Default for Backup {
     fn default() -> Self {
         Backup {
-            git_remote: String::new(),
+            provider: String::new(),
+            dir: String::new(),
             cron: "0 4 * * *".into(),
             keep_daily: 7,
             keep_weekly: 4,
             keep_monthly: 12,
+            keep_local: 1,
             include_media: false,
-            max_push_bytes: 100 * 1024 * 1024,
             s3: BackupS3::default(),
+        }
+    }
+}
+
+impl Backup {
+    /// Le fournisseur en vigueur : `provider`, sinon `s3` quand `[backup.s3]` est
+    /// renseignée (fichiers d'avant #327) ; `None` : aucun.
+    pub fn effective_provider(&self) -> Option<&str> {
+        match self.provider.trim() {
+            "" if self.s3.enabled() => Some("s3"),
+            "" => None,
+            p => Some(p),
         }
     }
 }
