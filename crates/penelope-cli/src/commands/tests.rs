@@ -622,7 +622,7 @@ fn restore_all_resolves_its_s3_source() {
         "--region",
         "fr-par",
     ]);
-    let Command::RestoreAll {
+    let Command::Restore {
         source,
         list,
         archive,
@@ -695,4 +695,50 @@ fn backup_lets_the_configuration_decide_on_media() {
     assert_eq!(params(&["--local"]), json!({"push": false, "media": null}));
     assert_eq!(params(&["--db"]), json!({"snapshot": true}));
     assert!(Cli::try_parse_from(["penelope", "backup", "--local", "--db"]).is_err());
+}
+
+/// #329 : `penelope restore` trouve sa source : l'argument d'abord, sinon le fournisseur
+/// de la configuration locale ; rien de configuré, la question se posera. Un `.db` garde
+/// l'ancienne restauration de la base ; `restore-all` reste un alias ; un dépôt git est
+/// refusé avec la marche à suivre.
+#[test]
+fn restore_finds_its_source() {
+    use restore::{Source, source_of};
+    let dirs = penelope_platform::RootedDirs::new("/srv/p");
+    let home = std::path::Path::new("/Users/moi");
+    let mut b = penelope_kernel::config::Backup::default();
+    assert_eq!(source_of(None, &b, &dirs, Some(home)), Ok(None));
+    b.provider = "dir".into();
+    b.dir = "/mnt/nas/penelope".into();
+    assert_eq!(
+        source_of(None, &b, &dirs, Some(home)),
+        Ok(Some(Source::Dir(PathBuf::from("/mnt/nas/penelope"))))
+    );
+    assert_eq!(
+        source_of(Some("s3://b/p"), &b, &dirs, Some(home)),
+        Ok(Some(Source::S3("s3://b/p".into())))
+    );
+    assert_eq!(
+        source_of(Some("x.tar.gz.enc"), &b, &dirs, Some(home)),
+        Ok(Some(Source::File(PathBuf::from("x.tar.gz.enc"))))
+    );
+    assert_eq!(
+        source_of(Some("icloud"), &b, &dirs, Some(home)),
+        Ok(Some(Source::Dir(home.join(
+            "Library/Mobile Documents/com~apple~CloudDocs/mnt/nas/penelope"
+        ))))
+    );
+    let e = source_of(Some("git@github.com:moi/x.git"), &b, &dirs, Some(home)).unwrap_err();
+    assert!(e.contains("GitHub n'est plus"), "{e}");
+    let c = parse(&["restore-all", "--no-start", "--dry-run"]);
+    assert!(matches!(
+        c.command,
+        Command::Restore {
+            no_start: true,
+            dry_run: true,
+            ..
+        }
+    ));
+    let c = parse(&["restore", "avant.db"]);
+    assert!(matches!(c.command, Command::Restore { source: Some(ref s), .. } if s == "avant.db"));
 }

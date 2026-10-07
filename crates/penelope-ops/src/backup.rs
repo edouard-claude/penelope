@@ -29,7 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod doctor;
+pub mod inventory;
 pub mod provider;
+pub mod restore;
 pub mod s3;
 pub mod secrets;
 pub mod sigv4;
@@ -118,6 +120,8 @@ pub async fn build(s: &Services, media: bool) -> anyhow::Result<(PathBuf, Value)
         platform: s.platform.clone(),
         entries: entries(s, media),
         excluded: excluded(s, media),
+        mcp_commands: inventory::mcp_commands(&s.platform.dirs.data().join("mcp.d")),
+        services: inventory::services(penelope_platform::dirs::home_dir().as_deref()),
         out_dir: s.platform.dirs.data().join("backups"),
         stamp: now.replace([':', '.'], "-"),
         day: now.chars().take(10).collect(),
@@ -151,6 +155,8 @@ struct BuildJob {
     platform: std::sync::Arc<penelope_platform::Platform>,
     entries: Vec<(PathBuf, String)>,
     excluded: Vec<Value>,
+    mcp_commands: Vec<Value>,
+    services: Vec<Value>,
     out_dir: PathBuf,
     stamp: String,
     day: String,
@@ -215,6 +221,8 @@ impl BuildJob {
             "media_included": self.media,
             "secrets_included": dump.values.keys().collect::<Vec<_>>(),
             "secrets_expected": dump.unreadable,
+            "mcp_commands": self.mcp_commands,
+            "services": self.services,
         });
         std::fs::write(
             root.join("MANIFEST.json"),

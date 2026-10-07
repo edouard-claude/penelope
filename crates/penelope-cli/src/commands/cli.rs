@@ -214,20 +214,22 @@ pub enum Command {
         #[arg(long, hide = true)]
         full: bool,
     },
-    /// Restaure **tout** depuis une sauvegarde chiffrée (archive locale, dépôt privé ou
-    /// bucket S3), daemon arrêté, sur une machine neuve.
-    #[command(name = "restore-all")]
-    RestoreAll {
-        /// Archive `.tar.gz.enc`, dépôt git à cloner, ou `s3` (le bucket de `[backup.s3]`) ;
-        /// `s3://bucket/prefixe` désigne un autre bucket, avec `--endpoint`.
+    /// Restaure **tout** depuis la sauvegarde chiffrée, daemon arrêté, sur une machine
+    /// neuve : fichiers, secrets, service démarré, `doctor`. Un fichier `.db` ne
+    /// restaure que la base.
+    #[command(alias = "restore-all")]
+    Restore {
+        /// Sans argument, le fournisseur de `backup.provider` (demandé sur une machine
+        /// neuve) ; sinon `s3`, `s3://bucket/prefixe`, `icloud`, un dossier de sauvegardes
+        /// ou une archive `.tar.gz.enc`.
         source: Option<String>,
         /// Dire ce qui serait restauré, sans rien écrire.
         #[arg(long)]
         dry_run: bool,
-        /// S3 : lister les sauvegardes disponibles, sans rien restaurer.
+        /// Lister les sauvegardes du fournisseur, sans rien restaurer.
         #[arg(long)]
         list: bool,
-        /// S3 : clé de l'archive à restaurer ; défaut : la plus récente.
+        /// Nom de l'archive à restaurer ; défaut : la plus récente.
         #[arg(long)]
         archive: Option<String>,
         /// S3 : adresse du service (`https://…`) ; défaut : `backup.s3.endpoint`.
@@ -236,9 +238,10 @@ pub enum Command {
         /// S3 : région de la signature ; défaut : `backup.s3.region`.
         #[arg(long)]
         region: Option<String>,
+        /// Ne pas réinstaller ni démarrer le service à la fin.
+        #[arg(long)]
+        no_start: bool,
     },
-    /// Restaure une sauvegarde, daemon arrêté (la base actuelle est d'abord mise de côté).
-    Restore { file: PathBuf },
     /// Import depuis un autre agent.
     #[command(subcommand)]
     Import(ImportCmd),

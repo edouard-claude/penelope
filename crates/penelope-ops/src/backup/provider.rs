@@ -18,6 +18,11 @@ pub const ICLOUD_DRIVE: &str = "Library/Mobile Documents/com~apple~CloudDocs";
 /// Sous-dossier d'iCloud Drive quand `backup.dir` est vide.
 pub const ICLOUD_DEFAULT_DIR: &str = "Penelope";
 
+/// Le stockage objet documenté par défaut (Scaleway, Paris) : `penelope backup setup` et
+/// la restauration sur machine neuve le proposent.
+pub const SCALEWAY_ENDPOINT: &str = "https://s3.fr-par.scw.cloud";
+pub const SCALEWAY_REGION: &str = "fr-par";
+
 /// Où vont les sauvegardes.
 #[derive(Debug, Clone)]
 pub enum Target {
@@ -251,4 +256,38 @@ async fn push_s3(
         "parts": up.parts,
         "rotated": removed,
     }))
+}
+
+/// Les archives d'un dossier de fournisseur, la plus récente d'abord, avec leur taille.
+pub fn list_dir(dir: &Path) -> Vec<(String, u64)> {
+    let mut names = archive_names(dir);
+    names.sort();
+    names.reverse();
+    names
+        .into_iter()
+        .map(|n| {
+            let size = std::fs::metadata(dir.join(&n))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            (n, size)
+        })
+        .collect()
+}
+
+/// L'archive à restaurer dans un dossier : celle qui porte `wanted` (nom entier ou fin
+/// du nom), sinon la plus récente.
+pub fn pick_in_dir(dir: &Path, wanted: Option<&str>) -> anyhow::Result<PathBuf> {
+    let all = list_dir(dir);
+    let found = match wanted {
+        Some(w) => all.iter().find(|(n, _)| n == w || n.ends_with(w)),
+        None => all.first(),
+    };
+    match (found, wanted) {
+        (Some((n, _)), _) => Ok(dir.join(n)),
+        (None, Some(w)) => anyhow::bail!(
+            "archive `{w}` absente de {} ; `--list` donne celles qui existent",
+            dir.display()
+        ),
+        (None, None) => anyhow::bail!("aucune sauvegarde chiffrée dans {}", dir.display()),
+    }
 }

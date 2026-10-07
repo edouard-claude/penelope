@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 mod tools;
-pub use tools::{binary_version, create_tar_gz, extract_tar_gz};
+pub use tools::{
+    binary_version, create_tar_gz, extract_tar_gz, extract_tar_gz_bytes, list_tar_gz_bytes,
+};
 
 /// Description d'un processus à lancer.
 #[derive(Debug, Clone)]

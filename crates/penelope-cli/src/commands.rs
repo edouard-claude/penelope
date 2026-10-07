@@ -23,7 +23,6 @@ use offline::store_secret;
 use offline::{doctor, eval_local, paths, service, set_secret, validate_config, validate_workflow};
 use penelope_kernel::api::method as m;
 use render::*;
-use restore::{restore_all, restore_offline};
 #[cfg(test)]
 use route::parse_scalar;
 pub use route::route;
@@ -54,24 +53,25 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
         Command::Eval { suite } => return eval_local(suite).await,
         Command::Local(cmd) => return local::run(&cli, cmd),
-        Command::Restore { file } => return restore_offline(&cli, file).await,
-        Command::RestoreAll {
+        Command::Restore {
             source,
             dry_run,
             list,
             archive,
             endpoint,
             region,
+            no_start,
         } => {
-            let args = restore::RestoreAllArgs {
+            let args = restore::RestoreArgs {
                 source: source.clone(),
                 dry_run: *dry_run,
                 list: *list,
                 archive: archive.clone(),
                 endpoint: endpoint.clone(),
                 region: region.clone(),
+                no_start: *no_start,
             };
-            return restore_all(&cli, args).await;
+            return restore::restore(&cli, args).await;
         }
         Command::Secret(SecretCmd::Set { name, value }) => {
             if value.is_some() {
