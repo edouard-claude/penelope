@@ -622,7 +622,7 @@ fn restore_all_resolves_its_s3_source() {
         "--region",
         "fr-par",
     ]);
-    let Command::RestoreAll {
+    let Command::Restore {
         source,
         list,
         archive,
@@ -673,5 +673,106 @@ fn agenda_mcp_is_an_offline_command() {
     assert!(
         route(&c.command).is_err(),
         "pas de méthode RPC : la commande sert le protocole MCP elle-même"
+    );
+}
+
+/// #327 : `penelope backup` envoie l'archive complète au fournisseur ; sans `--media`, la
+/// CLI laisse `backup.include_media` décider (elle envoyait toujours `false`) ; `--db`
+/// ne prend que la base ; les anciennes options `--push` et `--full` restent admises.
+#[test]
+fn backup_lets_the_configuration_decide_on_media() {
+    let params = |args: &[&str]| {
+        let mut v = vec!["penelope", "backup"];
+        v.extend_from_slice(args);
+        route(&Cli::try_parse_from(v).unwrap().command).unwrap().1
+    };
+    assert_eq!(params(&[]), json!({"push": true, "media": null}));
+    assert_eq!(
+        params(&["--push", "--full"]),
+        json!({"push": true, "media": null})
+    );
+    assert_eq!(params(&["--media"]), json!({"push": true, "media": true}));
+    assert_eq!(params(&["--local"]), json!({"push": false, "media": null}));
+    assert_eq!(params(&["--db"]), json!({"snapshot": true}));
+    assert!(Cli::try_parse_from(["penelope", "backup", "--local", "--db"]).is_err());
+}
+
+/// #329 : `penelope restore` trouve sa source : l'argument d'abord, sinon le fournisseur
+/// de la configuration locale ; rien de configuré, la question se posera. Un `.db` garde
+/// l'ancienne restauration de la base ; `restore-all` reste un alias ; un dépôt git est
+/// refusé avec la marche à suivre.
+#[test]
+fn restore_finds_its_source() {
+    use restore::{Source, source_of};
+    let dirs = penelope_platform::RootedDirs::new("/srv/p");
+    let home = std::path::Path::new("/Users/moi");
+    let mut b = penelope_kernel::config::Backup::default();
+    assert_eq!(source_of(None, &b, &dirs, Some(home)), Ok(None));
+    b.provider = "dir".into();
+    b.dir = "/mnt/nas/penelope".into();
+    assert_eq!(
+        source_of(None, &b, &dirs, Some(home)),
+        Ok(Some(Source::Dir(PathBuf::from("/mnt/nas/penelope"))))
+    );
+    assert_eq!(
+        source_of(Some("s3://b/p"), &b, &dirs, Some(home)),
+        Ok(Some(Source::S3("s3://b/p".into())))
+    );
+    assert_eq!(
+        source_of(Some("x.tar.gz.enc"), &b, &dirs, Some(home)),
+        Ok(Some(Source::File(PathBuf::from("x.tar.gz.enc"))))
+    );
+    assert_eq!(
+        source_of(Some("icloud"), &b, &dirs, Some(home)),
+        Ok(Some(Source::Dir(home.join(
+            "Library/Mobile Documents/com~apple~CloudDocs/mnt/nas/penelope"
+        ))))
+    );
+    let e = source_of(Some("git@github.com:moi/x.git"), &b, &dirs, Some(home)).unwrap_err();
+    assert!(e.contains("GitHub n'est plus"), "{e}");
+    let c = parse(&["restore-all", "--no-start", "--dry-run"]);
+    assert!(matches!(
+        c.command,
+        Command::Restore {
+            no_start: true,
+            dry_run: true,
+            ..
+        }
+    ));
+    let c = parse(&["restore", "avant.db"]);
+    assert!(matches!(c.command, Command::Restore { source: Some(ref s), .. } if s == "avant.db"));
+}
+
+/// #328 : `backup setup` et `backup kit` sont des sous-commandes hors RPC direct ; elles
+/// ne se mêlent pas aux options de la sauvegarde.
+#[test]
+fn backup_setup_and_kit_parse() {
+    let c = parse(&["backup", "setup", "--provider", "dir", "--own-passphrase"]);
+    assert!(matches!(
+        c.command,
+        Command::Backup {
+            cmd: Some(BackupCmd::Setup {
+                provider: Some(ref p),
+                own_passphrase: true
+            }),
+            ..
+        } if p == "dir"
+    ));
+    let c = parse(&["backup", "kit"]);
+    assert!(matches!(
+        c.command,
+        Command::Backup {
+            cmd: Some(BackupCmd::Kit),
+            ..
+        }
+    ));
+    assert!(Cli::try_parse_from(["penelope", "backup", "--local", "kit"]).is_err());
+    assert_eq!(
+        backup_setup::secret_name("${SECRET:cle_scw}", "s3_access_key_id"),
+        "cle_scw"
+    );
+    assert_eq!(
+        backup_setup::secret_name("", "s3_access_key_id"),
+        "s3_access_key_id"
     );
 }

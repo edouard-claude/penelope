@@ -168,6 +168,7 @@ compaction_on_prefix = "auto"
 vault_path = "{data}/vault"
 vault_git_autocommit = "15m"
 vault_git_remote = ""
+vault_git_push = false
 profile_budget_tokens = 600
 core_budget_tokens = 1200
 project_budget_tokens = 800
@@ -335,13 +336,14 @@ days = 90
 memory_history_days = 30
 
 [backup]
-git_remote = ""
+provider = ""
+dir = ""
 cron = "0 4 * * *"
 keep_daily = 7
 keep_weekly = 4
 keep_monthly = 12
+keep_local = 1
 include_media = false
-max_push_bytes = 104857600
 
 [backup.s3]
 endpoint = ""

@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 mod tools;
-pub use tools::{binary_version, create_tar_gz, extract_tar_gz, git_commit_push, git_sync_repo};
+pub use tools::{
+    binary_version, create_tar_gz, extract_tar_gz, extract_tar_gz_bytes, list_tar_gz_bytes,
+    tar_gz_entries,
+};
 
 /// Description d'un processus à lancer.
 #[derive(Debug, Clone)]

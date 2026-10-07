@@ -443,7 +443,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 |---|---|---|
 | `memory.vault_path` | `"{data}/vault"` | Répertoire du vault (`{data}` : répertoire de données). |
 | `memory.vault_git_autocommit` | `"15m"` | Période de commit du vault sous git ; `0s` : désactivé. |
-| `memory.vault_git_remote` | `""` | Remote git où pousser le vault ; vide : aucun. |
+| `memory.vault_git_remote` | `""` | Remote git du vault, poussé seulement si `vault_git_push` est vrai : le vault y part **en clair** (#327). La sauvegarde chiffrée, elle, passe par `[backup]`. |
+| `memory.vault_git_push` | `false` | Pousser le vault vers `vault_git_remote` après chaque commit. Désactivé par défaut : l'historique git reste local, la sauvegarde chiffrée couvre le vault (#327). |
 | `memory.profile_budget_tokens` | `600` | Budget du profil injecté (`profil.md`), en jetons. |
 | `memory.core_budget_tokens` | `1200` | Budget du niveau Cœur injecté (`memoire.md`), en jetons. |
 | `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
@@ -618,13 +619,14 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `backup.git_remote` | `""` | Dépôt git privé où pousser les sauvegardes chiffrées ; vide : celui du vault. |
+| `backup.provider` | `""` | Où partent les sauvegardes : `s3` (section `[backup.s3]`), `dir` (`backup.dir`) ou `icloud` (iCloud Drive) ; vide : `s3` si `[backup.s3]` est renseignée, sinon aucun (`penelope backup setup` le choisit). |
+| `backup.dir` | `""` | Dossier des sauvegardes : chemin absolu pour `dir` (`~` admis) ; pour `icloud`, sous-dossier d'iCloud Drive (défaut `Penelope`). |
 | `backup.cron` | `"0 4 * * *"` | Heure de la sauvegarde nocturne (cron à cinq champs) ; vide : aucune. |
-| `backup.keep_daily` | `7` | Sauvegardes quotidiennes gardées. |
-| `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées. |
-| `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées. |
+| `backup.keep_daily` | `7` | Sauvegardes quotidiennes gardées chez le fournisseur. |
+| `backup.keep_weekly` | `4` | Sauvegardes hebdomadaires gardées chez le fournisseur. |
+| `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées chez le fournisseur. |
+| `backup.keep_local` | `1` | Archives gardées dans le dossier local `backups/` (instantanés de base compris) ; les plus anciennes sont effacées après chaque sauvegarde réussie. |
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
-| `backup.max_push_bytes` | `104857600` | Taille maximale d'une archive poussée dans le dépôt git, en octets (limite de fichier de GitHub) ; sans effet sur S3. |
 | `backup.s3.endpoint` | `""` | Adresse du service (`https://s3.exemple.net`, `http://127.0.0.1:9000` en local) ; vide : pas de destination S3. |
 | `backup.s3.bucket` | `""` | Bucket, créé d'avance et réservé aux sauvegardes. |
 | `backup.s3.prefix` | `"penelope/"` | Préfixe des objets dans le bucket. |
@@ -2710,7 +2712,9 @@ nuit.
 `0s` pour désactiver), le vault devient un dépôt au démarrage (`.gitignore`, commit
 initial, identité locale si git n'en a pas). Les éditions faites à la main (éditeur, SSH)
 sont commitées à cette période, chaque rêve fait son commit `rêve du AAAA-MM-JJ (d_…) : N
-promues`, poussé si `memory.vault_git_remote` est renseigné. `doctor` et le digest
+promues`. L'historique reste local : il n'est poussé vers `memory.vault_git_remote` que
+si `memory.vault_git_push = true`, en clair (#327 ; la sauvegarde chiffrée couvre déjà le
+vault). `doctor` et le digest
 avertissent si le vault reste hors git. Ce que le dernier rêve a changé :
 
 ```bash
@@ -3147,78 +3151,131 @@ n'en paient aucun.
 
 ## 9. Sauvegarde et audit
 
+Une seule sauvegarde, un seul fournisseur : sur un ordinateur neuf, on la tire et tout
+repart comme hier (décision [0020](decisions/0020-sauvegarde-fournisseur-unique.md)).
+
 ```bash
-penelope backup
+penelope backup setup     # une fois : fournisseur, phrase de passe, kit de secours
+penelope backup           # l'archive complète, envoyée au fournisseur (chaque nuit aussi)
+penelope backup --local   # l'archive gardée dans backups/, sans envoi
+penelope backup --db      # le seul instantané de la base (penelope restore <fichier.db>)
 ```
 
-La sauvegarde est cohérente même pendant l'écriture : elle passe par `VACUUM INTO` sur
-une connexion en lecture seule, qui lit l'état validé sans prendre l'écrivain, et atterrit
-dans `backups/`. Les tours, les battements de bail et Telegram continuent pendant la copie ;
-l'archive, sa dérivation de clé et son chiffrement tournent sur un thread à part.
-`penelope doctor` donne la durée de la dernière sauvegarde, instantané compris.
+La base est copiée par `VACUUM INTO` sur une connexion en lecture seule, qui lit l'état
+validé sans prendre l'écrivain : les tours, les battements de bail et Telegram continuent
+pendant la copie ; l'archive, sa dérivation de clé et son chiffrement tournent sur un
+thread à part. `penelope doctor` donne la durée de la dernière sauvegarde, instantané
+compris.
 
 ### Sauvegarde complète chiffrée, hors de la machine
 
-```bash
-penelope secret set backup_passphrase
-penelope config set backup.git_remote git@github.com:moi/penelope-backups.git
-penelope backup --push
-```
+`penelope backup setup` pose tout, à l'invite :
 
-L'archive contient l'instantané de la base, le vault, les skills, les workflows, les
-gabarits, `mcp.d` et `config.toml` ; les artefacts et les médias reçus en sont exclus
-(`--media` les inclut, `backup.include_media` en fait le défaut). L'instantané est allégé
-de ses **index recalculables** : plein texte des messages, de la mémoire et des outils MCP,
-vecteurs de la mémoire, des intentions et des outils, cache d'embeddings (plus de 110 Mo sur
-une instance dont la base faisait 349 Mo). Ils reviennent d'eux-mêmes après une
-restauration : le daemon reconstruit les index plein texte à son premier passage de
-maintenance, dans la minute qui suit `penelope start`, puis le rattrapage d'embeddings
-recalcule les vecteurs ; la recherche est lexicale entre-temps. Elle est **chiffrée** par
-la phrase de passe du magasin de secrets (Argon2id puis XChaCha20-Poly1305) avant de
-quitter la machine : sans cette phrase, l'archive ne sert à rien. Les valeurs des secrets
-n'y sont jamais ; le `MANIFEST.json` poussé à côté dit la date, la version, les tailles, la
-somme SHA-256, ce qui a été laissé dehors et **les noms** des secrets à ressaisir.
+1. **le fournisseur**, `backup.provider` : `s3` (Scaleway proposé par défaut, AWS ou
+   MinIO), `dir` (un disque, un NAS, un volume monté : `backup.dir`, chemin absolu) ou
+   `icloud` (un dossier d'iCloud Drive, `Penelope` par défaut). Il est **essayé** : un
+   petit objet écrit puis effacé, pour qu'une clé sans droit d'écriture ou un dossier en
+   lecture seule se voie maintenant, pas la première nuit. Un volume `/Volumes/<nom>`
+   démonté est refusé plutôt que remplacé par un dossier du disque interne ;
+2. **la phrase de passe** des archives, `backup_passphrase` : générée (six mots de trois
+   syllabes, plus de 110 bits, `bado-kifu-lemo-nipa-ruso-tavi`) ou saisie
+   (`--own-passphrase`, 16 caractères au moins) ; une phrase existante peut être gardée ;
+3. **le kit de secours**, affiché une fois : la phrase de passe, le fournisseur,
+   l'emplacement, les clés S3 et la commande de restauration, en texte à copier dans un
+   gestionnaire de mots de passe ou à imprimer. La ressaisie de quatre mots tirés au sort
+   prouve qu'il a été noté. `penelope backup kit` le réaffiche, sur confirmation, tant que
+   la machine est là.
 
-Garde-fous : un dépôt public est refusé (vérifié par `gh` quand il est disponible), une
-archive au-delà de `backup.max_push_bytes` (100 Mo, la limite de fichier de GitHub) ne part
-pas dans le dépôt git, avec la marche à suivre (S3, lui, n'a pas cette limite), et l'absence
-de phrase de passe est dite avant tout travail. La rotation garde 7 quotidiennes, 4
-hebdomadaires et 12 mensuelles dans le dépôt de travail, sans réécrire l'historique. Une
-sauvegarde part chaque nuit à l'heure de `backup.cron` (4 h par défaut, vide pour
-désactiver) ; un échec arrive sur Telegram, jamais en silence.
+Les clés et la phrase de passe passent par le daemon quand il répond (en SSH, le trousseau
+n'est ouvert qu'à lui), sinon directement dans le magasin. La configuration est écrite d'un
+bloc puis relue par le daemon.
 
-### Destination S3 (MinIO, Scaleway, AWS)
+L'archive contient l'instantané de la base, le vault, `config.toml`, les skills, les
+workflows, les gabarits, `mcp.d`, `data/workspace`, `data/mcp-data` (l'état des serveurs
+MCP, dont la session d'un pont de messagerie) et **les valeurs des secrets** (jetons OAuth
+des serveurs MCP, connexion Codex, clés). Les secrets sont chiffrés une seconde fois, par
+une clé dérivée de la même phrase de passe avec son propre sel : un tar extrait par erreur
+ne livre aucune valeur. La phrase de passe elle-même n'y est pas. Restent dehors, nommés au
+`MANIFEST.json` avec leur raison : les modèles locaux (`data/models`, à retélécharger), les
+journaux, les artefacts et les médias reçus (`--media` les inclut,
+`backup.include_media` en fait le défaut, en manuel comme la nuit), et les **index
+recalculables** de la base : plein texte des messages, de la mémoire et des outils MCP,
+vecteurs, cache d'embeddings (plus de 110 Mo sur une instance dont la base faisait
+349 Mo). Ils reviennent d'eux-mêmes après une restauration : le daemon reconstruit les
+index plein texte à son premier passage de maintenance, puis le rattrapage d'embeddings
+recalcule les vecteurs ; la recherche est lexicale entre-temps. Le manifeste inventorie
+aussi les commandes des serveurs MCP et les serveurs d'inférence en LaunchAgent, pour la
+restauration.
 
-Un stockage compatible S3 reçoit la même archive, seul ou à côté du dépôt git. La
-signature AWS SigV4 est écrite dans Pénélope (pas de SDK) ; l'envoi passe en plusieurs
+Sous chaque racine (vault, workspace, `mcp-data`…), un **lien symbolique n'est jamais
+suivi** : il n'est ni copié ni recréé, et le manifeste le nomme (`links_skipped`), comme
+les sockets qu'un serveur MCP recrée lui-même ; rien n'entre ainsi de hors des racines, et
+une boucle de liens ne tourne pas. La collecte compte ce qu'elle copie et s'arrête
+au-delà de 2 Gio, avant toute archive ; l'archive chiffrée, elle, ne dépasse pas 512 Mio,
+plafond vérifié avant de la charger en mémoire, à l'écriture comme à la lecture.
+
+L'archive est chiffrée (Argon2id puis XChaCha20-Poly1305) avant de quitter la machine, puis
+**relue** : chaque sauvegarde se déchiffre en mémoire et liste son contenu (base, manifeste,
+secrets) sans rien extraire ; une archive qui ne se relit pas est effacée et la sauvegarde
+échoue. `penelope doctor` date le dernier contrôle (« déchiffrement vérifié le … »).
+
+Chez le fournisseur, l'archive part avec son manifeste (`penelope-<date>.manifest.json`) ;
+dans un dossier, elle est copiée sous un nom provisoire, sa somme SHA-256 vérifiée, puis
+renommée. La rotation garde 7 quotidiennes, 4 hebdomadaires et 12 mensuelles
+(`keep_daily`, `keep_weekly`, `keep_monthly`), manifestes compris. Une sauvegarde part
+chaque nuit à l'heure de `backup.cron` (4 h par défaut, vide pour désactiver) ; un échec
+arrive sur Telegram, jamais en silence (voir aussi la surveillance, plus bas).
+
+**Phrase de passe perdue.** Réponse honnête : les archives sont perdues. Elles sont
+chiffrées pour que personne d'autre ne les lise, et personne veut dire aussi le
+propriétaire, Pénélope et ses auteurs ; il n'existe ni porte dérobée ni réinitialisation.
+Tant que la machine est accessible, `penelope backup kit` la réaffiche : c'est le moment de
+la recopier. Si elle est perdue **et** la machine aussi, il ne reste rien à déchiffrer.
+D'où le kit, la ressaisie de quatre mots, et un nouveau `penelope backup setup` (phrase
+neuve) dès qu'un doute existe : les archives suivantes porteront la nouvelle, les
+anciennes restent lisibles avec l'ancienne seulement.
+
+**Venir d'une version qui poussait vers GitHub.** `backup.git_remote` et
+`backup.max_push_bytes` sont retirées en 1.0.46 : le fichier se lit sans erreur, la clé est
+ignorée, le démarrage et `penelope doctor` le disent, et plus rien ne part vers ce dépôt ni
+vers celui du vault. Le vault garde son historique git **local** ; son push vers
+`memory.vault_git_remote`, en clair, ne se fait plus que si `memory.vault_git_push = true`.
+Pour archiver les anciens dépôts : les passer en archivé sur GitHub (Settings, *Archive this
+repository*), ou les cloner une dernière fois (`git clone --mirror`) sur un disque, puis
+les supprimer. Une ancienne archive se restaure encore : `git clone` du dépôt, puis
+`penelope restore <archive>.tar.gz.enc`.
+
+### Destination S3 (Scaleway, AWS, MinIO)
+
+La signature AWS SigV4 est écrite dans Pénélope (pas de SDK) ; l'envoi passe en plusieurs
 parties au-delà de 64 Mo, et la taille de l'objet est relue par `HEAD` après l'envoi.
+Avec Scaleway, depuis la console : créer un bucket (Object Storage, région Paris), puis
+une clé d'API limitée à l'Object Storage de ce projet ; `penelope backup setup` demande
+l'adresse (`https://s3.fr-par.scw.cloud`), la région (`fr-par`), le bucket, le préfixe et
+les deux clés.
 
 ```toml
+[backup]
+provider = "s3"
+
 [backup.s3]
-endpoint = "https://s3.exemple.net"   # MinIO auto-hébergé, Scaleway, AWS…
-bucket = "penelope-sauvegardes"       # créé d'avance, réservé aux sauvegardes
+endpoint = "https://s3.fr-par.scw.cloud"   # Scaleway Paris ; AWS, MinIO auto-hébergé…
+region = "fr-par"                          # MinIO s'en moque
+bucket = "penelope-sauvegardes"            # créé d'avance, réservé aux sauvegardes
 prefix = "penelope/"
-# region = "us-east-1"                # Scaleway : "fr-par" ; MinIO s'en moque
-# path_style = true                   # MinIO ; false pour `bucket.endpoint` (AWS)
+# path_style = true                        # MinIO ; false pour `bucket.endpoint` (AWS)
 # access_key_id = "${SECRET:s3_access_key_id}"
 # secret_access_key = "${SECRET:s3_secret_access_key}"
 ```
 
 ```bash
-penelope secret set s3_access_key_id
-penelope secret set s3_secret_access_key
-penelope backup --push
 penelope doctor      # `backup.s3` : bucket joignable, dernière sauvegarde S3 et son âge
 ```
 
 L'adresse est en HTTPS (HTTP n'est accepté que vers la boucle locale) et ne porte pas
-d'identifiants : ils vont dans le magasin de secrets. La rotation `keep_daily`,
-`keep_weekly`, `keep_monthly` s'applique aux objets du préfixe, manifestes compris. Quand
-`backup.git_remote` et `[backup.s3]` sont tous deux renseignés, **les deux** reçoivent
-chaque sauvegarde ; l'échec de l'un ne retient pas l'autre : le rapport porte `pushed`,
-`pushed_s3` et `failed`, et le message de la nuit dit « sauvegarde partielle », qui l'a
-reçue et pourquoi l'autre a échoué (403 : clé ou droits ; 404 : bucket absent ; serveur
-injoignable). Tout en échec reste une sauvegarde manquée, dite comme avant.
+d'identifiants : ils vont dans le magasin de secrets. Une erreur nomme sa cause (403 : clé
+ou droits ; 404 : bucket absent ; serveur injoignable). Un fichier d'avant la 1.0.46 qui a
+`[backup.s3]` renseignée et pas de `backup.provider` vaut `provider = "s3"`.
 
 Une clé limitée au bucket, avec MinIO (`mc`) ; les politiques IAM de Scaleway et d'AWS
 s'écrivent de la même façon, le listage sur le bucket et les objets sur `bucket/*` :
@@ -3226,44 +3283,72 @@ s'écrivent de la même façon, le listage sur le bucket et les objets sur `buck
 ```bash
 mc alias set minio https://s3.exemple.net ADMIN_KEY ADMIN_SECRET
 mc mb minio/penelope-sauvegardes
-cat > penelope-sauvegardes.json <<'EOF'
+cat > penelope-sauvegardes.json <<'JSON'
 {"Version": "2012-10-17", "Statement": [
   {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
    "Resource": ["arn:aws:s3:::penelope-sauvegardes"]},
   {"Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject",
                                   "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
    "Resource": ["arn:aws:s3:::penelope-sauvegardes/*"]}]}
-EOF
+JSON
 mc admin policy create minio penelope-sauvegardes penelope-sauvegardes.json
 mc admin user add minio penelope-backup <clé-secrète-longue>
 mc admin policy attach minio penelope-sauvegardes --user penelope-backup
 ```
 
-`s3:DeleteObject` sert à la rotation, `s3:AbortMultipartUpload` à abandonner un envoi en
-parties coupé en route. Rien d'autre : cette clé ne voit aucun autre bucket.
+`s3:DeleteObject` sert à la rotation et à l'essai de `setup`, `s3:AbortMultipartUpload` à
+abandonner un envoi en parties coupé en route. Rien d'autre : cette clé ne voit aucun autre
+bucket.
 
 ### Remonter une instance sur une machine neuve
 
+Installer Pénélope (§2), sans rien configurer, puis :
+
 ```bash
-penelope restore-all git@github.com:moi/penelope-backups.git --dry-run
-penelope restore-all git@github.com:moi/penelope-backups.git
-penelope restore-all s3 --list                 # les archives du bucket de `[backup.s3]`
-penelope restore-all s3                        # la plus récente ; `--archive <clé>` pour une autre
-PENELOPE_S3_ACCESS_KEY_ID=… PENELOPE_S3_SECRET_ACCESS_KEY=… \
-  penelope restore-all s3://penelope-sauvegardes/penelope/ --endpoint https://s3.exemple.net
+penelope restore --dry-run                     # ce qui serait restauré, sans rien écrire
+penelope restore                               # le fournisseur de `backup.provider`, ou demandé
+penelope restore s3://penelope-sauvegardes/penelope/ --endpoint https://s3.fr-par.scw.cloud --region fr-par
+penelope restore icloud                        # iCloud Drive, même identifiant Apple
+penelope restore /Volumes/NAS/penelope         # un dossier de sauvegardes
+penelope restore s3 --list                     # les archives disponibles ; `--archive <nom>` pour une autre
 ```
 
-La commande clone le dépôt, télécharge l'archive depuis le bucket, ou lit une archive
-`.tar.gz.enc` locale, demande la phrase de passe à l'invite, puis remet la base et les
-fichiers à leur place, l'existant étant mis de côté. Sur une machine sans `config.toml`,
-`s3://bucket/prefixe` et `--endpoint` (et `--region` au besoin) remplacent la section
-`[backup.s3]` ; les clés viennent de l'environnement, sinon du magasin de secrets, sinon de
-l'invite, jamais d'un argument. Elle se fait **daemon arrêté**. Elle finit par la liste de ce
-qui reste à faire :
-`penelope install` et `penelope start`, les secrets à ressaisir d'après le manifeste, puis
-`penelope doctor` (serveurs MCP à réautoriser, modèle de transcription à télécharger).
-`penelope doctor` suit aussi l'âge de la dernière sauvegarde et alerte au-delà de 48 h, et
-`self_status` le sait : « ta dernière sauvegarde date de cette nuit ».
+`restore-all` reste un alias ; un fichier `.db` ne restaure que la base, comme avant. Sur
+une machine sans `config.toml`, la commande demande le fournisseur (le kit de secours dit
+lequel) ; les clés S3 viennent de l'environnement (`PENELOPE_S3_ACCESS_KEY_ID`,
+`PENELOPE_S3_SECRET_ACCESS_KEY`), sinon du magasin, sinon de l'invite, jamais d'un
+argument. La phrase de passe est demandée **masquée**.
+
+Elle se fait **daemon arrêté** et remet tout en place : la base, `config.toml`, le vault à
+**son** chemin (`memory.vault_path` de la configuration restaurée), les skills, les
+workflows, les gabarits, `mcp.d`, le workspace, `mcp-data`, et les secrets dans le magasin
+(trousseau), phrase de passe comprise. L'existant est mis de côté
+(`<chemin>.avant-restauration-<date>`). L'archive est déchiffrée en mémoire et passée à
+`tar` par son entrée standard, après la lecture de ses entrées : un chemin absolu, un
+`..`, une entrée hors de `penelope/` ou un lien font refuser l'archive entière, rien
+n'est extrait. Le dossier de travail et l'archive téléchargée sont effacés
+en fin de commande, succès ou échec. Elle réinstalle ensuite le service du daemon (et les
+serveurs d'inférence en LaunchAgent de la sauvegarde, si leur programme est là), attend
+que le daemon réponde et lance `penelope doctor`. Le compte rendu ne liste que ce qui reste
+vraiment à faire : modèles locaux à retélécharger, commandes de serveurs MCP absentes de
+cette machine, secret illisible au moment de la sauvegarde. `--no-start` s'arrête avant le
+service.
+
+### Surveillance et dossier local
+
+Dès qu'aucune sauvegarde n'a réussi depuis **24 h** (ou depuis la mise en route de la
+surveillance, s'il n'y en a jamais eu), une alerte part au foyer avec la cause connue
+(dernier échec, aucun fournisseur, `backup.cron` vide, daemon arrêté à l'heure dite) et la
+commande pour relancer ; elle se répète une fois par jour, pas plus. L'échec de la nuit,
+déjà dit le matin même, vaut l'avis du jour. `penelope doctor` passe en rouge au même seuil
+et donne la cause du dernier échec ; `self_status` le sait : « ta dernière sauvegarde date
+de cette nuit ». Le digest du matin porte une ligne : « Sauvegarde : ✅ cette nuit,
+137 Mo, S3 », ou « ❌ » avec la cause et la commande.
+
+Le dossier local `backups/` n'est pas une seconde rotation : après chaque sauvegarde
+réussie, il ne garde que la dernière archive et le dernier instantané de base
+(`backup.keep_local`, 1 par défaut). Quand le fournisseur `dir` est ce dossier même, c'est
+sa rotation qui vaut.
 
 ```bash
 penelope audit-verify

@@ -124,7 +124,7 @@ impl Rpc {
             }
             method::RESTORE => anyhow::bail!(
                 "une restauration remplace la base : elle se fait daemon arrêté, `penelope stop` \
-                 puis `penelope restore <sauvegarde>`"
+                 puis `penelope restore`"
             ),
             method::EVAL_RUN => anyhow::bail!(
                 "les suites d'évaluation tournent depuis les sources : `penelope eval <suite>` \
@@ -181,21 +181,7 @@ impl Rpc {
                         .collect::<Vec<_>>()
                 ))
             }
-            method::BACKUP => {
-                // Sans `push`, l'ancien comportement : un instantané de la base, local.
-                let push = p.get("push").and_then(|v| v.as_bool()).unwrap_or(false);
-                let full = push || p.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
-                if full {
-                    let media = p.get("media").and_then(|v| v.as_bool());
-                    return penelope_ops::backup::run(&self.daemon.services, push, media).await;
-                }
-                let dest = s.platform.dirs.data().join("backups").join(format!(
-                    "penelope-{}.db",
-                    s.clock.now_rfc3339().replace(':', "-")
-                ));
-                let took = s.store.snapshot_to(dest.clone()).await?;
-                Ok(json!({"path": dest, "snapshot_ms": took.as_millis() as u64}))
-            }
+            method::BACKUP => penelope_ops::backup::rpc(&self.daemon.services, p).await,
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),
         }
     }

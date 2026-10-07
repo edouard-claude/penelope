@@ -293,6 +293,15 @@ async fn world() -> World {
     .await
     .result
     .expect("secret posé");
+    // La phrase de passe des sauvegardes : `backup` construit l'archive complète (#327).
+    rpc.handle(RpcRequest::new(
+        1,
+        method::SECRET_SET,
+        json!({"name": "backup_passphrase", "value": "phrase du contrat doré"}),
+    ))
+    .await
+    .result
+    .expect("phrase de passe posée");
 
     for uid in ["u_show", "u_signals", "u_forget", "u_split"] {
         s.memory
@@ -454,6 +463,8 @@ fn params_of(m: &str) -> Value {
         method::CONTEXT => json!({"session": "$session"}),
         // Le retour arrière manuel est local : sans version précédente, il le dit.
         method::UPGRADE => json!({"rollback": true}),
+        // L'archive complète, gardée ici : le monde de test n'a pas de fournisseur.
+        method::BACKUP => json!({"push": false}),
         _ => json!({}),
     }
 }

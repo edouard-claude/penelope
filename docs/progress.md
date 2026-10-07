@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 6 octobre 2026.
+Dernière mise à jour : 7 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,67 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.46
+
+**Sauvegarde clé en main : une archive complète vers un fournisseur unique (S3, dossier ou
+iCloud Drive), GitHub retiré, kit de secours, restauration qui remet tout en place, alerte
+dès 24 h sans sauvegarde (#327, #328, #329, #330).** Promesse du propriétaire : une seule
+sauvegarde, un seul fournisseur ; sur un ordinateur neuf, on la tire et ça repart comme
+hier. Décision [0020](decisions/0020-sauvegarde-fournisseur-unique.md).
+
+Constat : le vault partait en clair toutes les 15 min vers un dépôt GitHub, l'archive
+chiffrée vers un autre et, ou, S3 ; un `backup.git_remote` vide retombait sur le dépôt du
+vault. Depuis le 04/10, l'archive dépassait la limite de 100 Mo d'un fichier GitHub : la
+sauvegarde nocturne échouait chaque nuit, sans que `doctor` alerte avant 48 h. L'archive
+ne portait ni les valeurs des secrets, ni `data/workspace`, ni `data/mcp-data` ; la phrase
+de passe ne vivait que dans le trousseau de la machine ; `restore-all` finissait par une
+liste d'étapes à la main, restaurait le vault dans `data/vault` codé en dur et laissait
+l'archive déchiffrée sur le disque ; `--full` ignorait `backup.include_media`.
+
+- **Fournisseur unique** (#327), `backup.provider` : `s3`, `dir` (`backup.dir`) ou
+  `icloud` ; `[backup.s3]` seule vaut `s3`. `backup.git_remote` et
+  `backup.max_push_bytes` sont des clés retirées, ignorées et dites (démarrage,
+  `doctor`) : plus aucun push git. Le vault garde son git local ; son push en clair
+  passe derrière `memory.vault_git_push` (faux par défaut). L'archive ajoute
+  `workspace`, `mcp-data` et les valeurs des secrets, chiffrées une seconde fois ; le
+  manifeste dit ce qui est exclu et pourquoi. La méthode `backup` sort du daemon
+  (`penelope_ops::backup::rpc`) ; `penelope backup` envoie par défaut, `--local` garde
+  l'archive, `--db` ne prend que la base ; sans `--media`, `backup.include_media` décide.
+- **Restauration** (#329) : `penelope restore [source]` (`restore-all` en alias, un
+  `.db` garde l'ancienne restauration de la base), sans argument le fournisseur
+  configuré ou demandé ; base, vault à son chemin, configuration, skills, workflows,
+  `mcp.d`, workspace, `mcp-data`, secrets dans le magasin ; service et serveurs
+  d'inférence réinstallés, daemon démarré, `doctor` ; il ne reste que les modèles à
+  retélécharger et les commandes MCP absentes. Rien de déchiffré ne reste. Test de bout
+  en bout en CI (`penelope-evals/tests/backup_restore.rs`).
+- **Kit de secours** (#328) : `penelope backup setup` essaie le fournisseur, génère la
+  phrase de passe (six mots, plus de 110 bits) ou la reçoit, affiche le kit une fois et
+  le fait confirmer par quatre mots ; `penelope backup kit` le réaffiche. Chaque
+  sauvegarde se déchiffre et se liste sans rien extraire ; `doctor` date le contrôle. La
+  phrase de passe est demandée masquée.
+- **Surveillance** (#330) : alerte au foyer dès 24 h sans sauvegarde réussie, une fois
+  par jour, avec la cause et la commande ; `doctor` en rouge au même seuil ; ligne au
+  digest du matin. Le dossier local ne garde que la dernière archive
+  (`backup.keep_local`, 1).
+- **Sécurité de l'archive** (revue du lot) : la collecte lit chaque entrée par
+  `symlink_metadata` et ne suit aucun lien symbolique, racines `workspace` et
+  `mcp-data` comprises (seuls le vault et `config.toml`, désignés par la configuration,
+  peuvent être des liens) ; liens, sockets et tubes sont nommés au manifeste
+  (`links_skipped`), aucune boucle ni sortie des racines n'est possible. La taille est
+  comptée pendant la collecte, refus dès 2 Gio franchis, avant toute archive ; le plafond
+  de 512 Mio de l'archive chiffrée vaut aussi à la lecture. La restauration lit les
+  entrées avant d'extraire et refuse l'archive entière pour un chemin absolu, un `..`, une
+  entrée hors de `penelope/`, un lien ou un fichier spécial.
+
+Clés nouvelles : `backup.provider`, `backup.dir`, `backup.keep_local`,
+`memory.vault_git_push`. Commandes nouvelles : `penelope backup setup`, `penelope backup
+kit`, `penelope restore [source] [--list --archive --dry-run --no-start]`.
+
+Closes #327.
+Closes #328.
+Closes #329.
+Closes #330.
 
 ### 1.0.45
 

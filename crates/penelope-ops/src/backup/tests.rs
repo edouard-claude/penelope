@@ -17,8 +17,9 @@ async fn services() -> (tempfile::TempDir, Arc<Services>) {
     (dir, s)
 }
 
-/// #42 : sauvegarde puis restauration dans un répertoire vide : la base et le vault
-/// reviennent identiques, et les valeurs de secrets ne sont jamais dans l'archive.
+/// #42, #327 : sauvegarde puis restauration dans un répertoire vide : la base, le vault,
+/// le workspace et `mcp-data` reviennent identiques ; les valeurs des secrets sont dans
+/// l'archive, sous une seconde couche, illisibles sans la phrase de passe.
 #[tokio::test]
 async fn a_backup_restores_the_database_and_the_vault() {
     let (_dir, s) = services().await;
@@ -26,6 +27,13 @@ async fn a_backup_restores_the_database_and_the_vault() {
     let vault = crate::helpers::vault_dir(s);
     std::fs::create_dir_all(&vault).unwrap();
     std::fs::write(vault.join("memoire.md"), "- un souvenir précis ^01UID\n").unwrap();
+    let data = s.platform.dirs.data();
+    std::fs::create_dir_all(data.join("workspace/projet")).unwrap();
+    std::fs::write(data.join("workspace/projet/notes.txt"), "brouillon").unwrap();
+    std::fs::create_dir_all(data.join("mcp-data/pont/session")).unwrap();
+    std::fs::write(data.join("mcp-data/pont/session/creds.json"), "{}").unwrap();
+    std::fs::create_dir_all(data.join("models/whisper")).unwrap();
+    std::fs::write(data.join("models/whisper/poids.bin"), "lourd").unwrap();
     s.platform
         .secrets
         .set(PASSPHRASE_SECRET, "phrase de passe de sauvegarde")
@@ -47,21 +55,31 @@ async fn a_backup_restores_the_database_and_the_vault() {
     assert!(archive.is_file());
     assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
     assert!(report["sha256"].as_str().is_some());
-    // Le manifeste dit quels secrets ressaisir, jamais leurs valeurs.
-    let names: Vec<String> = report["manifest"]["secrets_expected"]
+    let manifest = &report["manifest"];
+    assert_eq!(manifest["secrets_included"], json!(["openrouter_api_key"]));
+    assert_eq!(manifest["secrets_expected"], json!([]));
+    let names: Vec<&str> = manifest["contents"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|v| v.as_str().map(String::from))
+        .filter_map(|c| c["name"].as_str())
         .collect();
-    assert!(
-        names.contains(&"openrouter_api_key".to_string()),
-        "{names:?}"
-    );
+    for n in ["vault", "workspace", "mcp-data"] {
+        assert!(names.contains(&n), "{n} : {names:?}");
+    }
+    assert!(!names.contains(&"models"), "{names:?}");
+    let models = manifest["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "models")
+        .unwrap();
+    assert_eq!(models["items"], json!(["whisper"]), "{models}");
+    assert!(models["why"].as_str().unwrap().contains("rechargeables"));
     let raw = std::fs::read(&archive).unwrap();
     assert!(
         !String::from_utf8_lossy(&raw).contains("sk-or-v1-valeur-secrete"),
-        "aucune valeur de secret dans l'archive"
+        "aucune valeur de secret lisible dans l'archive"
     );
 
     // Restauration dans un répertoire vide.
@@ -74,6 +92,19 @@ async fn a_backup_restores_the_database_and_the_vault() {
         std::fs::read_to_string(root.join("vault/memoire.md")).unwrap(),
         "- un souvenir précis ^01UID\n"
     );
+    assert_eq!(
+        std::fs::read_to_string(root.join("workspace/projet/notes.txt")).unwrap(),
+        "brouillon"
+    );
+    assert!(root.join("mcp-data/pont/session/creds.json").is_file());
+    assert!(!root.join("models").exists());
+    // Extrait, le fichier des secrets reste chiffré : il faut la phrase une seconde fois.
+    let sealed = std::fs::read(root.join(secrets::FILE)).unwrap();
+    assert!(!String::from_utf8_lossy(&sealed).contains("sk-or-v1-valeur-secrete"));
+    assert!(secrets::open(&sealed, "autre phrase").is_err());
+    let values = secrets::open(&sealed, "phrase de passe de sauvegarde").unwrap();
+    assert_eq!(values["openrouter_api_key"], "sk-or-v1-valeur-secrete");
+    assert!(!values.contains_key(PASSPHRASE_SECRET), "{values:?}");
     // La base restaurée porte la session créée.
     let restored = penelope_store::Store::open(root.join("penelope.db")).unwrap();
     let titles: Vec<String> = restored
@@ -101,9 +132,15 @@ async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
         .secrets
         .set(PASSPHRASE_SECRET, "phrase de passe")
         .unwrap();
+    s.publish_config("test", |c| {
+        c.backup.provider = "dir".into();
+        c.backup.dir = "{data}/sauvegardes".into();
+        Ok(vec!["backup.provider".into()])
+    })
+    .unwrap();
     let job = {
         let s = s.clone();
-        tokio::spawn(async move { run(&s, false, None).await })
+        tokio::spawn(async move { run(&s, true, None).await })
     };
     let mut during = 0;
     while !job.is_finished() {
@@ -139,7 +176,7 @@ async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
 async fn without_a_passphrase_nothing_is_written() {
     let (_dir, s) = services().await;
     let e = build(&s, false).await.unwrap_err();
-    assert!(e.to_string().contains(PASSPHRASE_SECRET), "{e}");
+    assert!(e.to_string().contains("penelope backup setup"), "{e}");
     let out = s.platform.dirs.data().join("backups");
     let archives = std::fs::read_dir(&out)
         .map(|r| {
@@ -149,22 +186,6 @@ async fn without_a_passphrase_nothing_is_written() {
         })
         .unwrap_or(0);
     assert_eq!(archives, 0, "aucune archive ne doit rester");
-}
-
-/// #42 : une archive au-delà de la limite du dépôt est refusée, avec la marche à suivre.
-#[tokio::test]
-async fn an_oversized_archive_is_refused_before_pushing() {
-    let (_dir, s) = services().await;
-    let s = &s;
-    s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
-    s.publish_config("test", |c| {
-        c.backup.max_push_bytes = 64;
-        c.backup.git_remote = "git@github.com:moi/sauvegardes.git".into();
-        Ok(vec!["backup.max_push_bytes".into()])
-    })
-    .unwrap();
-    let e = run(s, true, Some(false)).await.unwrap_err();
-    assert!(e.to_string().contains("limite"), "{e}");
 }
 
 /// #42 : l'état des sauvegardes remonte dans `doctor`.
@@ -177,23 +198,15 @@ async fn doctor_says_when_there_is_no_backup_yet() {
 
     s.platform.secrets.set(PASSPHRASE_SECRET, "phrase").unwrap();
     let c = doctor_check(&s).await;
+    assert!(c.detail.contains("aucun fournisseur"), "{c:?}");
+    s.publish_config("test", |c| {
+        c.backup.provider = "dir".into();
+        c.backup.dir = "{data}/sauvegardes".into();
+        Ok(vec!["backup.provider".into()])
+    })
+    .unwrap();
+    let c = doctor_check(&s).await;
     assert!(c.detail.contains("aucune sauvegarde"), "{c:?}");
-}
-
-#[test]
-fn a_github_slug_is_read_from_any_remote_form() {
-    for r in [
-        "git@github.com:moi/penelope-backups.git",
-        "https://github.com/moi/penelope-backups",
-        "ssh://git@github.com/moi/penelope-backups.git",
-    ] {
-        assert_eq!(
-            github_slug(r).as_deref(),
-            Some("moi/penelope-backups"),
-            "{r}"
-        );
-    }
-    assert!(github_slug("git@gitlab.com:moi/x.git").is_none());
 }
 
 /// #42 : 7 quotidiennes, 4 hebdomadaires, 12 mensuelles ; les autres partent.
@@ -206,7 +219,10 @@ fn rotation_keeps_seven_four_and_twelve() {
         std::fs::write(dir.path().join(name), b"x").unwrap();
     }
     let cfg = Backup::default();
-    let removed = rotate(dir.path(), &cfg).unwrap();
+    let removed = rotation_plan(&provider::archive_names(dir.path()), &cfg);
+    for n in &removed {
+        std::fs::remove_file(dir.path().join(n)).unwrap();
+    }
     let left: Vec<String> = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()

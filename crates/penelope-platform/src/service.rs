@@ -148,6 +148,29 @@ pub fn launchd_program(plist: &str) -> Option<String> {
     )
 }
 
+/// Toutes les chaînes de `ProgramArguments` d'un `plist` : programme puis arguments. Une
+/// restauration réinstalle ainsi un serveur d'inférence à l'identique (#329).
+pub fn launchd_args(plist: &str) -> Vec<String> {
+    let Some(after) = plist.split("<key>ProgramArguments</key>").nth(1) else {
+        return Vec::new();
+    };
+    let Some(array) = after.split("</array>").next() else {
+        return Vec::new();
+    };
+    array
+        .split("<string>")
+        .skip(1)
+        .filter_map(|s| s.split("</string>").next())
+        .map(|a| {
+            a.replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&amp;", "&")
+        })
+        .collect()
+}
+
 /// `plist` dont le programme lancé devient `exe` ; `None` si le fichier n'en déclare pas.
 pub fn launchd_with_program(plist: &str, exe: &std::path::Path) -> Option<String> {
     let current = launchd_program(plist)?;
@@ -197,6 +220,25 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// #329 : les arguments d'un serveur d'inférence se relisent tels qu'écrits.
+    #[test]
+    fn the_program_arguments_are_read_back() {
+        let args = vec![
+            "/opt/mlx/bin/mlx_lm.server".to_string(),
+            "--model".into(),
+            "mlx-community/Modèle <4bit> & co".into(),
+        ];
+        let plist = agent_plist(
+            "com.penelope.inference.local",
+            &args,
+            Path::new("/tmp/o.log"),
+            Path::new("/tmp/e.log"),
+            &[("PATH", "/usr/bin")],
+        );
+        assert_eq!(launchd_args(&plist), args);
+        assert!(launchd_args("<plist/>").is_empty());
+    }
 
     #[test]
     fn the_launched_program_is_read_and_rewritten() {

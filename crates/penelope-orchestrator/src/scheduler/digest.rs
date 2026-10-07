@@ -1,6 +1,6 @@
 //! Ce que le digest du matin lit au-dessus du rêve, calculé ici et transmis en données
 //! (T26, puis T27) : planifications en échec, sessions dont le résumé échoue, départs du
-//! jour mêlés aux rendez-vous de l'agenda (#295).
+//! jour mêlés aux rendez-vous de l'agenda (#295), état de la sauvegarde (#330).
 
 use super::*;
 use penelope_dream::{DigestInputs, DigestSource};
@@ -57,6 +57,8 @@ pub async fn digest_inputs_with(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) ->
         notes: penelope_vault::session_project::subjects::digest_note(s)
             .await
             .into_iter()
+            // La sauvegarde de la nuit, réussie ou non (#330).
+            .chain(penelope_app::backup_state::digest_line(s).await)
             .collect(),
         due_today: today.into_iter().map(|(_, line)| line).collect(),
         agenda_error,

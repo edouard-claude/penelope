@@ -4,11 +4,24 @@ use super::*;
 
 /// Clés retirées, avec la raison : un fichier écrit par une version antérieure les porte
 /// encore, il se lit sans erreur. Une section retirée en entier est nommée seule.
-pub const RETIRED_KEYS: &[(&str, &str)] = &[(
-    "history",
-    "`history.source` est retirée en 1.0 (épopée #208, T16) : la conversation se relit \
-     toujours depuis le journal d'événements ; la ligne peut être effacée",
-)];
+pub const RETIRED_KEYS: &[(&str, &str)] = &[
+    (
+        "history",
+        "`history.source` est retirée en 1.0 (épopée #208, T16) : la conversation se relit \
+         toujours depuis le journal d'événements ; la ligne peut être effacée",
+    ),
+    (
+        "backup.git_remote",
+        "`backup.git_remote` est retirée en 1.0.46 (#327) : GitHub n'est plus une \
+         destination de sauvegarde, rien n'y est poussé. Choisir un fournisseur avec \
+         `penelope backup setup` (S3, dossier ou iCloud), puis effacer la ligne",
+    ),
+    (
+        "backup.max_push_bytes",
+        "`backup.max_push_bytes` est retirée en 1.0.46 (#327) : la limite était celle des \
+         fichiers de GitHub, qui ne reçoit plus de sauvegarde ; la ligne peut être effacée",
+    ),
+];
 
 /// La raison du retrait d'une clé (ou de la section qui la contient), si elle l'est.
 pub fn retired(key: &str) -> Option<&'static str> {
@@ -348,9 +361,39 @@ impl Config {
         Ok(())
     }
 
+    /// Fournisseur de sauvegarde (#327) : un nom connu, et ce qu'il lui faut.
+    fn validate_backup_provider(&self) -> Result<()> {
+        let b = &self.backup;
+        match b.provider.trim() {
+            "" | "icloud" => Ok(()),
+            "s3" if b.s3.enabled() => Ok(()),
+            "s3" => Err(KernelError::config(
+                "backup.provider = \"s3\" : renseigner backup.s3.endpoint et backup.s3.bucket \
+                 (`penelope backup setup`)",
+            )),
+            "dir" => {
+                let dir = b.dir.trim();
+                if dir.starts_with('/') || dir.starts_with("~/") || dir.starts_with("{data}") {
+                    Ok(())
+                } else {
+                    Err(KernelError::config(format!(
+                        "backup.provider = \"dir\" : backup.dir doit être un chemin absolu \
+                         (`/Volumes/NAS/penelope`, `~/Sauvegardes`), pas `{dir}`"
+                    )))
+                }
+            }
+            other => Err(KernelError::config(format!(
+                "backup.provider `{other}` inconnu : {} (GitHub n'est plus une destination \
+                 de sauvegarde, #327)",
+                BACKUP_PROVIDERS.join(", ")
+            ))),
+        }
+    }
+
     /// Destination S3 (#289) : adresse en HTTPS (HTTP seulement vers la boucle locale),
     /// sans identifiants ; bucket renseigné dès que l'adresse l'est, et réciproquement.
     fn validate_backup_s3(&self) -> Result<()> {
+        self.validate_backup_provider()?;
         let s3 = &self.backup.s3;
         let (endpoint, bucket) = (s3.endpoint.trim(), s3.bucket.trim());
         if endpoint.is_empty() && bucket.is_empty() {

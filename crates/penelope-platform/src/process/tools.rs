@@ -21,6 +21,87 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     }
 }
 
+/// Passe `bytes` sur l'entrée de `tar` lancé avec `args`, et rend sa sortie standard.
+fn tar_stdin(args: &[&std::ffi::OsStr], bytes: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("tar")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // L'écriture se fait à part : `tar` peut remplir sa sortie avant d'avoir tout lu.
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| PlatformError::Process("tar : entrée indisponible".into()))?;
+    let written = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || stdin.write_all(bytes));
+        let out = child.wait_with_output();
+        (writer.join(), out)
+    });
+    let out = written.1?;
+    if !out.status.success() {
+        return Err(PlatformError::Process(format!(
+            "tar : {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    match written.0 {
+        Ok(Ok(())) => Ok(out.stdout),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err(PlatformError::Process("tar : écriture interrompue".into())),
+    }
+}
+
+/// Extrait une archive `tar.gz` tenue en mémoire, sans l'écrire en clair sur le disque
+/// (#329 : la restauration déchiffre en mémoire et passe l'archive à `tar`).
+pub fn extract_tar_gz_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    tar_stdin(
+        &[
+            "-xzf".as_ref(),
+            "-".as_ref(),
+            "-C".as_ref(),
+            dest.as_os_str(),
+        ],
+        bytes,
+    )
+    .map(|_| ())
+}
+
+/// Les entrées d'une archive `tar.gz` tenue en mémoire, sans rien extraire (#328 : le
+/// contrôle de déchiffrement de chaque sauvegarde).
+pub fn list_tar_gz_bytes(bytes: &[u8]) -> Result<Vec<String>> {
+    let out = tar_stdin(&["-tzf".as_ref(), "-".as_ref()], bytes)?;
+    Ok(String::from_utf8_lossy(&out)
+        .lines()
+        .map(|l| l.trim_end_matches('/').to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// Les entrées d'une archive `tar.gz` tenue en mémoire avec leur type (`-` fichier, `d`
+/// dossier, `l` lien symbolique, `h` lien physique…), sans rien extraire : la
+/// restauration refuse ce qui sortirait de sa destination (#329).
+pub fn tar_gz_entries(bytes: &[u8]) -> Result<Vec<(char, String)>> {
+    let names = list_tar_gz_bytes(bytes)?;
+    let verbose = tar_stdin(&["-tvzf".as_ref(), "-".as_ref()], bytes)?;
+    let kinds: Vec<char> = String::from_utf8_lossy(&verbose)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.chars().next().unwrap_or('?'))
+        .collect();
+    if kinds.len() != names.len() {
+        return Err(PlatformError::Process(format!(
+            "tar : {} entrées listées, {} décrites",
+            names.len(),
+            kinds.len()
+        )));
+    }
+    Ok(kinds.into_iter().zip(names).collect())
+}
+
 /// Crée une archive `tar.gz` des entrées données, relatives à `root` (issue #42).
 pub fn create_tar_gz(dest: &Path, root: &Path, entries: &[String]) -> Result<()> {
     if let Some(p) = dest.parent() {
@@ -42,76 +123,6 @@ pub fn create_tar_gz(dest: &Path, root: &Path, entries: &[String]) -> Result<()>
     }
 }
 
-/// Clone ou met à jour un dépôt de travail sur `remote` (issue #42).
-pub fn git_sync_repo(dir: &Path, remote: &str) -> Result<()> {
-    let git = |args: &[&str], cwd: Option<&Path>| -> Result<std::process::Output> {
-        let mut c = std::process::Command::new("git");
-        c.args(args);
-        c.env("GIT_TERMINAL_PROMPT", "0");
-        if let Some(d) = cwd {
-            c.current_dir(d);
-        }
-        Ok(c.output()?)
-    };
-    if dir.join(".git").is_dir() {
-        let _ = git(&["remote", "set-url", "origin", remote], Some(dir))?;
-        // Un échec de `pull` n'empêche pas de sauvegarder : le commit suivant le dira.
-        let _ = git(&["pull", "--ff-only", "origin", "HEAD"], Some(dir))?;
-        return Ok(());
-    }
-    std::fs::create_dir_all(dir)?;
-    let out = git(
-        &["clone", remote, dir.to_string_lossy().as_ref()],
-        dir.parent(),
-    )?;
-    if out.status.success() {
-        return Ok(());
-    }
-    // Dépôt vide ou inaccessible en clone : on initialise et on poussera.
-    let _ = git(&["init"], Some(dir))?;
-    let _ = git(&["remote", "add", "origin", remote], Some(dir))?;
-    Ok(())
-}
-
-/// Commite et pousse le contenu d'un dépôt de travail. Renvoie le hash du commit.
-pub fn git_commit_push(dir: &Path, message: &str, name: &str, email: &str) -> Result<String> {
-    let git = |args: &[&str]| -> Result<std::process::Output> {
-        let mut c = std::process::Command::new("git");
-        c.args(args).current_dir(dir);
-        c.env("GIT_TERMINAL_PROMPT", "0");
-        Ok(c.output()?)
-    };
-    let _ = git(&["add", "-A"])?;
-    let commit = git(&[
-        "-c",
-        &format!("user.name={name}"),
-        "-c",
-        &format!("user.email={email}"),
-        "commit",
-        "-m",
-        message,
-    ])?;
-    if !commit.status.success() {
-        let err = String::from_utf8_lossy(&commit.stdout);
-        if !err.contains("nothing to commit") {
-            return Err(PlatformError::Process(format!(
-                "git commit : {}",
-                err.trim()
-            )));
-        }
-    }
-    let head = git(&["rev-parse", "HEAD"])?;
-    let hash = String::from_utf8_lossy(&head.stdout).trim().to_string();
-    let push = git(&["push", "origin", "HEAD"])?;
-    if !push.status.success() {
-        return Err(PlatformError::Process(format!(
-            "git push : {}",
-            String::from_utf8_lossy(&push.stderr).trim()
-        )));
-    }
-    Ok(hash)
-}
-
 /// Première ligne de `<binaire> --version`, pour vérifier qu'un binaire démarre.
 pub fn binary_version(path: &Path) -> Result<String> {
     let out = std::process::Command::new(path)
@@ -131,4 +142,45 @@ pub fn binary_version(path: &Path) -> Result<String> {
         .unwrap_or_default()
         .trim()
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #328, #329 : une archive tenue en mémoire se liste et s'extrait par l'entrée de
+    /// `tar`, sans fichier en clair ; un contenu qui n'est pas une archive est refusé.
+    #[test]
+    fn an_archive_in_memory_is_listed_and_extracted() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src/penelope");
+        std::fs::create_dir_all(src.join("vault")).unwrap();
+        std::fs::write(src.join("MANIFEST.json"), "{}").unwrap();
+        std::fs::write(src.join("vault/memoire.md"), "souvenir").unwrap();
+        let tar = dir.path().join("a.tar.gz");
+        create_tar_gz(&tar, &dir.path().join("src"), &["penelope".into()]).unwrap();
+        let bytes = std::fs::read(&tar).unwrap();
+        let entries = list_tar_gz_bytes(&bytes).unwrap();
+        assert!(
+            entries.contains(&"penelope/MANIFEST.json".to_string()),
+            "{entries:?}"
+        );
+        assert!(entries.contains(&"penelope/vault/memoire.md".to_string()));
+        let out = dir.path().join("out");
+        extract_tar_gz_bytes(&bytes, &out).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.join("penelope/vault/memoire.md")).unwrap(),
+            "souvenir"
+        );
+        assert!(list_tar_gz_bytes(b"pas une archive").is_err());
+        let kinds = tar_gz_entries(&bytes).unwrap();
+        assert!(
+            kinds.contains(&('d', "penelope/vault".to_string())),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.contains(&('-', "penelope/MANIFEST.json".to_string())),
+            "{kinds:?}"
+        );
+    }
 }

@@ -33,21 +33,17 @@ fn derive(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-/// Chiffre `src` vers `dst`. La phrase de passe vide est refusée : une archive lisible par
-/// tous n'est pas une sauvegarde.
-pub fn seal(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
+/// En-tête des secrets rangés dans l'archive (#327) : une seconde couche, son propre sel.
+const SECRETS_MAGIC: &[u8; 8] = b"PNLPSK01";
+
+/// Chiffre `plain` derrière l'en-tête `magic` : sel et nonce tirés au sort, clé dérivée de
+/// la phrase de passe. La phrase de passe vide est refusée.
+fn seal_with(magic: &[u8; 8], plain: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     if passphrase.trim().is_empty() {
         return Err(PlatformError::Secret(
             "phrase de passe vide : l'archive ne serait pas protégée".into(),
         ));
     }
-    let size = std::fs::metadata(src)?.len();
-    if size > MAX_ARCHIVE_BYTES {
-        return Err(PlatformError::Secret(format!(
-            "archive de {size} octets : au-delà de {MAX_ARCHIVE_BYTES}, chiffrer par morceaux"
-        )));
-    }
-    let plain = std::fs::read(src)?;
     let mut salt = [0u8; 16];
     let mut nonce_bytes = [0u8; 24];
     getrandom::getrandom(&mut salt)
@@ -58,14 +54,46 @@ pub fn seal(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
     let cipher = XChaCha20Poly1305::new_from_slice(&key)
         .map_err(|e| PlatformError::Secret(e.to_string()))?;
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce_bytes), plain.as_ref())
+        .encrypt(XNonce::from_slice(&nonce_bytes), plain)
         .map_err(|e| PlatformError::Secret(e.to_string()))?;
-
     let mut out = Vec::with_capacity(48 + ct.len());
-    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(magic);
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Déchiffre ce que [`seal_with`] a produit sous le même en-tête. `what` nomme la source
+/// dans l'erreur.
+fn open_with(magic: &[u8; 8], raw: &[u8], passphrase: &str, what: &str) -> Result<Vec<u8>> {
+    if raw.len() < 48 || &raw[..8] != magic {
+        return Err(PlatformError::Secret(format!(
+            "{what} n'est pas une sauvegarde Pénélope"
+        )));
+    }
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&raw[8..24]);
+    let key = derive(passphrase, &salt)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key)
+        .map_err(|e| PlatformError::Secret(e.to_string()))?;
+    cipher
+        .decrypt(XNonce::from_slice(&raw[24..48]), &raw[48..])
+        .map_err(|_| {
+            PlatformError::Secret("déchiffrement impossible : phrase de passe incorrecte".into())
+        })
+}
+
+/// Chiffre `src` vers `dst`. La phrase de passe vide est refusée : une archive lisible par
+/// tous n'est pas une sauvegarde.
+pub fn seal(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
+    let size = std::fs::metadata(src)?.len();
+    if size > MAX_ARCHIVE_BYTES {
+        return Err(PlatformError::Secret(format!(
+            "archive de {size} octets : au-delà de {MAX_ARCHIVE_BYTES}, chiffrer par morceaux"
+        )));
+    }
+    let out = seal_with(MAGIC, &std::fs::read(src)?, passphrase)?;
     if let Some(p) = dst.parent() {
         std::fs::create_dir_all(p)?;
     }
@@ -74,30 +102,42 @@ pub fn seal(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
     Ok(out.len() as u64)
 }
 
-/// Déchiffre `src` vers `dst`. Une phrase de passe incorrecte est dite comme telle.
-pub fn open(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
-    let raw = std::fs::read(src)?;
-    if raw.len() < 48 || &raw[..8] != MAGIC {
+/// Déchiffre `src` en mémoire, sans rien écrire : le contrôle de chaque sauvegarde (#328)
+/// et la restauration passent par là.
+pub fn open_to_vec(src: &Path, passphrase: &str) -> Result<Vec<u8>> {
+    // Le plafond vaut à la lecture comme à l'écriture : un fichier démesuré n'est pas
+    // chargé en mémoire.
+    let size = std::fs::metadata(src)?.len();
+    if size > MAX_ARCHIVE_BYTES + 48 + 16 {
         return Err(PlatformError::Secret(format!(
-            "{} n'est pas une sauvegarde Pénélope",
+            "{} : {size} octets, au-delà du plafond de {MAX_ARCHIVE_BYTES} d'une sauvegarde",
             src.display()
         )));
     }
-    let mut salt = [0u8; 16];
-    salt.copy_from_slice(&raw[8..24]);
-    let key = derive(passphrase, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|e| PlatformError::Secret(e.to_string()))?;
-    let plain = cipher
-        .decrypt(XNonce::from_slice(&raw[24..48]), &raw[48..])
-        .map_err(|_| {
-            PlatformError::Secret("déchiffrement impossible : phrase de passe incorrecte".into())
-        })?;
+    let raw = std::fs::read(src)?;
+    open_with(MAGIC, &raw, passphrase, &src.display().to_string())
+}
+
+/// Déchiffre `src` vers `dst`. Une phrase de passe incorrecte est dite comme telle.
+pub fn open(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
+    let plain = open_to_vec(src, passphrase)?;
     if let Some(p) = dst.parent() {
         std::fs::create_dir_all(p)?;
     }
     std::fs::write(dst, &plain)?;
     Ok(plain.len() as u64)
+}
+
+/// Chiffre les secrets rangés dans l'archive (#327) : une couche de plus que l'archive,
+/// dérivée de la même phrase de passe avec son propre sel. Un tar extrait par erreur ne
+/// livre ainsi aucune valeur.
+pub fn seal_secrets(plain: &[u8], passphrase: &str) -> Result<Vec<u8>> {
+    seal_with(SECRETS_MAGIC, plain, passphrase)
+}
+
+/// Déchiffre les secrets d'une archive.
+pub fn open_secrets(raw: &[u8], passphrase: &str) -> Result<Vec<u8>> {
+    open_with(SECRETS_MAGIC, raw, passphrase, "le fichier des secrets")
 }
 
 #[cfg(test)]
@@ -146,6 +186,25 @@ mod tests {
         let src = dir.path().join("autre.bin");
         std::fs::write(&src, b"ceci n'est pas une sauvegarde de Penelope du tout").unwrap();
         let e = open(&src, &dir.path().join("out"), "x").unwrap_err();
+        assert!(e.to_string().contains("n'est pas une sauvegarde"), "{e}");
+    }
+
+    /// #327 : les secrets ont leur propre couche ; l'en-tête de l'archive n'ouvre pas
+    /// celle des secrets, et la mauvaise phrase est dite.
+    #[test]
+    fn secrets_have_their_own_layer() {
+        let sealed = seal_secrets(br#"{"cle":"valeur-secrete"}"#, "phrase").unwrap();
+        assert!(!String::from_utf8_lossy(&sealed).contains("valeur-secrete"));
+        assert_eq!(
+            open_secrets(&sealed, "phrase").unwrap(),
+            br#"{"cle":"valeur-secrete"}"#
+        );
+        let e = open_secrets(&sealed, "autre").unwrap_err();
+        assert!(e.to_string().contains("phrase de passe incorrecte"), "{e}");
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("s.enc");
+        std::fs::write(&f, &sealed).unwrap();
+        let e = open_to_vec(&f, "phrase").unwrap_err();
         assert!(e.to_string().contains("n'est pas une sauvegarde"), "{e}");
     }
 }

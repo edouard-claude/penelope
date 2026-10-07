@@ -195,32 +195,46 @@ pub enum Command {
     /// L'historique de la conversation contre le journal d'événements.
     #[command(subcommand)]
     History(HistoryCmd),
-    /// Sauvegarde cohérente. `--push` : archive chiffrée complète, poussée dans le dépôt
-    /// privé de `backup.git_remote` et, ou, le bucket de `[backup.s3]`.
+    /// Sauvegarde complète chiffrée (base, vault, configuration, skills, workflows,
+    /// `mcp.d`, workspace, `mcp-data`, secrets), envoyée au fournisseur de `backup.provider`.
+    /// `setup` choisit le fournisseur et la phrase de passe ; `kit` réaffiche le kit de
+    /// secours.
+    #[command(args_conflicts_with_subcommands = true)]
     Backup {
+        #[command(subcommand)]
+        cmd: Option<BackupCmd>,
+        /// Garder l'archive dans `backups/`, sans l'envoyer.
+        #[arg(long, conflicts_with = "db")]
+        local: bool,
+        /// Le seul instantané de la base, dans `backups/` (`penelope restore <fichier.db>`).
         #[arg(long)]
-        push: bool,
-        /// Archive complète (base, vault, skills, workflows, `mcp.d`, configuration).
-        #[arg(long)]
-        full: bool,
-        /// Inclure artefacts et médias reçus.
+        db: bool,
+        /// Inclure artefacts et médias reçus ; sans l'option, `backup.include_media`.
         #[arg(long)]
         media: bool,
+        /// Ancienne option, sans effet : l'envoi est le défaut.
+        #[arg(long, hide = true)]
+        push: bool,
+        /// Ancienne option, sans effet : l'archive complète est le défaut.
+        #[arg(long, hide = true)]
+        full: bool,
     },
-    /// Restaure **tout** depuis une sauvegarde chiffrée (archive locale, dépôt privé ou
-    /// bucket S3), daemon arrêté, sur une machine neuve.
-    #[command(name = "restore-all")]
-    RestoreAll {
-        /// Archive `.tar.gz.enc`, dépôt git à cloner, ou `s3` (le bucket de `[backup.s3]`) ;
-        /// `s3://bucket/prefixe` désigne un autre bucket, avec `--endpoint`.
+    /// Restaure **tout** depuis la sauvegarde chiffrée, daemon arrêté, sur une machine
+    /// neuve : fichiers, secrets, service démarré, `doctor`. Un fichier `.db` ne
+    /// restaure que la base.
+    #[command(alias = "restore-all")]
+    Restore {
+        /// Sans argument, le fournisseur de `backup.provider` (demandé sur une machine
+        /// neuve) ; sinon `s3`, `s3://bucket/prefixe`, `icloud`, un dossier de sauvegardes
+        /// ou une archive `.tar.gz.enc`.
         source: Option<String>,
         /// Dire ce qui serait restauré, sans rien écrire.
         #[arg(long)]
         dry_run: bool,
-        /// S3 : lister les sauvegardes disponibles, sans rien restaurer.
+        /// Lister les sauvegardes du fournisseur, sans rien restaurer.
         #[arg(long)]
         list: bool,
-        /// S3 : clé de l'archive à restaurer ; défaut : la plus récente.
+        /// Nom de l'archive à restaurer ; défaut : la plus récente.
         #[arg(long)]
         archive: Option<String>,
         /// S3 : adresse du service (`https://…`) ; défaut : `backup.s3.endpoint`.
@@ -229,9 +243,10 @@ pub enum Command {
         /// S3 : région de la signature ; défaut : `backup.s3.region`.
         #[arg(long)]
         region: Option<String>,
+        /// Ne pas réinstaller ni démarrer le service à la fin.
+        #[arg(long)]
+        no_start: bool,
     },
-    /// Restaure une sauvegarde, daemon arrêté (la base actuelle est d'abord mise de côté).
-    Restore { file: PathBuf },
     /// Import depuis un autre agent.
     #[command(subcommand)]
     Import(ImportCmd),
@@ -421,6 +436,22 @@ pub enum ConfigCmd {
     Validate {
         file: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackupCmd {
+    /// Met la sauvegarde en place : fournisseur choisi et testé, phrase de passe générée
+    /// (ou saisie), kit de secours affiché une fois et confirmé par quatre mots.
+    Setup {
+        /// `s3`, `dir` ou `icloud` ; demandé sinon.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Saisir sa propre phrase de passe plutôt que d'en générer une.
+        #[arg(long)]
+        own_passphrase: bool,
+    },
+    /// Réaffiche le kit de secours (phrase de passe comprise), sur confirmation.
+    Kit,
 }
 
 #[derive(Subcommand, Debug)]

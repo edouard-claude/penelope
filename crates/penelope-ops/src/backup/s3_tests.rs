@@ -1,5 +1,5 @@
 //! La destination S3 (#289) contre le faux serveur : envoi vérifié, parties, rétention,
-//! restauration, erreurs nommées, deux destinations, `doctor`.
+//! restauration, erreurs nommées, `doctor`.
 
 use super::fake_s3::{FakeS3, Mode};
 use super::*;
@@ -41,31 +41,16 @@ async fn services_with_s3(fake: &FakeS3) -> (tempfile::TempDir, Arc<Services>) {
     (dir, s)
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?} : {out:?}");
-    String::from_utf8_lossy(&out.stdout).to_string()
-}
-
-fn bare_repo(dir: &Path) -> String {
-    let bare = dir.join("depot.git");
-    std::fs::create_dir_all(&bare).unwrap();
-    git(&bare, &["init", "--bare", "--quiet"]);
-    bare.display().to_string()
-}
-
 /// L'archive et son manifeste arrivent dans le bucket, la taille est relue par `HEAD`, et
-/// le rapport comme `backup.last` le disent ; sans dépôt git, rien ne manque.
+/// le rapport comme `backup.last` le disent. `[backup.s3]` renseignée sans
+/// `backup.provider` (fichier d'avant #327) vaut le fournisseur `s3`.
 #[tokio::test]
 async fn an_archive_lands_in_the_bucket_with_its_manifest_and_is_verified() {
     let fake = FakeS3::start("sauvegardes-penelope").await;
     let (_dir, s) = services_with_s3(&fake).await;
     let report = run(&s, true, Some(false)).await.unwrap();
-    let pushed = &report["pushed_s3"];
+    let pushed = &report["pushed"];
+    assert_eq!(pushed["provider"], "s3", "{report}");
     let key = pushed["key"].as_str().unwrap();
     assert!(
         key.starts_with("sauvegardes/penelope-") && key.ends_with(".tar.gz.enc"),
@@ -74,8 +59,6 @@ async fn an_archive_lands_in_the_bucket_with_its_manifest_and_is_verified() {
     assert_eq!(pushed["bytes"], report["bytes"], "{report}");
     assert_eq!(pushed["parts"], 1, "{report}");
     assert_eq!(pushed["bucket"], "sauvegardes-penelope");
-    assert!(report["pushed"].is_null(), "pas de dépôt git : {report}");
-    assert!(report["failed"].is_null(), "{report}");
 
     let keys = fake.keys();
     let mut expected = vec![key.to_string(), s3::manifest_key(key)];
@@ -100,7 +83,7 @@ async fn an_archive_lands_in_the_bucket_with_its_manifest_and_is_verified() {
         .position(|r| r == &format!("HEAD /sauvegardes-penelope/{key}"));
     assert!(put.is_some() && head > put, "{requests:?}");
     let last = s.kv_get(LAST_KEY).await.unwrap().unwrap();
-    assert!(last.contains("pushed_s3"), "{last}");
+    assert!(last.contains("\"pushed\""), "{last}");
 }
 
 /// Au-delà du seuil, l'archive part en parties et le serveur la recompose ; une partie
@@ -182,7 +165,7 @@ async fn retention_removes_old_archives_and_their_manifests_from_the_bucket() {
     );
     let (_dir, s) = services_with_s3(&fake).await;
     let report = run(&s, true, Some(false)).await.unwrap();
-    let rotated = report["pushed_s3"]["rotated"].as_array().unwrap();
+    let rotated = report["pushed"]["rotated"].as_array().unwrap();
     assert!(!rotated.is_empty(), "{report}");
 
     let left: Vec<String> = fake
@@ -194,7 +177,7 @@ async fn retention_removes_old_archives_and_their_manifests_from_the_bucket() {
     let mut all: Vec<String> = (1..=30)
         .map(|d| format!("penelope-2026-08-{d:02}T04-00-00-000Z.tar.gz.enc"))
         .collect();
-    let new = report["pushed_s3"]["key"].as_str().unwrap()[PREFIX.len()..].to_string();
+    let new = report["pushed"]["key"].as_str().unwrap()[PREFIX.len()..].to_string();
     all.push(new.clone());
     let removed = rotation_plan(&all, &s.config.config().backup);
     let expected: Vec<String> = all
@@ -282,7 +265,7 @@ async fn errors_name_their_cause() {
         err.contains("accès refusé (403 AccessDenied)") && err.contains("sauvegardes-penelope"),
         "{err}"
     );
-    assert!(err.starts_with("s3 : PUT sauvegardes/penelope-"), "{err}");
+    assert!(err.starts_with("PUT sauvegardes/penelope-"), "{err}");
 
     fake.set_mode(Mode::NoBucket);
     let err = run(&s, true, Some(false)).await.unwrap_err().to_string();
@@ -325,94 +308,6 @@ async fn errors_name_their_cause() {
     assert!(err.contains("injoignable"), "{err}");
 }
 
-/// Dépôt git et bucket reçoivent tous deux l'archive ; l'échec de l'un ne retient pas
-/// l'autre, le rapport et le message de la nuit le disent ; tout en échec : erreur.
-#[tokio::test]
-async fn both_destinations_receive_the_archive_and_one_failure_does_not_block_the_other() {
-    let fake = FakeS3::start("b").await;
-    let (dir, s) = services_with_s3(&fake).await;
-    let remote = bare_repo(dir.path());
-    let r = remote.clone();
-    s.publish_config("test", move |c| {
-        c.backup.git_remote = r;
-        Ok(vec!["backup.git_remote".into()])
-    })
-    .unwrap();
-
-    let report = run(&s, true, Some(false)).await.unwrap();
-    assert_eq!(report["pushed"]["remote"], remote, "{report}");
-    assert!(report["pushed_s3"]["key"].is_string(), "{report}");
-    assert!(report["failed"].is_null(), "{report}");
-    let files = git(Path::new(&remote), &["ls-tree", "--name-only", "HEAD"]);
-    assert!(files.contains(report["pushed"]["archive"].as_str().unwrap()));
-    assert_eq!(fake.keys().len(), 2);
-
-    // S3 en panne : le git reçoit, le rapport nomme l'échec, et la nuit le dit.
-    fake.set_mode(Mode::Forbidden);
-    let report = run(&s, true, Some(false)).await.unwrap();
-    assert!(report["pushed"]["commit"].is_string(), "{report}");
-    assert!(report["pushed_s3"].is_null(), "{report}");
-    let failed = report["failed"]["s3"].as_str().unwrap();
-    assert!(failed.contains("403"), "{report}");
-
-    let rec = penelope_app::testing::RecordingMessenger::new();
-    s.publish_config("test", |c| {
-        c.backup.cron = "0 3 * * *".into();
-        Ok(vec!["backup.cron".into()])
-    })
-    .unwrap();
-    s.kv_set(
-        "backup.cron.last",
-        &(s.clock.now_ms() - 86_400_000).to_string(),
-    )
-    .await
-    .unwrap();
-    nightly_tick(&s, Some(rec.clone())).await.unwrap();
-    let texts = rec.texts();
-    assert_eq!(texts.len(), 1, "{texts:?}");
-    assert!(
-        texts[0].starts_with(
-            "⚠️ Sauvegarde de cette nuit partielle : le dépôt git l'a reçue ; en échec, s3 : "
-        ),
-        "{texts:?}"
-    );
-    assert!(texts[0].contains("403"), "{texts:?}");
-
-    // Archive au-delà de la limite du dépôt : seul le git la refuse, S3 la prend.
-    fake.set_mode(Mode::Normal);
-    s.publish_config("test", |c| {
-        c.backup.max_push_bytes = 64;
-        Ok(vec!["backup.max_push_bytes".into()])
-    })
-    .unwrap();
-    let report = run(&s, true, Some(false)).await.unwrap();
-    assert!(report["pushed"].is_null(), "{report}");
-    assert!(report["pushed_s3"]["key"].is_string(), "{report}");
-    assert!(
-        report["failed"]["git"].as_str().unwrap().contains("limite"),
-        "{report}"
-    );
-
-    // Tout en échec : erreur, avec les deux causes.
-    fake.set_mode(Mode::NoBucket);
-    let err = run(&s, true, Some(false)).await.unwrap_err().to_string();
-    assert!(
-        err.contains("git : archive de") && err.contains("s3 : "),
-        "{err}"
-    );
-    assert!(err.contains("NoSuchBucket"), "{err}");
-    let events = s
-        .events
-        .range(0, 500)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|e| e.kind == "backup.done")
-        .count();
-    // Quatre sauvegardes faites (dont celle de la nuit) ; le double échec n'en est pas une.
-    assert_eq!(events, 4);
-}
-
 /// `doctor` : sans S3, un contrôle ; avec, `backup.s3` dit si le bucket répond avec ces
 /// clés, puis l'âge de la dernière sauvegarde S3.
 #[tokio::test]
@@ -430,7 +325,7 @@ async fn doctor_reports_the_bucket_and_the_last_s3_backup() {
         !c.ok && c.detail.contains("joignable") && c.detail.contains("aucune sauvegarde S3"),
         "{c:?}"
     );
-    assert_eq!(c.fix.as_deref(), Some("penelope backup --push"));
+    assert_eq!(c.fix.as_deref(), Some("penelope backup"));
     assert!(
         checks[0].detail.contains("aucune sauvegarde"),
         "{:?}",
@@ -448,7 +343,9 @@ async fn doctor_reports_the_bucket_and_the_last_s3_backup() {
         "{c:?}"
     );
     assert!(
-        checks[0].detail.contains("vers S3 `sauvegardes-penelope`"),
+        checks[0]
+            .detail
+            .contains("vers S3 `sauvegardes-penelope/sauvegardes/`"),
         "{:?}",
         checks[0]
     );
@@ -463,4 +360,24 @@ async fn doctor_reports_the_bucket_and_the_last_s3_backup() {
         !c.ok && c.detail.contains("backup.s3.secret_access_key"),
         "{c:?}"
     );
+}
+
+/// #328 : l'essai de mise en place écrit puis efface un objet dans le bucket, avec les
+/// clés tapées ; des droits refusés se voient à ce moment, pas la première nuit.
+#[tokio::test]
+async fn setup_tries_the_bucket_with_the_typed_keys() {
+    let fake = FakeS3::start("sauvegardes-penelope").await;
+    let (_dir, s) = services_with_s3(&fake).await;
+    let cfg = s.config.config().backup.s3.clone();
+    let t = provider::Target::S3(cfg);
+    let creds = || sigv4::Credentials {
+        access_key: fake.creds.access_key.clone(),
+        secret_key: fake.creds.secret_key.clone(),
+    };
+    let at = provider::probe(&t, Some(creds())).await.unwrap();
+    assert!(at.contains("sauvegardes-penelope"), "{at}");
+    assert!(fake.keys().is_empty(), "l'objet d'essai est effacé");
+    fake.set_mode(Mode::Forbidden);
+    let e = provider::probe(&t, Some(creds())).await.unwrap_err();
+    assert!(e.to_string().contains("403"), "{e}");
 }

@@ -1,6 +1,9 @@
-//! Restaurations, daemon arrêté : une base depuis une sauvegarde (`restore`), une instance
-//! entière depuis une sauvegarde chiffrée (`restore-all`, issue #42).
+//! `penelope restore` (#329), daemon arrêté : une instance entière depuis l'archive
+//! chiffrée du fournisseur (S3, dossier, iCloud Drive ou fichier), puis le service
+//! réinstallé, démarré, et `doctor`. `restore-all` en est l'alias ; un fichier `.db` donne
+//! l'ancienne restauration de la seule base.
 
+use super::console::{Console, Terminal};
 use super::*;
 
 /// Restauration hors ligne : refusée daemon en marche, base actuelle mise de côté.
@@ -43,15 +46,16 @@ pub(super) async fn restore_offline(cli: &Cli, file: &std::path::Path) -> CliRes
     Ok(())
 }
 
-/// Les arguments de `penelope restore-all`.
+/// Les arguments de `penelope restore`.
 #[derive(Debug, Clone, Default)]
-pub(super) struct RestoreAllArgs {
+pub(super) struct RestoreArgs {
     pub source: Option<String>,
     pub dry_run: bool,
     pub list: bool,
     pub archive: Option<String>,
     pub endpoint: Option<String>,
     pub region: Option<String>,
+    pub no_start: bool,
 }
 
 /// Variables d'environnement qui portent les clés S3 d'une restauration sur une machine
@@ -141,26 +145,26 @@ fn s3_credentials(
     })
 }
 
-/// La section `[backup.s3]` du config.toml local, ou ses défauts s'il n'existe pas encore.
-fn local_s3(dirs: &dyn penelope_platform::Directories) -> penelope_kernel::config::BackupS3 {
+/// Le config.toml local, ou les défauts s'il n'existe pas encore (machine neuve).
+fn local_config(dirs: &dyn penelope_platform::Directories) -> penelope_kernel::config::Config {
     std::fs::read_to_string(dirs.config_file())
         .ok()
         .and_then(|raw| penelope_kernel::config::Config::parse(&raw).ok())
-        .map(|(c, _)| c.backup.s3)
+        .map(|(c, _)| c)
         .unwrap_or_default()
 }
 
 /// Télécharge l'archive choisie depuis le bucket (ou les liste), et rend son chemin.
 async fn fetch_from_s3(
     dirs: &dyn penelope_platform::Directories,
-    args: &RestoreAllArgs,
+    args: &RestoreArgs,
     source: &str,
     work: &std::path::Path,
 ) -> CliResult<Option<PathBuf>> {
     use penelope_ops::backup::s3;
     let s3cfg = resolve_s3(
         source,
-        &local_s3(dirs),
+        &local_config(dirs).backup.s3,
         args.endpoint.as_deref(),
         args.region.as_deref(),
     )
@@ -227,59 +231,181 @@ async fn fetch_from_s3(
     Ok(Some(dest))
 }
 
-/// `penelope restore-all` : remonte une instance entière depuis une sauvegarde chiffrée
-/// (issue #42). Se fait daemon arrêté, sur une machine où il n'y a encore rien.
-pub(super) async fn restore_all(cli: &Cli, args: RestoreAllArgs) -> CliResult<()> {
-    let dry_run = args.dry_run;
+/// Où lire l'archive.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Source {
+    /// Une archive `.tar.gz.enc` locale.
+    File(PathBuf),
+    /// `s3`, ou `s3://bucket/prefixe`.
+    S3(String),
+    /// Un dossier de fournisseur (`dir`, ou iCloud Drive).
+    Dir(PathBuf),
+}
+
+/// La source désignée par l'argument, sinon par `backup.provider` de la configuration
+/// locale ; `None` : rien de configuré, la question se pose à l'invite.
+pub(super) fn source_of(
+    arg: Option<&str>,
+    local: &penelope_kernel::config::Backup,
+    dirs: &dyn penelope_platform::Directories,
+    home: Option<&std::path::Path>,
+) -> Result<Option<Source>, String> {
+    use penelope_ops::backup::provider::Target;
+    let from_target = |t: Target| match t {
+        Target::S3(_) => Source::S3("s3".into()),
+        Target::Dir { path, .. } => Source::Dir(path),
+    };
+    match arg {
+        None => match local.effective_provider() {
+            None => Ok(None),
+            Some(_) => Target::resolve(local, dirs, home)
+                .map(|t| Some(from_target(t)))
+                .map_err(|e| e.to_string()),
+        },
+        Some(s) if s == "s3" || s.starts_with("s3://") => Ok(Some(Source::S3(s.into()))),
+        Some(s) if s.ends_with(".enc") => Ok(Some(Source::File(PathBuf::from(s)))),
+        Some(s) if s == "icloud" || s == "dir" => {
+            let mut cfg = local.clone();
+            cfg.provider = s.into();
+            Target::resolve(&cfg, dirs, home)
+                .map(|t| Some(from_target(t)))
+                .map_err(|e| e.to_string())
+        }
+        Some(s) if std::path::Path::new(s).is_dir() => Ok(Some(Source::Dir(PathBuf::from(s)))),
+        Some(s) => Err(format!(
+            "`{s}` : une archive `.tar.gz.enc`, un dossier de sauvegardes, `s3`, \
+             `s3://bucket/prefixe` ou `icloud` est attendu. GitHub n'est plus une destination \
+             de sauvegarde (#327) : `git clone` l'ancien dépôt, puis donner l'archive voulue"
+        )),
+    }
+}
+
+/// Machine neuve, rien de configuré : le fournisseur se demande. Pour S3, l'adresse et
+/// le bucket complètent l'argument (`s3://bucket/prefixe`) et `--endpoint`.
+fn ask_source(io: &mut dyn Console, args: &mut RestoreArgs) -> CliResult<Source> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(CliError::Usage(
+            "aucune configuration sur cette machine : donner la source, `penelope restore \
+             s3://bucket/prefixe --endpoint https://s3.fr-par.scw.cloud`, `penelope restore \
+             icloud` ou `penelope restore /Volumes/NAS/penelope` (le kit de secours la donne)"
+                .into(),
+        ));
+    }
+    eprintln!(
+        "Aucune configuration sur cette machine : où est la sauvegarde ? (le kit de secours le dit)"
+    );
+    match io.ask("Fournisseur (s3, dir, icloud)", "s3")?.as_str() {
+        "s3" => {
+            let endpoint = io.ask(
+                "Adresse S3",
+                penelope_ops::backup::provider::SCALEWAY_ENDPOINT,
+            )?;
+            let region = io.ask("Région", penelope_ops::backup::provider::SCALEWAY_REGION)?;
+            let bucket = io.ask("Bucket", "")?;
+            let prefix = io.ask("Préfixe", "penelope/")?;
+            args.endpoint = Some(endpoint);
+            args.region = Some(region);
+            Ok(Source::S3(format!("s3://{bucket}/{prefix}")))
+        }
+        "icloud" => {
+            let home = penelope_platform::dirs::home_dir();
+            let drive = home
+                .map(|h| h.join(penelope_ops::backup::provider::ICLOUD_DRIVE))
+                .unwrap_or_default();
+            let sub = io.ask(
+                "Sous-dossier d'iCloud Drive",
+                penelope_ops::backup::provider::ICLOUD_DEFAULT_DIR,
+            )?;
+            Ok(Source::Dir(drive.join(sub)))
+        }
+        "dir" => Ok(Source::Dir(PathBuf::from(
+            io.ask("Dossier des sauvegardes", "")?,
+        ))),
+        other => Err(CliError::Usage(format!(
+            "fournisseur `{other}` inconnu : s3, dir ou icloud"
+        ))),
+    }
+}
+
+/// Dossier de téléchargement effacé en fin de commande, succès ou échec.
+struct Download(PathBuf);
+
+impl Drop for Download {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// `penelope restore` : remonte une instance entière depuis une sauvegarde chiffrée
+/// (#42, #329). Se fait daemon arrêté ; finit par le service démarré et `doctor`.
+pub(super) async fn restore(cli: &Cli, args: RestoreArgs) -> CliResult<()> {
+    restore_with(cli, args, &mut Terminal).await
+}
+
+/// [`restore`] sur une invite donnée : le terminal, ou un double scripté dans les tests.
+pub(super) async fn restore_with(
+    cli: &Cli,
+    mut args: RestoreArgs,
+    io: &mut dyn Console,
+) -> CliResult<()> {
+    if let Some(db) = args.source.as_deref().filter(|s| s.ends_with(".db")) {
+        return restore_offline(cli, std::path::Path::new(db)).await;
+    }
     let socket = socket_path(cli.home.clone())?;
-    if !dry_run && !args.list && call(&socket, m::STATUS, json!({})).await.is_ok() {
+    if !args.dry_run && !args.list && call(&socket, m::STATUS, json!({})).await.is_ok() {
         return Err(CliError::Usage(
             "le daemon tourne : `penelope stop` d'abord, puis relancer la restauration".into(),
         ));
     }
     let dirs = penelope_platform::resolve_directories(cli.home.clone())
         .map_err(|e| CliError::Io(e.to_string()))?;
-    let work = dirs.data().join("backups").join("restore");
-    let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(&work).map_err(|e| CliError::Io(e.to_string()))?;
-
-    // Source : une archive locale, un bucket S3, ou un dépôt à cloner.
-    let source = args.source.clone().ok_or_else(|| {
-        CliError::Usage(
-            "donner l'archive `.tar.gz.enc`, le dépôt privé des sauvegardes ou `s3` : \
-             `penelope restore-all git@github.com:moi/penelope-backups.git`, \
-             `penelope restore-all s3 --list`"
-                .into(),
-        )
-    })?;
-    let is_s3 = source == "s3" || source.starts_with("s3://");
-    if args.list && !is_s3 {
-        return Err(CliError::Usage(
-            "`--list` ne vaut que pour une source S3 (`penelope restore-all s3 --list`)".into(),
-        ));
-    }
-    let archive = if source.ends_with(".enc") {
-        PathBuf::from(&source)
-    } else if is_s3 {
-        match fetch_from_s3(dirs.as_ref(), &args, &source, &work).await? {
-            Some(p) => p,
-            None => return Ok(()),
+    dirs.ensure_all().map_err(|e| CliError::Io(e.to_string()))?;
+    let local = local_config(dirs.as_ref());
+    let home = penelope_platform::dirs::home_dir();
+    let source = match source_of(
+        args.source.as_deref(),
+        &local.backup,
+        dirs.as_ref(),
+        home.as_deref(),
+    )
+    .map_err(CliError::Usage)?
+    {
+        Some(s) => s,
+        None => ask_source(io, &mut args)?,
+    };
+    let download = Download(dirs.data().join("backups").join(format!(
+        "telechargement-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%S")
+    )));
+    let archive = match &source {
+        Source::File(p) if args.list => {
+            return Err(CliError::Usage(format!(
+                "`--list` vaut pour un fournisseur, pas pour l'archive {}",
+                p.display()
+            )));
         }
-    } else {
-        let repo = work.join("depot");
-        println!("Clonage de {source}…");
-        penelope_platform::process::git_sync_repo(&repo, &source)
-            .map_err(|e| CliError::Io(e.to_string()))?;
-        let mut found: Vec<PathBuf> = std::fs::read_dir(&repo)
-            .map_err(|e| CliError::Io(e.to_string()))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.to_string_lossy().ends_with(".tar.gz.enc"))
-            .collect();
-        found.sort();
-        found.pop().ok_or_else(|| {
-            CliError::Validation(format!("aucune sauvegarde chiffrée dans {source}"))
-        })?
+        Source::File(p) => p.clone(),
+        Source::S3(s) => {
+            std::fs::create_dir_all(&download.0).map_err(|e| CliError::Io(e.to_string()))?;
+            match fetch_from_s3(dirs.as_ref(), &args, s, &download.0).await? {
+                Some(p) => p,
+                None => return Ok(()),
+            }
+        }
+        Source::Dir(dir) if args.list => {
+            let all = penelope_ops::backup::provider::list_dir(dir);
+            if all.is_empty() {
+                println!("Aucune sauvegarde dans {}", dir.display());
+            }
+            for (name, size) in all {
+                println!("{:>6} Mo  {name}", size / (1024 * 1024));
+            }
+            return Ok(());
+        }
+        Source::Dir(dir) => {
+            penelope_ops::backup::provider::pick_in_dir(dir, args.archive.as_deref())
+                .map_err(|e| CliError::Validation(e.to_string()))?
+        }
     };
     if !archive.is_file() {
         return Err(CliError::Validation(format!(
@@ -288,129 +414,149 @@ pub(super) async fn restore_all(cli: &Cli, args: RestoreAllArgs) -> CliResult<()
         )));
     }
 
-    // Phrase de passe : demandée à l'invite, jamais en argument.
-    eprint!("Phrase de passe de la sauvegarde : ");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
-    let mut pass = String::new();
-    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut pass)
-        .map_err(|e| CliError::Io(e.to_string()))?;
-    let pass = pass.trim().to_string();
-
-    let tar = work.join("sauvegarde.tar.gz");
-    penelope_platform::archive::open(&archive, &tar, &pass)
-        .map_err(|e| CliError::Validation(e.to_string()))?;
-    penelope_platform::process::extract_tar_gz(&tar, &work)
-        .map_err(|e| CliError::Io(e.to_string()))?;
-    let root = work.join("penelope");
-    let manifest: Value = std::fs::read_to_string(root.join("MANIFEST.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or(Value::Null);
-
-    // Ce qui serait écrit, dans l'ordre.
-    let mut plan: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if root.join("penelope.db").is_file() {
-        plan.push((root.join("penelope.db"), dirs.db_path()));
-    }
-    for (name, dst) in [
-        ("vault", dirs.data().join("vault")),
-        ("skills", dirs.data().join("skills")),
-        ("workflows", dirs.data().join("workflows")),
-        ("templates", dirs.data().join("templates")),
-        ("mcp.d", dirs.data().join("mcp.d")),
-        ("artifacts", dirs.data().join("artifacts")),
-        ("media", dirs.data().join("media")),
-        ("config.toml", dirs.config_file()),
-    ] {
-        let src = root.join(name);
-        if src.exists() {
-            plan.push((src, dst));
+    // Phrase de passe : à l'invite, masquée, jamais en argument (#328).
+    let pass = io.secret("Phrase de passe de la sauvegarde (rien ne s'affiche) : ")?;
+    let store = match io.store(dirs.as_ref()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("⚠️ magasin de secrets indisponible ({e}) : les secrets seront à ressaisir.");
+            None
         }
-    }
-
-    println!(
-        "Sauvegarde du {} (version {}) :",
-        manifest["created_at"].as_str().unwrap_or("?"),
-        manifest["version"].as_str().unwrap_or("?")
-    );
-    for (src, dst) in &plan {
-        println!(
-            "  {} → {}",
-            src.file_name().unwrap_or_default().to_string_lossy(),
-            dst.display()
-        );
-    }
-    if dry_run {
+    };
+    println!("Restauration de {}…", archive.display());
+    let report = penelope_ops::backup::restore::restore_archive(
+        dirs.as_ref(),
+        &archive,
+        &pass,
+        store.as_deref(),
+        args.dry_run,
+        &|c| penelope_platform::process::which(c).is_some(),
+    )
+    .map_err(|e| CliError::Validation(e.to_string()))?;
+    drop(download);
+    print_report(&report);
+    if args.dry_run {
         println!("\n(--dry-run : rien n'a été écrit)");
         return Ok(());
     }
-
-    for (src, dst) in &plan {
-        if dst.exists() {
-            let aside = dst.with_extension(format!(
-                "avant-restauration-{}",
-                chrono::Utc::now().format("%Y%m%dT%H%M%S")
-            ));
-            let _ = std::fs::rename(dst, &aside);
-            println!("Existant mis de côté : {}", aside.display());
-        }
-        if let Some(p) = dst.parent() {
-            std::fs::create_dir_all(p).map_err(|e| CliError::Io(e.to_string()))?;
-        }
-        copy_tree(src, dst).map_err(|e| CliError::Io(e.to_string()))?;
-    }
-    // Journal WAL d'une base copiée : retiré, la base restaurée est cohérente.
-    for suffix in ["-wal", "-shm"] {
-        let _ = std::fs::remove_file(PathBuf::from(format!(
-            "{}{suffix}",
-            dirs.db_path().display()
-        )));
-    }
-
-    let secrets: Vec<String> = manifest["secrets_expected"]
+    let mut todo: Vec<String> = report["todo"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    println!("\n✅ Fichiers restaurés. Il reste à faire, dans cet ordre :");
-    println!("  1. `penelope install` puis `penelope start` (service).");
-    if !secrets.is_empty() {
-        println!("  2. Ressaisir les secrets, qui ne sont jamais sauvegardés :");
-        for name in &secrets {
-            println!("       penelope secret set {name}");
-        }
-    }
-    println!("  3. `penelope doctor` : serveurs MCP à réautoriser, modèle de transcription à");
-    println!("     télécharger, phrase de passe de sauvegarde à reposer.");
-    if manifest["derived_excluded"]
-        .as_array()
-        .is_some_and(|a| !a.is_empty())
-    {
-        println!(
-            "Les index de recherche (plein texte, vecteurs) ne sont pas dans l'archive : le \
-             daemon les reconstruit à son premier passage de maintenance, dans la minute qui \
-             suit `penelope start` ; les vecteurs reviennent ensuite par le rattrapage \
-             d'embeddings."
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    if args.no_start {
+        todo.insert(
+            0,
+            "`penelope install` puis `penelope start` (service)".into(),
         );
+    } else {
+        todo.splice(0..0, start_everything(cli, dirs.as_ref(), &report).await);
     }
+    if todo.is_empty() {
+        println!("\n✅ Tout est en place : Pénélope repart comme hier.");
+    } else {
+        println!("\n✅ Restauré. Il reste à faire :");
+        for t in &todo {
+            println!("  - {t}");
+        }
+    }
+    println!(
+        "Les index de recherche reviennent seuls : le daemon les reconstruit à son premier \
+         passage de maintenance, puis le rattrapage d'embeddings recalcule les vecteurs."
+    );
     Ok(())
 }
 
-/// Copie récursive, fichier ou répertoire.
-fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    if src.is_file() {
-        if let Some(p) = dst.parent() {
-            std::fs::create_dir_all(p)?;
+/// Ce qui a été remis en place.
+fn print_report(report: &Value) {
+    println!(
+        "Sauvegarde du {} (version {}) :",
+        report["created_at"].as_str().unwrap_or("?"),
+        report["version"].as_str().unwrap_or("?")
+    );
+    for p in report["plan"].as_array().into_iter().flatten() {
+        println!(
+            "  {} → {}",
+            p["name"].as_str().unwrap_or_default(),
+            p["to"].as_str().unwrap_or_default()
+        );
+    }
+    for a in report["set_aside"].as_array().into_iter().flatten() {
+        println!(
+            "  existant mis de côté : {}",
+            a.as_str().unwrap_or_default()
+        );
+    }
+    let restored = report["secrets_restored"].as_array().map(|a| a.len());
+    let known = report["secrets_in_archive"].as_array().map(|a| a.len());
+    match (restored, known) {
+        (Some(n), _) => println!("  secrets rangés dans le magasin : {n}"),
+        (None, Some(n)) if n > 0 => println!("  secrets dans l'archive : {n}"),
+        _ => {}
+    }
+}
+
+/// Réinstalle le service du daemon et les serveurs d'inférence de la sauvegarde, attend
+/// que le daemon réponde, puis lance `doctor`. Renvoie ce qui n'a pas pu se faire.
+async fn start_everything(
+    cli: &Cli,
+    dirs: &dyn penelope_platform::Directories,
+    report: &Value,
+) -> Vec<String> {
+    let mut todo = Vec::new();
+    for svc in report["services"].as_array().into_iter().flatten() {
+        let label = svc["label"].as_str().unwrap_or_default();
+        let args: Vec<String> = svc["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a.as_str().map(String::from))
+            .collect();
+        let Some(program) = args.first().map(PathBuf::from).filter(|p| p.is_file()) else {
+            todo.push(format!(
+                "serveur d'inférence `{label}` : programme absent ({}), `penelope local \
+                 install` une fois `mlx-lm` installé",
+                args.first().map(String::as_str).unwrap_or("?")
+            ));
+            continue;
+        };
+        let installed = penelope_platform::backend::agent_manager(dirs, label, args.clone())
+            .and_then(|m| m.install(&program, None));
+        if let Err(e) = installed {
+            todo.push(format!("serveur d'inférence `{label}` : {e}"));
         }
-        std::fs::copy(src, dst)?;
-        return Ok(());
     }
-    std::fs::create_dir_all(dst)?;
-    for e in std::fs::read_dir(src)?.flatten() {
-        copy_tree(&e.path(), &dst.join(e.file_name()))?;
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            todo.push(format!("`penelope install` puis `penelope start` ({e})"));
+            return todo;
+        }
+    };
+    let installed = penelope_platform::backend::service_manager(dirs)
+        .and_then(|m| m.install(&exe, cli.home.as_deref()).map(|_| m));
+    let mgr = match installed {
+        Ok(m) => m,
+        Err(e) => {
+            todo.push(format!("`penelope install` puis `penelope start` ({e})"));
+            return todo;
+        }
+    };
+    let _ = mgr.start();
+    println!("\nService installé ; démarrage du daemon…");
+    let socket = dirs.socket_path();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while call(&socket, m::STATUS, json!({})).await.is_err() {
+        if std::time::Instant::now() > deadline {
+            todo.push("le daemon ne répond pas après 30 s : `penelope logs`".into());
+            return todo;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    Ok(())
+    println!();
+    if let Err(e) = doctor(cli).await {
+        todo.push(format!("`penelope doctor` : {e}"));
+    }
+    todo
 }
