@@ -266,6 +266,7 @@ Workflows (4)
 | `/runs`, `/resume` | état et étape de chaque run, ⏸ ▶️ ⏹ (confirmé), 🔎 détail ; `/resume` ne montre que les runs en pause ou bloqués |
 | `/schedules` | ⚡ déclencher, ⏸/▶️, 📍 livrer dans cette conversation, 🗑 (confirmé) ; où livre chaque planification, sa dernière erreur et ses échecs de suite ; 🔔 : `urgent`, part même pendant les heures calmes ; `/schedules ici <id>` dans un sujet l'y déplace ; une exécution en échec arrive en alerte avec « Relancer maintenant » au premier échec, quand la raison change et aux paliers (5, 20, 100), puis « rétablie » au retour |
 | `/mcp` | par serveur : détail, 🔄 redémarrer, 🧪 tester ; le détail ajoute 📜 journal, ⏻ activer ou désactiver, 🔐 autoriser |
+| `/model` | profil actif et principal ; ● l'actif (dupliquer, renommer, garde Codex confirmée, supprimer confirmé), ○ un autre (bascule confirmée), « + Nouveau profil » ; familles 💬 Conversation, ⚙️ Travail de fond, 🎨 Médias, 🏠 Local / voix, chaque rôle avec son modèle effectif et sa raison (✓ suit le principal, ✎ surcharge, ⚡ capacité, 🏠 local, ⛔ garde Codex), un appui : « suivre le principal » ou « choisir un modèle » (fournisseur, puis modèle avec prix et fenêtre, 🔎 chercher) ; 🔁 modèle principal, 📋 tout voir, ⚠️ écarts des 24 h ; 📌 cette session (épinglage) ; `/model profil <nom>`, `/model profil nouveau <nom>`, `/model <cible> <modèle>` (#334) |
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
 | `/projet` | sujet de travail de la session : un bouton par projet connu du vault (fiches `projets/` comprises), et « Aucun » ; la mémoire d'office s'y limite ; dans un sujet Telegram, le projet est celui du sujet, le changer ne vaut que pour la session |
 | `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
@@ -517,6 +518,14 @@ démarre, et s'arrête avec lui. L'action suit ce qui se passe : « envoie un fi
 `image_generate`, « écrit… » sinon. Ces appels sont jetables, hors de la file d'envoi
 durable, et leur échec ne touche jamais le tour. En conversation privée, le brouillon
 porte en plus une ligne d'état sur l'outil en cours (« ⚙️ shell_exec · cargo test »).
+
+**Écarts de modèle** (1.0.47, #333). Un appel servi par un autre modèle que celui du
+profil est dit **une fois**, au moment où il arrive, dans la conversation qu'il concerne
+(celle du tour, du run ; le foyer pour le travail de fond) : « ⚠️ repli sur
+`deepseek-v4.1-flash` : `gpt-5.6-sol` en échec après 5 tentatives (…) », « ⚠️ `rêve` part
+sur `deepseek-v4.1-flash` : garde Codex (travail de fond) ». Le retour est dit aussi :
+« ✅ retour sur `gpt-5.6-sol` ». Le cœur verse l'annonce au journal (`model.notice`), le
+canal l'écrit ; `/model` → « ⚠️ Écarts en cours » liste ceux des dernières 24 h.
 
 **Trace des outils** (1.0.14, #222). Une bulle par tour, posée au premier appel d'outil
 et modifiée en place, reste dans la conversation quand le tour est fini :

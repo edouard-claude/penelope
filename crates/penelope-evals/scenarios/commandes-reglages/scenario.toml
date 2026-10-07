@@ -1,6 +1,7 @@
 name = "commandes-reglages"
 description = """Réglages de la session du propriétaire par Telegram, après un échange facturé :
-`/model` propose les alias en boutons et un clic épingle l'un d'eux, `/models deepseek`
+`/model` ouvre l'écran des profils (#334), `/model session` propose les alias en boutons
+et un clic épingle l'un d'eux, `/models deepseek`
 filtre le catalogue, `/mode auto` change ce qui part sans demande, `/projet` pose le
 sujet de travail, `/home` fait de ce chat le foyer des avis, `/quiet` règle les heures
 silencieuses ; `/mode` relit le mode posé. Le message suivant part sur le modèle épinglé
@@ -17,6 +18,10 @@ text = "bonjour"
 [[steps]]
 kind = "telegram"
 text = "/model"
+
+[[steps]]
+kind = "telegram"
+text = "/model session"
 
 [[steps]]
 kind = "telegram"

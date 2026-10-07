@@ -1,0 +1,57 @@
+name = "rpc-profils-de-modeles"
+description = """Profils de modèles par la socket locale (#332, #333, #334) : le profil `defaut`
+déduit des clés d'avant, rôle par rôle ; un profil Codex refusé tant que la garde du
+travail de fond n'est pas choisie, puis créé garde levée et activé, où tout suit le
+principal sauf les capacités et la voix ; une surcharge posée puis retirée ; le retour au
+profil d'avant, intact. Le monde après : les générations montées à chaque écriture, le
+profil d'avant actif."""
+pin_model = "main"
+
+[[steps]]
+kind = "rpc"
+method = "model.list"
+pick = ["/profile", "/profiles/*/name", "/profiles/*/derived", "/codex_background", "/roles/*/role", "/roles/*/model", "/roles/*/reason"]
+
+[[steps]]
+kind = "rpc"
+method = "model.profile"
+params = { action = "new", name = "Codex (crédits)", primary = "codex:gpt-5.6-sol" }
+error = true
+
+[[steps]]
+kind = "rpc"
+method = "model.profile"
+params = { action = "new", name = "Codex (crédits)", primary = "codex:gpt-5.6-sol", codex_background = "allow", use = true }
+pick = ["/profile", "/profiles/*/name", "/profiles/*/primary", "/profiles/*/codex_background"]
+
+[[steps]]
+kind = "rpc"
+method = "model.list"
+pick = ["/profile", "/codex_background", "/roles/*/role", "/roles/*/model", "/roles/*/reason"]
+
+[[steps]]
+kind = "rpc"
+method = "model.set"
+params = { target = "classifier", model = "fast" }
+pick = ["/profile", "/target", "/model"]
+
+[[steps]]
+kind = "rpc"
+method = "model.unset"
+params = { target = "classifier" }
+
+[[steps]]
+kind = "rpc"
+method = "model.profile"
+params = { action = "use", name = "defaut" }
+pick = ["/profile"]
+
+[[steps]]
+kind = "rpc"
+method = "model.list"
+pick = ["/profile", "/roles/*/role", "/roles/*/model", "/roles/*/reason"]
+
+[[steps]]
+kind = "rpc"
+method = "config.status"
+pick = ["/generation"]

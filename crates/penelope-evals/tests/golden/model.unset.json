@@ -1,0 +1,14 @@
+{
+  "method": "model.unset",
+  "params": {
+    "target": "classifier"
+  },
+  "response": {
+    "result": {
+      "generation": "integer",
+      "profile": "string",
+      "target": "string",
+      "model": "string"
+    }
+  }
+}

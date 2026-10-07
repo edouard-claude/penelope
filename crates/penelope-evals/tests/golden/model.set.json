@@ -7,6 +7,8 @@
   "response": {
     "result": {
       "generation": "integer",
+      "profile": "string",
+      "target": "string",
       "alias": "string",
       "model": "string",
       "known": "bool"

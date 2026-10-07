@@ -228,8 +228,8 @@ routage déjà choisis), pas les gardes des outils.
 | Clés acceptées par `config_set` | Effet | Garantie |
 |---|---|---|
 | `sandbox.workspaces`, `sandbox.default_profile`, `sandbox.shell_network`, `sandbox.deny_read` | appel suivant | Les chemins, le profil, le réseau et les lectures interdites sont recalculés avant chaque outil. |
-| `tools.*`, `models.aliases.*`, `models.roles.*` hors `chat_default`, `budget.*`, autres clés lues par leur sous-système | appel suivant | La génération publiée est lue au prochain appel concerné ; un appel déjà parti n'est pas interrompu. |
-| `owner.language`, `models.roles.chat_default`, `models.routing.*` | tour suivant | Le résultat dit `au prochain tour` et précise que les outils du tour gardent l'ancienne valeur. |
+| `tools.*`, `models.aliases.*`, `models.profiles.*` (hors principal), `voice.*`, `budget.*`, autres clés lues par leur sous-système | appel suivant | La génération publiée est lue au prochain appel concerné ; un appel déjà parti n'est pas interrompu. |
+| `owner.language`, `models.profile`, le principal d'un profil, `models.routing.*` | tour suivant | Le résultat dit `au prochain tour` et précise que les outils du tour gardent l'ancienne valeur. |
 | `store.path`, `rpc.socket`, `telegram.token` | redémarrage | Seuls chemins autorisés à demander un redémarrage ; les secrets et l'identité restent refusés par `config_set`. |
 
 `config_set` rend ce moment dans `applied`. Pour `sandbox.workspaces`, le nouvel espace est
@@ -369,34 +369,43 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `models.aliases.embedding` | `"openrouter:openai/text-embedding-3-small"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.fast` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.image` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.main` | `"openrouter:deepseek/deepseek-v4-pro"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.reasoning` | `"openrouter:z-ai/glm-5.2"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.stt` | `"openai_compat:whisper-default"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.tts` | `"openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2). |
-| `models.roles.approval_judge` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.chat_default` | `"main"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.classifier` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.code` | `"reasoning"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.compaction` | `"summarizer"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.embedding` | `"embedding"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.image_describe` | `"vision"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.image_generate` | `"image"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.image_locate` | `"vision"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.memory_review` | `"fast"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.stt` | `"stt"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.roles.tts` | `"tts"` | Rôle vers alias : conversation, classification, compaction, relecture de mémoire, code, images, embeddings, transcription. |
-| `models.routing.classifier` | `true` | Classer la complexité d'un message pour choisir l'alias. |
-| `models.routing.low` | `"fast"` | Alias d'un message simple. |
-| `models.routing.medium` | `"main"` | Alias d'un message moyen. |
-| `models.routing.high` | `"reasoning"` | Alias d'un message complexe. |
-| `models.routing.sticky` | `true` | Garder l'alias choisi pour la session (sauf l'alias `low`). |
-| `models.routing.fallback.main` | `["fast"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
-| `models.routing.fallback.reasoning` | `["main"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas. |
+| `models.aliases.embedding` | `"openrouter:openai/text-embedding-3-small"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.fast` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.image` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.main` | `"openrouter:deepseek/deepseek-v4-pro"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.reasoning` | `"openrouter:z-ai/glm-5.2"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.stt` | `"openai_compat:whisper-default"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.summarizer` | `"openrouter:deepseek/deepseek-v4-flash"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.tts` | `"openai_compat:mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.aliases.vision` | `"openrouter:google/gemini-3.1-flash-image"` | Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts, que les profils peuvent citer à la place d'un identifiant. |
+| `models.profile` | `"defaut"` | Profil actif (#332) : `defaut` tant que le propriétaire n'en a pas choisi d'autre. |
+| `models.profiles.<nom>.primary` | – | Modèle principal : un alias (`main`) ou un identifiant `fournisseur:modèle`. |
+| `models.profiles.<nom>.codex_background` | – | Garde Codex du travail de fond (#333) : `deny` (il passe ailleurs, en le disant) ou `allow` (tout passe par l'abonnement). |
+| `models.profiles.<nom>.overrides.<nom>` | – | Rôle vers modèle : les exceptions explicites au principal. |
+| `models.profiles.<nom>.capabilities.<nom>` | – | Capacité (`image_generate`, `vision`, `embedding`) vers modèle, pour ce que le principal ne sait pas faire. |
+| `models.profiles.<nom>.routing.low` | – | Message simple. |
+| `models.profiles.<nom>.routing.medium` | – | Message ordinaire. |
+| `models.profiles.<nom>.routing.high` | – | Message complexe. |
+| `models.profiles.<nom>.fallback.<nom>` | – | Chaînes de repli sur panne, par modèle ou alias de départ. |
+| `models.roles.approval_judge` | `"fast"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.chat_default` | `"main"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.classifier` | `"fast"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.code` | `"reasoning"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.compaction` | `"summarizer"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.embedding` | `"embedding"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.image_describe` | `"vision"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.image_generate` | `"image"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.image_locate` | `"vision"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.memory_review` | `"fast"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.stt` | `"stt"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.roles.tts` | `"tts"` | Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut` tant qu'il n'est pas écrit, ignorées ensuite. |
+| `models.routing.classifier` | `true` | Classer la complexité d'un message pour choisir l'étage du profil actif ; sans étage autre que le principal, aucun appel au classifieur. |
+| `models.routing.low` | `"fast"` | Alias d'un message simple (clé d'avant les profils, lue pour `defaut`). |
+| `models.routing.medium` | `"main"` | Alias d'un message moyen (clé d'avant les profils, lue pour `defaut`). |
+| `models.routing.high` | `"reasoning"` | Alias d'un message complexe (clé d'avant les profils, lue pour `defaut`). |
+| `models.routing.sticky` | `true` | Garder l'alias choisi pour la session (sauf l'étage `low`). |
+| `models.routing.fallback.main` | `["fast"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas (clé d'avant les profils, lue pour `defaut`). |
+| `models.routing.fallback.reasoning` | `["main"]` | Alias de repli, dans l'ordre, quand un modèle ne répond pas (clé d'avant les profils, lue pour `defaut`). |
 | `models.locate_frame` | `"auto"` | Repère des coordonnées que rend le modèle du rôle `image_locate` : `auto` (déduit de la famille du modèle et des valeurs rendues), `pixels` (pixels de l'image) ou `per_mille` (0 à 1000 sur chaque axe, comme UI-TARS et Qwen3-VL). `image_inspect` ramène toujours les points en pixels de l'image, et refuse ceux qui ne tiennent pas dans le repère. |
 
 **[budget]**
@@ -594,6 +603,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 
 | Clé | Défaut | Rôle |
 |---|---|---|
+| `voice.stt` | `""` | Modèle de transcription (alias ou `fournisseur:modèle`, #332) ; vide : l'ancien rôle `stt`, sinon l'alias `stt`. Jamais le modèle principal. |
+| `voice.tts` | `""` | Modèle de synthèse vocale ; vide : l'ancien rôle `tts`, sinon l'alias `tts`, sinon Voxtral en local. |
+| `voice.narrator` | `""` | Modèle de la narration de la trace ; vide : l'ancien rôle `trace`, sinon le premier alias `local:` de texte. |
 | `voice.tts_voice` | `"fr_female"` | Voix préréglée du modèle de synthèse (rôle `tts`). |
 | `voice.max_chars` | `1500` | Longueur maximale d'un texte lu en vocal, en caractères : au-delà, un résumé vocal. |
 | `voice.reply_in_kind` | `false` | Répondre en vocal quand le propriétaire vient d'envoyer un vocal. |
@@ -652,6 +664,91 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 <!-- reference:config:fin -->
 
 ## 6. Modèles
+
+### Profils : ce que tu choisis est ce qui tourne (1.0.47)
+
+Un **profil** dit d'un geste quel modèle sert tout : un modèle **principal**, des
+**surcharges** par rôle quand on en veut, des modèles de **capacité** pour ce que le
+principal ne sait pas faire (générer une image, lire une image, calculer des embeddings).
+La **voix** vit à part, dans `[voice]`, et ne suit jamais le principal. Décision
+[0021](decisions/0021-profils-de-modeles.md).
+
+Une seule résolution, pour **toute** requête (tour du propriétaire, workflow, rêve,
+compaction, titre, juge, classifieur, mémoire, embeddings, vision, images, voix,
+narration) :
+
+```
+ rôle ─► surcharge du profil actif ? ─────────────────────────► ✎ surcharge
+      └► rôle de voix (stt, tts, trace) ? ─► [voice] ──────────► 🏠 local
+      └► rôle de capacité (image_generate, image_*, embedding) ?
+           ├► capacité posée dans le profil ───────────────────► ⚡ capacité
+           ├► le catalogue dit que le principal sait faire ─────► ✓ principal
+           └► modèle livré de la capacité ──────────────────────► ⚡ capacité
+      └► sinon ────────────────────────────────────────────────► ✓ principal
+```
+
+```toml
+[models]
+profile = "Codex (crédits)"
+
+[models.profiles."Codex (crédits)"]
+primary = "codex:gpt-5.6-sol"     # un alias ou un identifiant
+codex_background = "allow"        # garde Codex levée : tout passe par l'abonnement
+
+[models.profiles."Codex (crédits)".capabilities]
+image_generate = "image"
+vision = "vision"
+embedding = "embedding"
+
+[models.profiles."Codex (crédits)".overrides]
+# classifier = "fast"             # une exception, si on en veut une
+
+[voice]
+stt = "stt"                       # vide : l'ancien rôle `stt`, sinon l'alias `stt`
+tts = ""                          # vide : Voxtral en local
+narrator = ""                     # vide : le premier alias `local:` de texte
+```
+
+Le classifieur ne choisit plus un autre modèle que le principal : un profil ne l'appelle
+que si ses étages (`routing.low`, `medium`, `high`) en nomment un autre. Les replis sur
+panne sont ceux du profil (`fallback`).
+
+**Migration.** Une configuration d'avant 1.0.47 n'a pas de profil écrit : `defaut` est
+**déduit** à chaque lecture de `models.roles` et `models.routing`, rôle par rôle comme le
+faisait le code, replis propres à chaque rôle compris (titre et juge sur `fast`, rêve sur
+le rôle `compaction`, pointage sur la vision), garde Codex `deny`. Rien ne change avant
+la première modification d'un profil, qui écrit `[models.profiles.defaut]` en entier.
+`penelope doctor` (`models.profiles`) le dit, et nomme les alias que plus rien ne lit.
+
+**Commandes.**
+
+```bash
+penelope model list                                  # profil, rôle → modèle → raison, écarts
+penelope model profile new "Codex (crédits)" --primary codex:gpt-5.6-sol \
+  --codex-background allow --use                     # tout sur Codex, la voix reste locale
+penelope model profile use defaut                    # revenir, sans redémarrage
+penelope model set classifier fast                   # une surcharge dans le profil actif
+penelope model unset classifier                      # le rôle revient au principal
+penelope model set vision openrouter:google/gemini-3.1-flash-image
+penelope model profile guard defaut deny             # rétablir la garde Codex
+penelope model profile copy essai ; penelope model profile rename essai → autre
+```
+
+`model set` vise `primary`, un rôle (`classifier`, `dream`…), une capacité
+(`image_generate`, `vision`, `embedding`), une voix (`stt`, `tts`, `trace`), un étage
+(`routing.high`) ou, comme avant, un alias (`main`). Toutes ont une sortie `--json`.
+Sur Telegram, `/model` ouvre l'écran des profils et des familles ([telegram.md](telegram.md)).
+
+**Écarts annoncés.** Un appel servi par un autre modèle que celui du profil est dit une
+fois dans la conversation concernée, au moment où il arrive, puis tu tant qu'il dure : « ⚠️
+repli sur `deepseek-v4.1-flash` : `gpt-5.6-sol` en échec après 5 tentatives (…) », « ⚠️
+`ce workflow` part sur `deepseek-v4.1-flash` : garde Codex (tâche planifiée) », puis « ✅
+retour sur `gpt-5.6-sol` ». Un modèle **épinglé** sur une session (`/model`, « Cette
+session ») n'a pas de repli : il échoue en le disant. Un principal dont le fournisseur
+manque (compte Codex déconnecté) cède au premier repli joignable, annoncé, au lieu de
+faire échouer le tour.
+
+### Alias et rôles d'avant les profils
 
 Pénélope ne connaît jamais un modèle par son nom brut, seulement par **alias**. Trois
 étages, du plus concret au plus abstrait :
@@ -783,8 +880,9 @@ modèles réels compris.
 
 ### Choisir le modèle d'une session
 
-Sur Telegram, `/model` répond par l'état de la session (épinglée, ou automatique avec le
-modèle du dernier message) et un bouton par modèle de conversation, plus « Automatique ».
+Sur Telegram, `/model session` (ou « 📌 Cette session » sous `/model`) répond par l'état
+de la session (épinglée, ou automatique avec le modèle du dernier message) et un bouton
+par modèle de conversation, plus « Automatique ».
 Un clic épingle l'alias sur la session : tous ses messages l'utilisent, sans classifieur,
 jusqu'au retour à « Automatique ». Les autres sessions ne sont pas touchées. En texte,
 `/model reasoning` épingle et `/model auto` rend la main au routeur ; `/model main
@@ -863,18 +961,24 @@ reconnecter).
 penelope model set code codex:gpt-6-astra
 ```
 
-**Pour quels tours.** L'abonnement ne sert que ce que le propriétaire ouvre lui-même : un
-message Telegram ou CLI, et les sous-agents de ce tour. Tout ce qui tourne sans lui —
-planification à cible `prompt`, rêve nocturne, veille, résumeur de compaction, relecture
-d'épisode, consolidation, classifieur, embeddings, transcription, synthèse vocale, titre
-automatique, run de workflow — repasse par le modèle OpenRouter de l'alias, sans carte ni
-message, en laissant l'événement `llm.codex_scope_fallback`. C'est la contrepartie de la
-tolérance d'OpenAI : un compte, un humain, un usage interactif.
+**Pour quels tours : la garde Codex** (#333). C'est un réglage du profil,
+`codex_background`. Avec `deny` (la valeur de toute configuration migrée), l'abonnement ne
+sert que ce que le propriétaire ouvre lui-même : un message Telegram ou CLI, les
+sous-agents de ce tour, et un run de workflow qu'il lance (gate « vas-y », `/run`, CLI).
+Tout ce qui tourne sans lui (planification à cible `prompt`, run de workflow planifié,
+rêve nocturne, veille, résumeur de compaction, relecture d'épisode, consolidation,
+classifieur, embeddings, transcription, synthèse vocale, titre automatique, juge) passe par
+le repli du profil, **en le disant** une fois dans la conversation, et laisse l'événement
+`llm.codex_scope_fallback`. Avec `allow`, tout passe par l'abonnement.
 
-Conséquence pratique : `penelope model set <alias> codex:<modèle>` **refuse** les alias qui
-servent un rôle de fond (`classifier`, `compaction`, `memory_review`, `embedding`, `stt`,
-`tts`) en disant pourquoi, et `penelope doctor` signale une configuration déjà en place qui
-l'aurait contournée. Un seul compte à la fois : se connecter à un autre demande d'abord
+Le risque, dit une fois : OpenAI tolère l'usage interactif d'un abonnement ChatGPT ; un
+usage automatisé (rêve, veilles, workflows planifiés) expose le compte à une suspension.
+Le choix est donc explicite à la création d'un profil Codex (`--codex-background`).
+
+Conséquence pratique : sous la garde, `penelope model set <cible> codex:<modèle>`
+**refuse** les cibles qui servent un rôle de fond, en disant pourquoi ; la voix ne passe
+jamais par l'abonnement ; `penelope doctor` signale une configuration déjà en place qui
+l'aurait contournée, et rappelle le risque quand la garde est levée. Un seul compte à la fois : se connecter à un autre demande d'abord
 `penelope model auth codex --logout`.
 
 **Ce que ça coûte.** Rien à l'appel : les lignes d'usage portent `provider = codex`,

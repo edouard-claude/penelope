@@ -24,34 +24,49 @@ impl TelegramGateway {
             let parts: Vec<&str> = args.split_whitespace().collect();
             let session = d.chat_session_for(&origin).await?;
             match parts.as_slice() {
-                // Sans argument : l'état de la session et un bouton par modèle.
+                // Sans argument : profils, familles, tout voir, écarts (#334).
                 [] => {
+                    return self
+                        .show_screen(chat_id, topic_id, reply_to, "model.home", &json!({}), None)
+                        .await;
+                }
+                // L'épinglage de cette session, comme avant les profils.
+                ["session"] => {
                     return self
                         .send_model_menu(chat_id, topic_id, reply_to, &session)
                         .await;
                 }
-                ["auto", switch] => {
-                    let on = match *switch {
-                        "on" | "oui" => Some(true),
-                        "off" | "non" => Some(false),
-                        _ => None,
-                    };
-                    match on {
-                        None => "Usage : `/model auto on` ou `/model auto off`".into(),
-                        Some(on) => {
-                            rpc.call(
-                                m::CONFIG_SET,
-                                json!({"path": "models.routing.classifier", "value": on}),
-                            )
-                            .await?;
-                            if on {
-                                "🔀 Routage adaptatif activé : le classifieur choisit l'alias à chaque message.".into()
-                            } else {
-                                "📌 Routage fixe : les sessions non épinglées passent par `main`."
-                                    .into()
-                            }
-                        }
+                ["profil" | "profile", rest @ ..] => self.model_profile_command(&rpc, rest).await,
+                ["auto", switch] if matches!(*switch, "on" | "oui" | "off" | "non") => {
+                    let on = matches!(*switch, "on" | "oui");
+                    rpc.call(
+                        m::CONFIG_SET,
+                        json!({"path": "models.routing.classifier", "value": on}),
+                    )
+                    .await?;
+                    if on {
+                        "🔀 Routage adaptatif activé : le classifieur choisit selon les étages du profil.".into()
+                    } else {
+                        "📌 Routage fixe : les sessions non épinglées passent par le principal."
+                            .into()
                     }
+                }
+                ["auto", ..] => {
+                    return self
+                        .send_screen(
+                            chat_id,
+                            topic_id,
+                            reply_to,
+                            screens::Screen {
+                                text: "🔀 Routage adaptatif : le classifieur choisit l'étage à chaque message.".into(),
+                                rows: vec![vec![
+                                    self.command_button_with("🔀 Activer", "model", "auto on").await?,
+                                    self.command_button_with("📌 Tout sur le principal", "model", "auto off").await?,
+                                ]],
+                            },
+                            None,
+                        )
+                        .await;
                 }
                 // Connexion d'un fournisseur à compte (#142) : le code s'affiche
                 // ici, et Pénélope confirme dès qu'il est saisi. Ni le code ni les
@@ -122,15 +137,17 @@ impl TelegramGateway {
                     Ok(v) => model_pin_notice(&v),
                     Err(e) => format!("❌ {e}"),
                 },
-                // Un alias et un modèle : changer ce que vise l'alias, partout.
-                [alias, model, ..] => {
+                // Une cible (`primary`, un rôle, une capacité, une voix, un alias) et un
+                // modèle : le profil actif change, partout (#334).
+                [target, model, ..] => {
                     let model = normalise_model_id(model);
                     match rpc
-                        .call(m::MODEL_SET, json!({"alias": alias, "model": model}))
+                        .call(m::MODEL_SET, json!({"target": target, "model": model}))
                         .await
                     {
                         Ok(v) => format!(
-                            "✅ `{alias}` → `{model}` (génération {}).",
+                            "✅ `{target}` → `{model}` (profil « {} », génération {}).",
+                            shown(&v["profile"]),
                             shown(&v["generation"])
                         ),
                         Err(e) => format!("❌ {e}"),
@@ -139,6 +156,60 @@ impl TelegramGateway {
             }
         };
         self.reply(chat_id, topic_id, reply_to, &text).await
+    }
+
+    /// `/model profil …` : basculer, créer (copie de l'actif), renommer (#334).
+    async fn model_profile_command(
+        &self,
+        rpc: &penelope_daemon::rpc::Rpc,
+        rest: &[&str],
+    ) -> String {
+        let joined = rest.join(" ");
+        let (action, params) = match rest {
+            ["nouveau" | "new", ..] => {
+                let name = joined
+                    .split_once(' ')
+                    .map(|(_, n)| n.trim())
+                    .unwrap_or_default();
+                // Un profil neuf, garde active : l'écran du profil propose de la lever,
+                // risque dit (#333).
+                let p =
+                    json!({"action": "new", "name": name, "codex_background": "deny", "use": true});
+                ("new", p)
+            }
+            ["renommer" | "rename", ..] => {
+                let body = joined.split_once(' ').map(|(_, n)| n).unwrap_or_default();
+                let (from, to) = body.split_once('→').unwrap_or((body, ""));
+                (
+                    "rename",
+                    json!({"action": "rename", "name": from.trim(), "to": to.trim()}),
+                )
+            }
+            _ => ("use", json!({"action": "use", "name": joined.trim()})),
+        };
+        // Un profil créé devient l'actif (`use`) : on le dit comme une bascule.
+        match (action, rpc.call(m::MODEL_PROFILE, params).await) {
+            ("new", Ok(v)) => format!(
+                "🧠 Profil « {} » créé et actif : tout suit le principal, garde Codex active. \
+                 `/model` pour changer le principal, un rôle, ou lever la garde.",
+                shown(&v["profile"])
+            ),
+            (_, Err(e)) => format!("❌ {e}"),
+            ("rename", Ok(v)) => {
+                format!("✏️ Profil renommé ; actif : « {} ».", shown(&v["profile"]))
+            }
+            (_, Ok(_)) => {
+                let v = rpc
+                    .call(m::MODEL_LIST, json!({}))
+                    .await
+                    .unwrap_or(Value::Null);
+                format!(
+                    "🧠 Profil actif : « {} », principal `{}`. `/model` pour le reste.",
+                    shown(&v["profile"]),
+                    shown(&v["primary"]["model"])
+                )
+            }
+        }
     }
 
     /// `/models`.

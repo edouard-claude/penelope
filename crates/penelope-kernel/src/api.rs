@@ -150,6 +150,10 @@ pub mod method {
     pub const MODEL_LIST: &str = "model.list";
     pub const MODEL_SET: &str = "model.set";
     pub const MODEL_ROUTE_TEST: &str = "model.route_test";
+    /// Retire une surcharge de rôle, une capacité, un étage ou un modèle de voix (#334).
+    pub const MODEL_UNSET: &str = "model.unset";
+    /// Profils de modèles : `use`, `new`, `copy`, `guard`, `rename`, `rm` (#334).
+    pub const MODEL_PROFILE: &str = "model.profile";
     /// Connexion d'un fournisseur à compte (Codex/ChatGPT) : `start`, `wait`, `status`,
     /// `logout` (issue #142).
     pub const MODEL_AUTH: &str = "model.auth";
@@ -295,6 +299,8 @@ pub mod method {
         MODEL_LIST,
         MODEL_SET,
         MODEL_ROUTE_TEST,
+        MODEL_UNSET,
+        MODEL_PROFILE,
         MODEL_AUTH,
         MCP_LIST,
         MCP_SHOW,

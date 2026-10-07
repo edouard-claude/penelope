@@ -33,6 +33,9 @@ impl TelegramGateway {
             | "mcp.logs" | "mcp.auth" | "model.assign" | "skill.rollback" => {
                 return self.perform_admin(chat_id, topic_id, op, p).await;
             }
+            "model.set" | "model.unset" | "model.profile" => {
+                return self.perform_models(op, p).await;
+            }
             "mem.forget" | "mem.validate" | "practice.status" | "session.forget"
             | "notes.adopt" => {
                 return self.perform_memory(op, p).await;

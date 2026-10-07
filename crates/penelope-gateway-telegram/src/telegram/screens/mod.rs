@@ -26,6 +26,7 @@ use penelope_telegram::render::ButtonSpec;
 use serde_json::{Value, json};
 
 mod memory;
+mod model_profiles;
 mod ops;
 mod perform;
 mod sessions;
@@ -454,6 +455,23 @@ impl TelegramGateway {
             "mcp" => self.screen_mcp(chat_id, topic_id, name, args).await,
             "mcp.server" => self.screen_mcp_server(chat_id, topic_id, name, args).await,
             "models" => self.screen_models(chat_id, topic_id, name, args).await,
+            "model.home" => self.screen_model_home(chat_id, topic_id, name, args).await,
+            "model.family" => {
+                self.screen_model_family(chat_id, topic_id, name, args)
+                    .await
+            }
+            "model.role" => self.screen_model_role(chat_id, topic_id, name, args).await,
+            "model.pick" => self.screen_model_pick(chat_id, topic_id, name, args).await,
+            "model.all" => self.screen_model_all(chat_id, topic_id, name, args).await,
+            "model.deviations" => {
+                self.screen_model_deviations(chat_id, topic_id, name, args)
+                    .await
+            }
+            "model.profile" => {
+                self.screen_model_profile(chat_id, topic_id, name, args)
+                    .await
+            }
+            "model.new" => self.screen_model_new(chat_id, topic_id, name, args).await,
             "model.assign" => {
                 self.screen_model_assign(chat_id, topic_id, name, args)
                     .await

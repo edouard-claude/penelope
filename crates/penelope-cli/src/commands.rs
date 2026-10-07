@@ -11,7 +11,7 @@ use approval_stats::ApprovalsCmd;
 use clap::Parser;
 pub use cli::{
     AuditCmd, BackupCmd, Cli, Command, ConfigCmd, HistoryCmd, ImportCmd, LocalCmd, McpCmd, MemCmd,
-    ModelCmd, ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd, VaultCmd, WfCmd,
+    ModelCmd, ProfileCmd, ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd, VaultCmd, WfCmd,
 };
 use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
