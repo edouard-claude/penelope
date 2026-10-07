@@ -286,6 +286,28 @@ mod tests {
         assert!(same(&voice.unwrap(), set.compat.as_ref().unwrap()));
     }
 
+    /// #335 : un modèle local qu'aucun endpoint ne sert n'est jamais envoyé à OpenRouter ;
+    /// il échoue en disant quoi poser.
+    #[test]
+    fn a_local_model_without_endpoint_never_goes_online() {
+        let secrets = MemorySecretStore::with(&[("openrouter_api_key", "sk-or-v1-x123456789")]);
+        let cfg = Config::sample(1);
+        assert!(!cfg.providers.local.enabled);
+        let set = build_providers(&cfg, &secrets, Catalog::new(), None).unwrap();
+        assert!(set.openrouter.is_some());
+        for model in [
+            "local:mlx-community/Qwen3-1.7B-4bit",
+            "openai_compat:whisper",
+        ] {
+            assert!(set.get(model).is_none(), "{model}");
+            let err = set.resolve(model).err().unwrap();
+            assert!(
+                err.contains("providers.extra") && err.contains("en ligne"),
+                "{err}"
+            );
+        }
+    }
+
     struct NoTokens;
 
     #[async_trait::async_trait]

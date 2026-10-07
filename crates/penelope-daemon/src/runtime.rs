@@ -125,8 +125,7 @@ impl penelope_app::ports::ProviderSource for Providers {
             *guard = Some(Arc::new(set));
         }
         let set = guard.as_ref().expect("providers construits");
-        set.get(model_id)
-            .ok_or_else(|| format!("aucun provider configuré pour `{model_id}`"))
+        set.resolve(model_id)
     }
 
     fn provider_override_active(&self) -> Option<Arc<dyn penelope_llm::Provider>> {
