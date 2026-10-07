@@ -54,6 +54,15 @@ l'archive déchiffrée sur le disque ; `--full` ignorait `backup.include_media`.
   par jour, avec la cause et la commande ; `doctor` en rouge au même seuil ; ligne au
   digest du matin. Le dossier local ne garde que la dernière archive
   (`backup.keep_local`, 1).
+- **Sécurité de l'archive** (revue du lot) : la collecte lit chaque entrée par
+  `symlink_metadata` et ne suit aucun lien symbolique, racines `workspace` et
+  `mcp-data` comprises (seuls le vault et `config.toml`, désignés par la configuration,
+  peuvent être des liens) ; liens, sockets et tubes sont nommés au manifeste
+  (`links_skipped`), aucune boucle ni sortie des racines n'est possible. La taille est
+  comptée pendant la collecte, refus dès 2 Gio franchis, avant toute archive ; le plafond
+  de 512 Mio de l'archive chiffrée vaut aussi à la lecture. La restauration lit les
+  entrées avant d'extraire et refuse l'archive entière pour un chemin absolu, un `..`, une
+  entrée hors de `penelope/`, un lien ou un fichier spécial.
 
 Clés nouvelles : `backup.provider`, `backup.dir`, `backup.keep_local`,
 `memory.vault_git_push`. Commandes nouvelles : `penelope backup setup`, `penelope backup

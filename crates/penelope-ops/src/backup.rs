@@ -584,20 +584,37 @@ impl Collect {
         }
     }
 
-    /// Copie la racine `src` vers `dst` ; `label` la nomme dans `skipped`.
+    /// Copie la racine `src` vers `dst` ; `label` la nomme dans `skipped`. Seules les
+    /// racines que la configuration désigne (le vault de `memory.vault_path`,
+    /// `config.toml`) peuvent être elles-mêmes un lien : le propriétaire l'a voulu.
+    /// `data/workspace` ou `data/mcp-data` en lien ne sont pas suivis.
     pub(crate) fn copy_root(&mut self, src: &Path, dst: &Path, label: &str) -> anyhow::Result<()> {
-        self.copy(src, dst, label)
+        let follow = matches!(label, "vault" | "config.toml");
+        let meta = if follow {
+            std::fs::metadata(src)
+        } else {
+            std::fs::symlink_metadata(src)
+        };
+        let meta = match meta {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(anyhow::anyhow!("copie de {} : {e}", src.display())),
+        };
+        self.copy(src, meta, dst, label)
             .map_err(|e| anyhow::anyhow!("copie de {} : {e}", src.display()))
     }
 
-    fn copy(&mut self, src: &Path, dst: &Path, rel: &str) -> anyhow::Result<()> {
-        let meta = match std::fs::metadata(src) {
-            Ok(m) => m,
-            // Disparu entre la lecture du dossier et la copie : rien à garder.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
+    /// `meta` : ce qu'est `src` lui-même, lien compris (`symlink_metadata`) ; un lien,
+    /// une socket ou un tube est noté et laissé.
+    fn copy(
+        &mut self,
+        src: &Path,
+        meta: std::fs::Metadata,
+        dst: &Path,
+        rel: &str,
+    ) -> anyhow::Result<()> {
         if meta.is_file() {
+            // Comptée avant la copie : le plafond franchi, rien de plus n'est lu.
             self.bytes += meta.len();
             if self.bytes > self.cap {
                 anyhow::bail!(
@@ -618,16 +635,14 @@ impl Collect {
         }
         std::fs::create_dir_all(dst)?;
         for e in std::fs::read_dir(src)?.flatten() {
+            let path = e.path();
             let name = e.file_name();
             let child_rel = format!("{rel}/{}", name.to_string_lossy());
-            // Le type de l'entrée elle-même, lien compris : jamais suivi sous une racine.
-            match e.file_type() {
-                Ok(t) if t.is_symlink() => self.skipped.push(child_rel),
-                Ok(t) if t.is_file() || t.is_dir() => {
-                    self.copy(&e.path(), &dst.join(&name), &child_rel)?
-                }
-                Ok(_) => self.skipped.push(child_rel),
-                Err(_) => {}
+            match std::fs::symlink_metadata(&path) {
+                Ok(m) => self.copy(&path, m, &dst.join(&name), &child_rel)?,
+                // Disparu entre la lecture du dossier et la copie : rien à garder.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
             }
         }
         Ok(())
@@ -636,7 +651,7 @@ impl Collect {
 
 /// Copie récursive sans plafond ni lien suivi : la restauration, depuis l'arbre extrait.
 pub(crate) fn copy_path(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    Collect::bounded(u64::MAX).copy(src, dst, "")
+    Collect::bounded(u64::MAX).copy_root(src, dst, "")
 }
 
 pub(crate) fn sha256_of(p: &Path) -> anyhow::Result<String> {
