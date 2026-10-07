@@ -361,3 +361,23 @@ async fn doctor_reports_the_bucket_and_the_last_s3_backup() {
         "{c:?}"
     );
 }
+
+/// #328 : l'essai de mise en place écrit puis efface un objet dans le bucket, avec les
+/// clés tapées ; des droits refusés se voient à ce moment, pas la première nuit.
+#[tokio::test]
+async fn setup_tries_the_bucket_with_the_typed_keys() {
+    let fake = FakeS3::start("sauvegardes-penelope").await;
+    let (_dir, s) = services_with_s3(&fake).await;
+    let cfg = s.config.config().backup.s3.clone();
+    let t = provider::Target::S3(cfg);
+    let creds = || sigv4::Credentials {
+        access_key: fake.creds.access_key.clone(),
+        secret_key: fake.creds.secret_key.clone(),
+    };
+    let at = provider::probe(&t, Some(creds())).await.unwrap();
+    assert!(at.contains("sauvegardes-penelope"), "{at}");
+    assert!(fake.keys().is_empty(), "l'objet d'essai est effacé");
+    fake.set_mode(Mode::Forbidden);
+    let e = provider::probe(&t, Some(creds())).await.unwrap_err();
+    assert!(e.to_string().contains("403"), "{e}");
+}

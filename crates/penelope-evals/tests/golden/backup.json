@@ -36,7 +36,13 @@
         "secrets_included": [
           "string"
         ],
-        "secrets_expected": []
+        "secrets_expected": [],
+        "mcp_commands": [],
+        "services": []
+      },
+      "verified": {
+        "at": "string",
+        "entries": "integer"
       },
       "snapshot_ms": "integer",
       "duration_ms": "integer"

@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 mod doctor;
 pub mod inventory;
+pub mod kit;
 pub mod provider;
 pub mod restore;
 pub mod s3;
@@ -121,7 +122,15 @@ pub async fn build(s: &Services, media: bool) -> anyhow::Result<(PathBuf, Value)
         entries: entries(s, media),
         excluded: excluded(s, media),
         mcp_commands: inventory::mcp_commands(&s.platform.dirs.data().join("mcp.d")),
-        services: inventory::services(penelope_platform::dirs::home_dir().as_deref()),
+        // Les LaunchAgents de la machine ; en test (`Discovery::none`), elle n'est pas lue.
+        services: inventory::services(
+            s.platform
+                .discovery
+                .hardware
+                .then(penelope_platform::dirs::home_dir)
+                .flatten()
+                .as_deref(),
+        ),
         out_dir: s.platform.dirs.data().join("backups"),
         stamp: now.replace([':', '.'], "-"),
         day: now.chars().take(10).collect(),
@@ -239,14 +248,39 @@ impl BuildJob {
         let sealed_bytes = penelope_platform::archive::seal(&tar, &sealed, passphrase)
             .map_err(|e| anyhow::anyhow!("chiffrement : {e}"))?;
 
+        let verified = verify(&sealed, passphrase).inspect_err(|_| {
+            let _ = std::fs::remove_file(&sealed);
+        })?;
         let report = json!({
             "archive": sealed.file_name().map(|f| f.to_string_lossy().to_string()),
             "bytes": sealed_bytes,
             "sha256": sha256_of(&sealed)?,
             "manifest": manifest,
+            "verified": {"at": self.created_at, "entries": verified},
         });
         Ok((sealed, report, snapshot))
     }
+}
+
+/// Contrôle de chaque sauvegarde (#328) : l'archive qui vient d'être écrite se déchiffre
+/// avec la phrase de passe, et son contenu se liste (sans rien extraire) avec la base, le
+/// manifeste et les secrets. Renvoie le nombre d'entrées.
+fn verify(sealed: &Path, passphrase: &str) -> anyhow::Result<usize> {
+    let fail = |e: String| anyhow::anyhow!("contrôle de déchiffrement en échec : {e}");
+    let plain = penelope_platform::archive::open_to_vec(sealed, passphrase)
+        .map_err(|e| fail(e.to_string()))?;
+    let entries =
+        penelope_platform::process::list_tar_gz_bytes(&plain).map_err(|e| fail(e.to_string()))?;
+    for needed in [
+        "penelope/penelope.db",
+        "penelope/MANIFEST.json",
+        "penelope/secrets.enc",
+    ] {
+        if !entries.iter().any(|e| e == needed) {
+            return Err(fail(format!("{needed} absent de l'archive")));
+        }
+    }
+    Ok(entries.len())
 }
 
 /// Vide les tables dérivées de l'instantané et y pose la marque de reconstruction.
@@ -356,10 +390,14 @@ pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Resul
     Ok(report)
 }
 
-/// Méthode `backup` : `snapshot` pour le seul instantané de la base (ce que `penelope
-/// restore <fichier.db>` relit) ; sinon l'archive complète, envoyée au fournisseur sauf
+/// Méthode `backup` : `kit` rend le kit de secours (#328 : il ne passe que par la socket
+/// locale, comme `secret.set`) ; `snapshot` pour le seul instantané de la base (ce que
+/// `penelope restore <fichier.db>` relit) ; sinon l'archive complète, envoyée au fournisseur sauf
 /// `push: false`. `media` absent : `backup.include_media` (#327).
 pub async fn rpc(s: &Services, p: &Value) -> anyhow::Result<Value> {
+    if p.get("kit").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(json!({"text": kit::of_instance(s)?}));
+    }
     if p.get("snapshot").and_then(|v| v.as_bool()) == Some(true) {
         let dest = s.platform.dirs.data().join("backups").join(format!(
             "penelope-{}.db",
@@ -516,6 +554,9 @@ pub(crate) fn sha256_of(p: &Path) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod fake_s3;
+
+#[cfg(test)]
+mod kit_tests;
 
 #[cfg(test)]
 mod provider_tests;

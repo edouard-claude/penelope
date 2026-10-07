@@ -291,3 +291,28 @@ pub fn pick_in_dir(dir: &Path, wanted: Option<&str>) -> anyhow::Result<PathBuf> 
         (None, None) => anyhow::bail!("aucune sauvegarde chiffrée dans {}", dir.display()),
     }
 }
+
+/// Essai du fournisseur à la mise en place (#328) : écrire puis effacer un petit objet,
+/// pour qu'une clé sans droit d'écriture ou un dossier en lecture seule se voie avant la
+/// première nuit. `creds` : les clés S3 tapées, avant leur rangement. Renvoie un libellé.
+pub async fn probe(target: &Target, creds: Option<sigv4::Credentials>) -> anyhow::Result<String> {
+    const PROBE: &str = ".penelope-essai";
+    match target {
+        Target::S3(c) => {
+            let creds = creds.ok_or_else(|| anyhow::anyhow!("clés S3 manquantes"))?;
+            let client = s3::S3Client::new(&c.endpoint, &c.bucket, &c.region, c.path_style, creds)?;
+            client.head_bucket().await?;
+            let key = format!("{}{PROBE}", s3::normalized_prefix(&c.prefix));
+            client.put_bytes(&key, b"essai".to_vec()).await?;
+            client.delete(&key).await?;
+        }
+        Target::Dir { .. } => {
+            let dir = target.ready_dir()?;
+            let f = dir.join(PROBE);
+            std::fs::write(&f, b"essai")
+                .map_err(|e| anyhow::anyhow!("écriture dans {} : {e}", dir.display()))?;
+            std::fs::remove_file(&f)?;
+        }
+    }
+    Ok(target.location())
+}

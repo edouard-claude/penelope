@@ -10,8 +10,8 @@ use approval_stats::ApprovalsCmd;
 #[cfg(test)]
 use clap::Parser;
 pub use cli::{
-    AuditCmd, Cli, Command, ConfigCmd, HistoryCmd, ImportCmd, LocalCmd, McpCmd, MemCmd, ModelCmd,
-    ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd, VaultCmd, WfCmd,
+    AuditCmd, BackupCmd, Cli, Command, ConfigCmd, HistoryCmd, ImportCmd, LocalCmd, McpCmd, MemCmd,
+    ModelCmd, ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd, VaultCmd, WfCmd,
 };
 use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
@@ -53,6 +53,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
         Command::Eval { suite } => return eval_local(suite).await,
         Command::Local(cmd) => return local::run(&cli, cmd),
+        Command::Backup { cmd: Some(cmd), .. } => return backup_setup::run(&cli, cmd).await,
         Command::Restore {
             source,
             dry_run,
@@ -267,6 +268,7 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 }
 
 mod approval_stats;
+mod backup_setup;
 mod cli;
 mod dataset;
 mod interactive;

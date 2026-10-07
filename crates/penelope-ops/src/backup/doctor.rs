@@ -179,14 +179,31 @@ pub async fn doctor_check(s: &Services) -> DoctorCheck {
         _ => String::new(),
     };
     let towards = st["location"].as_str().unwrap_or("aucun fournisseur");
+    // Dernier contrôle de déchiffrement (#328) : une archive qu'on ne relit pas ne prouve
+    // rien.
+    let verified = match st["last"]["verified"]["at"].as_str() {
+        Some(at) => format!("déchiffrement vérifié le {}", local_day(s, at)),
+        None => "déchiffrement jamais vérifié".into(),
+    };
     let detail = format!(
-        "dernière il y a {age_h} h ({} Mo{duration}), vers {towards}",
+        "dernière il y a {age_h} h ({} Mo{duration}), vers {towards} ; {verified}",
         st["last"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024),
     );
     if age_h > 48 {
         DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup".into()))
     } else {
         DoctorCheck::ok(ID, LABEL, detail)
+    }
+}
+
+/// Date et heure d'un instant RFC 3339, dans le fuseau du propriétaire.
+fn local_day(s: &Services, at: &str) -> String {
+    let Ok(t) = chrono::DateTime::parse_from_rfc3339(at) else {
+        return at.to_string();
+    };
+    match s.config.config().owner.timezone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => t.with_timezone(&tz).format("%Y-%m-%d à %H:%M").to_string(),
+        Err(_) => t.format("%Y-%m-%d à %H:%M UTC").to_string(),
     }
 }
 

@@ -197,7 +197,12 @@ pub enum Command {
     History(HistoryCmd),
     /// Sauvegarde complète chiffrée (base, vault, configuration, skills, workflows,
     /// `mcp.d`, workspace, `mcp-data`, secrets), envoyée au fournisseur de `backup.provider`.
+    /// `setup` choisit le fournisseur et la phrase de passe ; `kit` réaffiche le kit de
+    /// secours.
+    #[command(args_conflicts_with_subcommands = true)]
     Backup {
+        #[command(subcommand)]
+        cmd: Option<BackupCmd>,
         /// Garder l'archive dans `backups/`, sans l'envoyer.
         #[arg(long, conflicts_with = "db")]
         local: bool,
@@ -431,6 +436,22 @@ pub enum ConfigCmd {
     Validate {
         file: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackupCmd {
+    /// Met la sauvegarde en place : fournisseur choisi et testé, phrase de passe générée
+    /// (ou saisie), kit de secours affiché une fois et confirmé par quatre mots.
+    Setup {
+        /// `s3`, `dir` ou `icloud` ; demandé sinon.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Saisir sa propre phrase de passe plutôt que d'en générer une.
+        #[arg(long)]
+        own_passphrase: bool,
+    },
+    /// Réaffiche le kit de secours (phrase de passe comprise), sur confirmation.
+    Kit,
 }
 
 #[derive(Subcommand, Debug)]

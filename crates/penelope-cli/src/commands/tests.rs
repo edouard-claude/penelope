@@ -742,3 +742,37 @@ fn restore_finds_its_source() {
     let c = parse(&["restore", "avant.db"]);
     assert!(matches!(c.command, Command::Restore { source: Some(ref s), .. } if s == "avant.db"));
 }
+
+/// #328 : `backup setup` et `backup kit` sont des sous-commandes hors RPC direct ; elles
+/// ne se mêlent pas aux options de la sauvegarde.
+#[test]
+fn backup_setup_and_kit_parse() {
+    let c = parse(&["backup", "setup", "--provider", "dir", "--own-passphrase"]);
+    assert!(matches!(
+        c.command,
+        Command::Backup {
+            cmd: Some(BackupCmd::Setup {
+                provider: Some(ref p),
+                own_passphrase: true
+            }),
+            ..
+        } if p == "dir"
+    ));
+    let c = parse(&["backup", "kit"]);
+    assert!(matches!(
+        c.command,
+        Command::Backup {
+            cmd: Some(BackupCmd::Kit),
+            ..
+        }
+    ));
+    assert!(Cli::try_parse_from(["penelope", "backup", "--local", "kit"]).is_err());
+    assert_eq!(
+        backup_setup::secret_name("${SECRET:cle_scw}", "s3_access_key_id"),
+        "cle_scw"
+    );
+    assert_eq!(
+        backup_setup::secret_name("", "s3_access_key_id"),
+        "s3_access_key_id"
+    );
+}
