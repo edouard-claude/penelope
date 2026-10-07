@@ -325,20 +325,31 @@ async fn model_sections(
             "project": penelope_vault::session_project::of_session(s, session_id).await.0,
         }),
     );
-    let alias_of = |a: &str| json!({"alias": a, "model": cfg.alias_model(a)});
+    let alias_of = |a: String| json!({"model": cfg.alias_model(&a), "alias": a});
+    use penelope_kernel::config::Tier;
+    // Ce qui tourne vraiment, rôle par rôle, et pourquoi (#332) : le profil actif.
+    let roles: serde_json::Map<String, Value> = cfg
+        .resolve_all(&s.catalog)
+        .into_iter()
+        .map(|r| (r.role, json!({"model": r.model, "why": r.reason.label()})))
+        .collect();
     out.insert(
         "models".into(),
         json!({
+            "profile": cfg.models.active_name(),
+            "profiles": cfg.models.profile_names(),
+            "primary": alias_of(cfg.primary_label()),
+            "codex_background": cfg.models.active().codex_background,
             "aliases": cfg.models.aliases,
-            "roles": cfg.models.roles,
+            "roles": roles,
             "routing": {
-                "mode": if routing.classifier { "adaptatif (classifieur)" } else { "fixe (tout sur chat_default)" },
+                "mode": if cfg.adaptive_routing() { "adaptatif (classifieur)" } else { "fixe (tout sur le principal)" },
                 "classifier": routing.classifier,
-                "simple": alias_of(&routing.low),
-                "ordinaire": alias_of(&routing.medium),
-                "difficile": alias_of(&routing.high),
+                "simple": alias_of(cfg.routing_label(Tier::Low)),
+                "ordinaire": alias_of(cfg.routing_label(Tier::Medium)),
+                "difficile": alias_of(cfg.routing_label(Tier::High)),
                 "sticky": routing.sticky,
-                "fallback_on_failure": routing.fallback,
+                "fallback_on_failure": cfg.models.active().fallback.clone(),
                 "note": "l'alias `low` ne colle jamais à une session ; `/model auto on|off` bascule le mode",
             },
             "catalog_size": s.catalog.len(),
@@ -376,7 +387,7 @@ async fn config_summary(
             },
             "speech_to_text": {
                 "alias": cfg.role_alias("stt"),
-                "model": cfg.alias_model(&cfg.role_alias("stt")),
+                "model": cfg.role_model("stt"),
             },
         },
         "telegram": {

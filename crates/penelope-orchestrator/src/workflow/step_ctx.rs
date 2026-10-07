@@ -144,19 +144,61 @@ impl StepCtx<'_> {
         exec
     }
 
-    /// Modèle d'une étape : alias explicite, sinon le rôle de l'agent, sinon `main`.
+    /// Modèle d'une étape : celui qu'elle nomme, sinon son rôle par la résolution unique
+    /// (#332), le rôle `workflow` pour une étape sans rôle que le profil connaisse.
     pub(super) fn model(&self, role: &str) -> Result<String, String> {
         let cfg = self.s().config.config();
         let alias = if !self.step.model.is_empty() {
             self.step.model.clone()
-        } else if cfg.models.roles.contains_key(role) {
-            cfg.role_alias(role)
         } else {
-            cfg.role_alias("chat_default")
+            cfg.role_alias(step_role(&cfg, role))
         };
         cfg.alias_model(&alias)
             .map(String::from)
             .ok_or_else(|| format!("alias de modèle inconnu `{alias}`"))
+    }
+}
+
+impl StepCtx<'_> {
+    /// Garde Codex d'une étape (#333) : un run lancé par le propriétaire (gate « vas-y »,
+    /// `/run`, CLI, outil de son tour) est son tour, il suit le principal ; seul un run
+    /// planifié passe par la garde, annoncée dans la conversation du run.
+    pub(super) async fn guard(&self, model_id: &str) -> String {
+        let s = self.s();
+        if scheduled_by(s, &self.run.id).await.is_none() {
+            return model_id.to_string();
+        }
+        let origin = origin_of(s, &self.run.id).await;
+        penelope_app::codex_scope::guarded(
+            s,
+            model_id,
+            "ce workflow",
+            "tâche planifiée",
+            Some(&origin),
+        )
+        .await
+    }
+}
+
+/// Replis d'un modèle d'étape, par la chaîne du profil actif (#335) : une étape
+/// n'avait aucun repli, une panne du principal la faisait échouer.
+pub(super) fn fallbacks_of(cfg: &penelope_kernel::config::Config, model_id: &str) -> Vec<String> {
+    cfg.fallback_labels(model_id)
+        .iter()
+        .filter_map(|l| cfg.alias_model(l).map(String::from))
+        .filter(|m| m != model_id)
+        .collect()
+}
+
+/// Le rôle d'une étape : le sien s'il est connu (`code`, une surcharge du profil),
+/// `workflow` sinon.
+pub(super) fn step_role<'a>(cfg: &penelope_kernel::config::Config, role: &'a str) -> &'a str {
+    let known = penelope_kernel::config::role_spec(role).is_some()
+        || cfg.models.active().overrides.contains_key(role);
+    if known && role != "chat_default" {
+        role
+    } else {
+        "workflow"
     }
 }
 

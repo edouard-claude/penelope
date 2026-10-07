@@ -548,11 +548,9 @@ async fn compact_inner(
         }
     }
 
-    let alias = cfg.role_alias("compaction");
     let model = cfg
-        .alias_model(&alias)
-        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}` du rôle `compaction`"))?
-        .to_string();
+        .role_model("compaction")
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour le rôle `compaction`"))?;
     let model = penelope_app::codex_scope::background(&d.services, &model, "compaction").await;
     let provider = d.provider_for(&model).await.map_err(anyhow::Error::msg)?;
     let conversation = conversation_model(d, session_id).await;

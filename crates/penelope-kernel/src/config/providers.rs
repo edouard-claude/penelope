@@ -25,6 +25,23 @@ impl Providers {
             .map(|(name, e)| (name.as_str(), e))
             .or_else(|| self.local.enabled.then_some(("local", &self.local)))
     }
+
+    /// Un modèle `local:` ou `openai_compat:` a-t-il un endpoint actif qui le sert ? La
+    /// voix comme le texte suivent la même règle : un endpoint de `providers.extra` qui le
+    /// liste suffit, `providers.local` éteint (#335). Un modèle en ligne passe.
+    pub fn check_local(&self, model_id: &str) -> std::result::Result<(), String> {
+        let Some((prefix, bare)) = model_id.split_once(':') else {
+            return Ok(());
+        };
+        if !matches!(prefix, "local" | "openai_compat") || self.local_endpoint(bare).is_some() {
+            return Ok(());
+        }
+        Err(format!(
+            "`{model_id}` vise un serveur local, mais aucun endpoint actif ne le sert : \
+             l'ajouter à la liste `models` d'un `providers.extra.*` actif, ou \
+             `penelope config set providers.local.enabled true`"
+        ))
+    }
 }
 
 /// Préfixes de fournisseur reconnus dans un identifiant `fournisseur:modèle` (§10.2).
@@ -266,11 +283,19 @@ impl Default for LocalProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Models {
-    /// Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2).
+    /// Alias de modèle vers un identifiant `fournisseur:modèle` (§10.2) : des noms courts,
+    /// que les profils peuvent citer à la place d'un identifiant.
     pub aliases: BTreeMap<String, String>,
-    /// Rôle vers alias : conversation, classification, compaction, relecture de mémoire,
-    /// code, images, embeddings, transcription.
+    /// Profil actif (#332) : `defaut` tant que le propriétaire n'en a pas choisi d'autre.
+    pub profile: String,
+    /// Profils de modèles (#332) : un principal, des surcharges par rôle, des modèles de
+    /// capacité. Sans `defaut` écrit, il est déduit de `roles` et `routing`.
+    pub profiles: BTreeMap<String, ModelProfile>,
+    /// Clés d'avant les profils : rôle vers alias. Lues pour déduire le profil `defaut`
+    /// tant qu'il n'est pas écrit, ignorées ensuite.
     pub roles: BTreeMap<String, String>,
+    /// Classifieur (`classifier`, `sticky`, toujours lus) ; étages et replis d'avant les
+    /// profils, lus comme `roles`.
     pub routing: Routing,
     /// Repère des coordonnées que rend le modèle du rôle `image_locate` : `auto` (déduit
     /// de la famille du modèle et des valeurs rendues), `pixels` (pixels de l'image) ou
@@ -324,6 +349,7 @@ pub const MAP_PATHS: &[&str] = &[
     "models.aliases",
     "models.roles",
     "models.routing.fallback",
+    "models.profiles",
     "context.model_thresholds",
     "providers.extra",
 ];
@@ -376,6 +402,8 @@ impl Default for Models {
 
         Models {
             aliases,
+            profile: DEFAULT_PROFILE.into(),
+            profiles: BTreeMap::new(),
             roles,
             routing: Routing::default(),
             locate_frame: "auto".into(),
@@ -386,17 +414,19 @@ impl Default for Models {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Routing {
-    /// Classer la complexité d'un message pour choisir l'alias.
+    /// Classer la complexité d'un message pour choisir l'étage du profil actif ; sans
+    /// étage autre que le principal, aucun appel au classifieur.
     pub classifier: bool,
-    /// Alias d'un message simple.
+    /// Alias d'un message simple (clé d'avant les profils, lue pour `defaut`).
     pub low: String,
-    /// Alias d'un message moyen.
+    /// Alias d'un message moyen (clé d'avant les profils, lue pour `defaut`).
     pub medium: String,
-    /// Alias d'un message complexe.
+    /// Alias d'un message complexe (clé d'avant les profils, lue pour `defaut`).
     pub high: String,
-    /// Garder l'alias choisi pour la session (sauf l'alias `low`).
+    /// Garder l'alias choisi pour la session (sauf l'étage `low`).
     pub sticky: bool,
-    /// Alias de repli, dans l'ordre, quand un modèle ne répond pas.
+    /// Alias de repli, dans l'ordre, quand un modèle ne répond pas (clé d'avant les
+    /// profils, lue pour `defaut`).
     pub fallback: BTreeMap<String, Vec<String>>,
 }
 

@@ -87,6 +87,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.validate_owner_and_channels()?;
         self.validate_models()?;
+        self.validate_profiles()?;
         self.validate_turn_limits()?;
         self.validate_schedules()?;
         self.validate_mcp_and_runtime()?;
@@ -505,19 +506,14 @@ impl Config {
         Ok(())
     }
 
-    /// Alias effectif d'un rôle, avec repli sur `chat_default` puis `main`.
-    pub fn role_alias(&self, role: &str) -> String {
+    /// Identifiant `fournisseur:modèle` d'un alias ; un identifiant complet se rend
+    /// lui-même (un profil peut citer l'un ou l'autre, #332).
+    pub fn alias_model<'a>(&'a self, alias: &'a str) -> Option<&'a str> {
         self.models
-            .roles
-            .get(role)
-            .or_else(|| self.models.roles.get("chat_default"))
-            .cloned()
-            .unwrap_or_else(|| "main".to_string())
-    }
-
-    /// Identifiant `provider:model` d'un alias.
-    pub fn alias_model(&self, alias: &str) -> Option<&str> {
-        self.models.aliases.get(alias).map(|s| s.as_str())
+            .aliases
+            .get(alias)
+            .map(|s| s.as_str())
+            .or_else(|| check_model_id(alias).is_ok().then_some(alias))
     }
 
     /// Seuil de compaction effectif pour un modèle (surcharge §19 `context.model_thresholds`).

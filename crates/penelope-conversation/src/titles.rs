@@ -115,15 +115,9 @@ pub async fn generate(
     }
     s.kv_set(&flag, "1").await?;
     let cfg = s.config.config();
-    let alias = match cfg.models.roles.get("title") {
-        Some(a) => a.clone(),
-        None if cfg.alias_model("fast").is_some() => "fast".to_string(),
-        None => cfg.role_alias("classifier"),
-    };
     let model = cfg
-        .alias_model(&alias)
-        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
-        .to_string();
+        .role_model("title")
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour le rôle `title`"))?;
     let model = penelope_app::codex_scope::background(s, &model, "titre").await;
     let provider = providers
         .provider_for(&model)

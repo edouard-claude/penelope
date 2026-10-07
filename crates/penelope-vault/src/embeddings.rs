@@ -44,9 +44,7 @@ pub struct Embedder {
 /// Modèle du rôle `embedding`, s'il est défini.
 pub fn model(s: &Services) -> Option<String> {
     let cfg = s.config.config();
-    cfg.alias_model(&cfg.role_alias("embedding"))
-        .map(String::from)
-        .filter(|m| !m.is_empty())
+    cfg.role_model("embedding").filter(|m| !m.is_empty())
 }
 
 /// Vecteurs de `texts`, dans l'ordre, depuis le cache ou le provider.

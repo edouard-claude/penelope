@@ -11,27 +11,22 @@ pub fn conversation_aliases(cfg: &penelope_kernel::config::Config) -> Vec<String
         "embedding",
         "stt",
     ];
-    let reserved: std::collections::BTreeSet<&str> = cfg
-        .models
-        .roles
-        .iter()
-        .filter(|(role, _)| NOT_CHAT.contains(&role.as_str()))
-        .map(|(_, alias)| alias.as_str())
-        .collect();
-    let routing = &cfg.models.routing;
+    let reserved: std::collections::BTreeSet<String> =
+        NOT_CHAT.iter().map(|role| cfg.role_alias(role)).collect();
+    use penelope_kernel::config::Tier;
     let mut out: Vec<String> = Vec::new();
     for a in [
-        routing.low.clone(),
-        routing.medium.clone(),
-        routing.high.clone(),
-        cfg.role_alias("chat_default"),
+        cfg.routing_label(Tier::Low),
+        cfg.routing_label(Tier::Medium),
+        cfg.routing_label(Tier::High),
+        cfg.primary_label(),
     ] {
         if cfg.alias_model(&a).is_some() && !out.contains(&a) {
             out.push(a);
         }
     }
     for a in cfg.models.aliases.keys() {
-        if !reserved.contains(a.as_str()) && !out.contains(a) {
+        if !reserved.contains(a) && !out.contains(a) {
             out.push(a.clone());
         }
     }

@@ -22,16 +22,15 @@ pub async fn generate(
     size: Option<&str>,
 ) -> Result<Value, String> {
     let cfg = s.config.config();
-    let alias = cfg.role_alias("image_generate");
     let model = cfg
-        .alias_model(&alias)
-        .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `image_generate`"))?
-        .to_string();
+        .resolve_role_with("image_generate", &s.catalog)
+        .model
+        .ok_or_else(|| "aucun modèle pour le rôle `image_generate`".to_string())?;
     if let Some(info) = s.catalog.get(&model)
         && !info.output_modalities.iter().any(|m| m == "image")
     {
         return Err(format!(
-            "`{model}` ne produit pas d'images : `penelope model set {alias} \
+            "`{model}` ne produit pas d'images : `penelope model set image_generate \
                  openrouter:google/gemini-3.1-flash-image`, par exemple"
         ));
     }

@@ -126,42 +126,15 @@ impl Narrator {
     }
 }
 
-/// Rôles qu'un alias `local:` peut servir sans être un modèle de texte.
-const NOT_TEXT_ROLES: &[&str] = &[
-    "stt",
-    "tts",
-    "embedding",
-    "image_generate",
-    "image_describe",
-    "image_locate",
-];
-
-/// Résout le modèle du rôle `trace` : `models.roles.trace` s'il existe, sinon l'alias
-/// `local` puis le premier alias `local:` (ordre alphabétique) qui ne sert pas un rôle de
-/// voix, d'image ou d'embeddings. `None` : le mode `narre` retombe sur `resume`.
+/// Résout le modèle du rôle `trace` par la résolution unique (#332) : `voice.narrator`,
+/// sinon `models.roles.trace`, sinon l'alias `local` puis le premier alias `local:` qui ne
+/// sert ni la voix, ni l'image, ni les embeddings. `None` : le mode `narre` retombe sur
+/// `resume`.
 pub fn role_model(cfg: &Config) -> Option<Narrator> {
-    if let Some(alias) = cfg.models.roles.get(ROLE) {
-        return cfg.alias_model(alias).map(|m| Narrator {
-            alias: alias.clone(),
-            model: m.to_string(),
-        });
-    }
-    let serves_other = |alias: &str| {
-        cfg.models
-            .roles
-            .iter()
-            .any(|(r, a)| a == alias && NOT_TEXT_ROLES.contains(&r.as_str()))
-    };
-    let mut candidates: Vec<(&String, &String)> = cfg
-        .models
-        .aliases
-        .iter()
-        .filter(|(a, m)| m.starts_with("local:") && !serves_other(a))
-        .collect();
-    candidates.sort_by_key(|(a, _)| (*a != "local", (*a).clone()));
-    candidates.first().map(|(a, m)| Narrator {
-        alias: (*a).clone(),
-        model: (*m).clone(),
+    let r = cfg.resolve_role(ROLE);
+    Some(Narrator {
+        model: r.model?,
+        alias: r.label,
     })
 }
 

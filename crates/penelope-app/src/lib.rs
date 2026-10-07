@@ -25,6 +25,8 @@ pub mod judge;
 pub mod machine;
 pub mod media;
 pub mod model_judge;
+pub mod model_route;
+pub mod model_watch;
 pub mod notices;
 pub mod outcome;
 pub mod ports;

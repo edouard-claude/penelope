@@ -295,11 +295,9 @@ pub async fn review(
     if max == 0 {
         return Ok(0);
     }
-    let alias = cfg.role_alias("memory_review");
     let model = cfg
-        .alias_model(&alias)
-        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour l'alias `{alias}`"))?
-        .to_string();
+        .role_model("memory_review")
+        .ok_or_else(|| anyhow::anyhow!("aucun modèle pour le rôle `memory_review`"))?;
     let model = penelope_app::codex_scope::background(s, &model, "consolidation").await;
     let provider = providers
         .provider_for(&model)

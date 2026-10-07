@@ -342,21 +342,16 @@ pub(super) async fn write_batch(
 /// réfléchissant, sans immobiliser la sortie utile (issue #152).
 pub(super) const REASONING_START: u32 = 8_000;
 
-/// Alias de repli du rôle de consolidation : le premier de la chaîne déclarée pour son
-/// alias, sinon celui du rôle `memoire`.
+/// Repli du rôle `dream` : le premier de sa chaîne dans le profil actif, sinon le
+/// principal s'il est autre (#332). L'ancien rôle `memoire`, lu ici sans exister, valait
+/// déjà le modèle de conversation.
 pub(super) fn reasoning_fallback(cfg: &penelope_kernel::config::Config) -> Option<String> {
-    let alias = cfg.role_alias("compaction");
-    if let Some(next) = cfg
-        .models
-        .routing
-        .fallback
-        .get(&alias)
-        .and_then(|chain| chain.first())
-    {
-        return Some(next.clone());
+    let label = cfg.role_alias("dream");
+    if let Some(next) = cfg.fallback_labels(&label).into_iter().next() {
+        return Some(next);
     }
-    let memoire = cfg.role_alias("memoire");
-    (memoire != alias).then_some(memoire)
+    let primary = cfg.primary_label();
+    (primary != label).then_some(primary)
 }
 
 /// Lots jugés avant qu'une passe faite surtout de lots d'un candidat soit arrêtée (#140).
@@ -364,8 +359,8 @@ pub(super) const LONE_WATCH: usize = 8;
 
 /// Limite de sortie du modèle de consolidation : celle du catalogue, sinon 16 000.
 pub(super) fn output_cap(d: &Context, cfg: &penelope_kernel::config::Config) -> u32 {
-    cfg.alias_model(&cfg.role_alias("compaction"))
-        .and_then(|m| d.services.catalog.get(m))
+    cfg.role_model("dream")
+        .and_then(|m| d.services.catalog.get(&m))
         .and_then(|i| i.max_output)
         .map(|m| m.min(32_000) as u32)
         .unwrap_or(16_000)

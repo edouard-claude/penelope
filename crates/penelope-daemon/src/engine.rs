@@ -136,7 +136,6 @@ impl Daemon {
         meta: &penelope_agent::TurnMeta,
     ) -> anyhow::Result<TurnOutcome> {
         let s = self.services.clone();
-        let cfg = s.config.config();
         let session = s.sessions.require(&turn.session_id).await?;
         let text = turn
             .payload
@@ -207,8 +206,16 @@ impl Daemon {
         // 3. Provider. L'abonnement ChatGPT ne sert que les tours du propriétaire : une
         // planification ou un travail interne se replie ici, sans bruit (#142).
         let model_id = codex_scope::for_origin(&self.services, &model_id, origin).await;
-        let provider = match self.provider_for(&model_id).await {
-            Ok(p) => p,
+        // Épinglé : sans repli ; injoignable : le premier repli joignable, annoncé (#333).
+        let route = penelope_app::model_route::route(
+            &s,
+            &*self.providers,
+            &turn.session_id,
+            &alias,
+            &model_id,
+        );
+        let (model_id, provider, fallbacks) = match route.await {
+            Ok(r) => (r.model_id, r.provider, r.fallbacks),
             Err(error) => return Ok(TurnOutcome::Failed { error }),
         };
 
@@ -272,17 +279,12 @@ impl Daemon {
             .core
             .tool_executor(&turn.session_id, origin, &alias, &model_id);
 
-        let router = Router::new(s.catalog.clone());
         let spec = TurnSpec {
             session_id: turn.session_id.clone(),
             run_id: None,
             turn_id: Some(origin_turn),
             model_id: model_id.clone(),
-            fallback_models: router
-                .fallback_chain(&cfg, &alias)
-                .into_iter()
-                .map(|d| d.model_id)
-                .collect(),
+            fallback_models: fallbacks,
             tools: tools_on_demand::turn_tools(
                 &s,
                 &turn.session_id,

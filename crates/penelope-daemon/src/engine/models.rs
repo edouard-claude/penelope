@@ -31,7 +31,7 @@ impl Core {
         let s = &self.services;
         let cfg = s.config.config();
         let router = Router::new(s.catalog.clone());
-        let routing = &cfg.models.routing;
+        let low = cfg.routing_label(penelope_kernel::config::Tier::Low);
 
         // Sans classifieur, pas d'alias collant : `main` (rôle `chat_default`) s'applique
         // aussitôt à toutes les sessions, y compris celles routées avant le changement.
@@ -40,8 +40,8 @@ impl Core {
         let sticky = session
             .model_alias
             .as_ref()
-            .filter(|_| routing.classifier)
-            .filter(|a| **a != routing.low)
+            .filter(|_| cfg.adaptive_routing())
+            .filter(|a| **a != low)
             .and_then(|a| {
                 cfg.alias_model(a).map(|id| StickyModel {
                     alias: a.clone(),
@@ -84,7 +84,7 @@ impl Core {
         // (image, vision) ni le petit modèle.
         let persist = match decision.reason {
             RouteReason::Default => true,
-            RouteReason::Classifier => decision.alias != routing.low,
+            RouteReason::Classifier => decision.alias != low,
             _ => false,
         };
         if persist && session.model_alias.as_deref() != Some(decision.alias.as_str()) {
@@ -170,8 +170,7 @@ impl Core {
         }
         let s = &self.services;
         let cfg = s.config.config();
-        let alias = cfg.role_alias("classifier");
-        let model_id = cfg.alias_model(&alias)?.to_string();
+        let model_id = cfg.role_model("classifier")?;
         let model_id = codex_scope::background(s, &model_id, "classifieur").await;
         let provider = self.provider_for(&model_id).await.ok()?;
         let info = s

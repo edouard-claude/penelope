@@ -21,7 +21,8 @@ impl Core {
             .unwrap_or(false);
         // L'image est réduite pour le modèle qui la lira (issue #242).
         let (cfg, describe) = (s.config.config(), penelope_executor::vision::Task::Describe);
-        let describer = cfg.alias_model(&penelope_executor::vision::alias_for(&cfg, describe));
+        let describer = penelope_executor::vision::alias_for(&cfg, &s.catalog, describe);
+        let describer = cfg.alias_model(&describer);
         let reader = if sees {
             model_id
         } else {
@@ -92,8 +93,8 @@ impl Core {
 
 #[async_trait::async_trait]
 impl Transcriber for Core {
-    /// Un alias `openai_compat:…` vise le serveur local (`providers.local`) : s'il n'est
-    /// pas activé, on le dit plutôt que d'envoyer l'audio à OpenRouter par défaut.
+    /// Un modèle local sans endpoint actif qui le sert (`providers.extra.*` ou
+    /// `providers.local`) est dit, plutôt que d'envoyer l'audio ailleurs (#335).
     async fn transcribe(
         &self,
         audio: Vec<u8>,
@@ -102,21 +103,11 @@ impl Transcriber for Core {
     ) -> Result<String, String> {
         let s = &self.services;
         let cfg = s.config.config();
-        let alias = cfg.role_alias("stt");
         let model = cfg
-            .alias_model(&alias)
-            .ok_or_else(|| format!("aucun modèle pour l'alias `{alias}` du rôle `stt`"))?
-            .to_string();
-        if penelope_llm::catalog::provider_of(&model) != "openrouter"
-            && !cfg.providers.local.enabled
-            && self.provider_override_active().is_none()
-        {
-            return Err(format!(
-                "l'alias `{alias}` vise un serveur local (`{model}`) mais `providers.local` \
-                 n'est pas activé : `penelope config set providers.local.enabled true`, ou \
-                 transcrire via OpenRouter : `penelope model set {alias} \
-                 openrouter:openai/whisper-large-v3`"
-            ));
+            .role_model("stt")
+            .ok_or_else(|| "aucun modèle pour le rôle `stt`".to_string())?;
+        if self.provider_override_active().is_none() {
+            cfg.providers.check_local(&model)?;
         }
         let model = codex_scope::background(&self.services, &model, "transcription").await;
         let provider = self.provider_for(&model).await?;

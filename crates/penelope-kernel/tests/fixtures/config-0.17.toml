@@ -95,6 +95,7 @@ context_window = 32768
 
 [models]
 locate_frame = "auto"
+profile = "defaut"
 
 [models.aliases]
 embedding = "openrouter:openai/text-embedding-3-small"
@@ -131,6 +132,25 @@ sticky = true
 [models.routing.fallback]
 main = ["fast"]
 reasoning = ["main"]
+
+# Table à clés libres : `models.profiles.<nom>` dans la référence (1.0.47, #332).
+[models.profiles.economie]
+primary = "fast"
+codex_background = "deny"
+
+[models.profiles.economie.overrides]
+code = "reasoning"
+
+[models.profiles.economie.capabilities]
+vision = "vision"
+
+[models.profiles.economie.routing]
+low = ""
+medium = ""
+high = "reasoning"
+
+[models.profiles.economie.fallback]
+fast = ["main"]
 
 [budget]
 daily_usd = 20.0
@@ -315,6 +335,9 @@ install_dir = "~/.local/bin"
 archive_base_url = "https://codeload.github.com"
 
 [voice]
+stt = "stt"
+tts = "tts"
+narrator = ""
 tts_voice = "fr_female"
 max_chars = 1500
 reply_in_kind = false

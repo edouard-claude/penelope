@@ -73,9 +73,8 @@ impl ModelJudge {
         let cfg = s.config.config();
         let alias = cfg.judge_alias();
         let model_id = cfg
-            .alias_model(&alias)
-            .ok_or_else(|| JudgeFailure::Unavailable(format!("alias `{alias}` sans modèle")))?
-            .to_string();
+            .role_model(penelope_kernel::config::APPROVAL_JUDGE_ROLE)
+            .ok_or_else(|| JudgeFailure::Unavailable(format!("`{alias}` sans modèle")))?;
         let model_id = crate::codex_scope::background(s, &model_id, "juge").await;
         let provider = self
             .providers

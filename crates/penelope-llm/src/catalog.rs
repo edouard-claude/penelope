@@ -180,6 +180,24 @@ impl Default for Catalog {
     }
 }
 
+/// Ce que le catalogue sait des capacités d'un modèle, pour la résolution des rôles
+/// (#332) : un principal qui lit les images sert la vision. Les embeddings ne sont jamais
+/// le fait d'un modèle de conversation.
+impl penelope_kernel::config::ModelCaps for Catalog {
+    fn supports(&self, model_id: &str, cap: penelope_kernel::config::Capability) -> Option<bool> {
+        use penelope_kernel::config::Capability;
+        if cap == Capability::Embedding {
+            return Some(false);
+        }
+        let info = self.get(model_id)?;
+        Some(match cap {
+            Capability::Vision => info.accepts_images(),
+            Capability::ImageGenerate => info.produces_images(),
+            Capability::Embedding => false,
+        })
+    }
+}
+
 impl Catalog {
     pub fn new() -> Self {
         Catalog {

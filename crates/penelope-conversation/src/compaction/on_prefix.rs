@@ -141,10 +141,7 @@ fn instruction(job: &SummaryJob, landmark: &str) -> String {
 fn cheaper(d: &Context, job: &SummaryJob, model: &str, prefix_tokens: u64, consigne: &str) -> bool {
     let s = &d.services;
     let cfg = s.config.config();
-    let summarizer = cfg
-        .alias_model(&cfg.role_alias("compaction"))
-        .unwrap_or_default()
-        .to_string();
+    let summarizer = cfg.role_model("compaction").unwrap_or_default();
     let (Some(conv), Some(summ)) = (s.catalog.get(model), s.catalog.get(&summarizer)) else {
         return false;
     };
