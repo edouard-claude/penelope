@@ -45,7 +45,8 @@
         "entries": "integer"
       },
       "snapshot_ms": "integer",
-      "duration_ms": "integer"
+      "duration_ms": "integer",
+      "pruned_local": []
     }
   }
 }
