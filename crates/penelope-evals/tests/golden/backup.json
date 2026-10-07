@@ -32,6 +32,7 @@
             "why": "string"
           }
         ],
+        "links_skipped": [],
         "media_included": "bool",
         "secrets_included": [
           "string"

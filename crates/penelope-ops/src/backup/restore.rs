@@ -75,6 +75,9 @@ pub fn restore_archive(
     restrict(&scratch.0);
     let plain = penelope_platform::archive::open_to_vec(archive, passphrase)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let entries = penelope_platform::process::tar_gz_entries(&plain)
+        .map_err(|e| anyhow::anyhow!("lecture de l'archive : {e}"))?;
+    check_entries(&entries)?;
     penelope_platform::process::extract_tar_gz_bytes(&plain, &scratch.0)
         .map_err(|e| anyhow::anyhow!("extraction : {e}"))?;
     drop(plain);
@@ -193,6 +196,34 @@ fn todo(
         ));
     }
     out
+}
+
+/// Ce qu'une archive peut contenir : des fichiers et des dossiers sous `penelope/`,
+/// jamais de chemin absolu, de `..`, ni de lien (une sauvegarde n'en écrit pas : un lien
+/// extrait puis suivi écrirait hors de la destination). Une archive qui en porte n'est
+/// pas une sauvegarde de Pénélope, ou a été retouchée : rien n'est extrait.
+pub(crate) fn check_entries(entries: &[(char, String)]) -> anyhow::Result<()> {
+    for (kind, path) in entries {
+        let p = Path::new(path);
+        let escapes = p.is_absolute()
+            || p.components().any(|c| {
+                !matches!(
+                    c,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            });
+        let under_root = p
+            .components()
+            .find(|c| !matches!(c, std::path::Component::CurDir))
+            .is_some_and(|c| c.as_os_str() == "penelope");
+        if escapes || !under_root {
+            anyhow::bail!("archive refusée : `{path}` sort de la destination");
+        }
+        if !matches!(kind, '-' | 'd') {
+            anyhow::bail!("archive refusée : `{path}` n'est ni un fichier ni un dossier ({kind})");
+        }
+    }
+    Ok(())
 }
 
 /// Dossier de travail en 0700 : ce qui y est extrait est en clair le temps de la copie.

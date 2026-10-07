@@ -3207,6 +3207,13 @@ recalcule les vecteurs ; la recherche est lexicale entre-temps. Le manifeste inv
 aussi les commandes des serveurs MCP et les serveurs d'inférence en LaunchAgent, pour la
 restauration.
 
+Sous chaque racine (vault, workspace, `mcp-data`…), un **lien symbolique n'est jamais
+suivi** : il n'est ni copié ni recréé, et le manifeste le nomme (`links_skipped`), comme
+les sockets qu'un serveur MCP recrée lui-même ; rien n'entre ainsi de hors des racines, et
+une boucle de liens ne tourne pas. La collecte compte ce qu'elle copie et s'arrête
+au-delà de 2 Gio, avant toute archive ; l'archive chiffrée, elle, ne dépasse pas 512 Mio,
+plafond vérifié avant de la charger en mémoire, à l'écriture comme à la lecture.
+
 L'archive est chiffrée (Argon2id puis XChaCha20-Poly1305) avant de quitter la machine, puis
 **relue** : chaque sauvegarde se déchiffre en mémoire et liste son contenu (base, manifeste,
 secrets) sans rien extraire ; une archive qui ne se relit pas est effacée et la sauvegarde
@@ -3317,7 +3324,9 @@ Elle se fait **daemon arrêté** et remet tout en place : la base, `config.toml`
 workflows, les gabarits, `mcp.d`, le workspace, `mcp-data`, et les secrets dans le magasin
 (trousseau), phrase de passe comprise. L'existant est mis de côté
 (`<chemin>.avant-restauration-<date>`). L'archive est déchiffrée en mémoire et passée à
-`tar` par son entrée standard ; le dossier de travail et l'archive téléchargée sont effacés
+`tar` par son entrée standard, après la lecture de ses entrées : un chemin absolu, un
+`..`, une entrée hors de `penelope/` ou un lien font refuser l'archive entière, rien
+n'est extrait. Le dossier de travail et l'archive téléchargée sont effacés
 en fin de commande, succès ou échec. Elle réinstalle ensuite le service du daemon (et les
 serveurs d'inférence en LaunchAgent de la sauvegarde, si leur programme est là), attend
 que le daemon réponde et lance `penelope doctor`. Le compte rendu ne liste que ce qui reste

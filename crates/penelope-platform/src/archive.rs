@@ -105,6 +105,15 @@ pub fn seal(src: &Path, dst: &Path, passphrase: &str) -> Result<u64> {
 /// Déchiffre `src` en mémoire, sans rien écrire : le contrôle de chaque sauvegarde (#328)
 /// et la restauration passent par là.
 pub fn open_to_vec(src: &Path, passphrase: &str) -> Result<Vec<u8>> {
+    // Le plafond vaut à la lecture comme à l'écriture : un fichier démesuré n'est pas
+    // chargé en mémoire.
+    let size = std::fs::metadata(src)?.len();
+    if size > MAX_ARCHIVE_BYTES + 48 + 16 {
+        return Err(PlatformError::Secret(format!(
+            "{} : {size} octets, au-delà du plafond de {MAX_ARCHIVE_BYTES} d'une sauvegarde",
+            src.display()
+        )));
+    }
     let raw = std::fs::read(src)?;
     open_with(MAGIC, &raw, passphrase, &src.display().to_string())
 }

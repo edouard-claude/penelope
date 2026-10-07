@@ -38,7 +38,9 @@ neuf, on la tire et ça repart comme hier.**
    `mcp.d`, `data/workspace`, `data/mcp-data`, et les **valeurs** des secrets. Restent
    dehors, nommés au manifeste avec leur raison : les modèles locaux (`data/models`,
    rechargeables), les journaux, les index dérivés de la base (#289), les artefacts et
-   les médias sauf `backup.include_media`.
+   les médias sauf `backup.include_media`. Sous une racine, aucun lien symbolique n'est
+   suivi (il est nommé au manifeste) et la collecte est bornée (2 Gio) ; la restauration
+   refuse une archive qui porte un chemin absolu, un `..` ou un lien.
 3. **Les secrets sous une double couche.** Ils sont lus dans le magasin (trousseau) au
    moment de la sauvegarde, sérialisés, chiffrés par une clé dérivée de la même phrase
    de passe avec son propre sel (en-tête `PNLPSK01`), puis rangés dans l'archive, elle-même

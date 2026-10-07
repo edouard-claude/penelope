@@ -81,6 +81,27 @@ pub fn list_tar_gz_bytes(bytes: &[u8]) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Les entrées d'une archive `tar.gz` tenue en mémoire avec leur type (`-` fichier, `d`
+/// dossier, `l` lien symbolique, `h` lien physique…), sans rien extraire : la
+/// restauration refuse ce qui sortirait de sa destination (#329).
+pub fn tar_gz_entries(bytes: &[u8]) -> Result<Vec<(char, String)>> {
+    let names = list_tar_gz_bytes(bytes)?;
+    let verbose = tar_stdin(&["-tvzf".as_ref(), "-".as_ref()], bytes)?;
+    let kinds: Vec<char> = String::from_utf8_lossy(&verbose)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.chars().next().unwrap_or('?'))
+        .collect();
+    if kinds.len() != names.len() {
+        return Err(PlatformError::Process(format!(
+            "tar : {} entrées listées, {} décrites",
+            names.len(),
+            kinds.len()
+        )));
+    }
+    Ok(kinds.into_iter().zip(names).collect())
+}
+
 /// Crée une archive `tar.gz` des entrées données, relatives à `root` (issue #42).
 pub fn create_tar_gz(dest: &Path, root: &Path, entries: &[String]) -> Result<()> {
     if let Some(p) = dest.parent() {
@@ -152,5 +173,14 @@ mod tests {
             "souvenir"
         );
         assert!(list_tar_gz_bytes(b"pas une archive").is_err());
+        let kinds = tar_gz_entries(&bytes).unwrap();
+        assert!(
+            kinds.contains(&('d', "penelope/vault".to_string())),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.contains(&('-', "penelope/MANIFEST.json".to_string())),
+            "{kinds:?}"
+        );
     }
 }

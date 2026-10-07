@@ -203,12 +203,16 @@ impl BuildJob {
             .map_err(|e| anyhow::anyhow!("allègement de l'instantané : {e}"))?;
         let snapshot = t.elapsed();
 
+        // Collecte bornée : les liens symboliques ne sont pas suivis (rien n'entre de
+        // hors des racines déclarées, aucune boucle), et la taille est comptée en route.
+        let mut collect = Collect::bounded(MAX_COLLECTED_BYTES);
+        collect.bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
         let mut contents: Vec<Value> = Vec::new();
         for (src, name) in &self.entries {
             let dst = root.join(name);
-            copy_path(src, &dst)
-                .map_err(|e| anyhow::anyhow!("copie de {} : {e}", src.display()))?;
-            contents.push(json!({"name": name, "bytes": dir_size(&dst)}));
+            let before = collect.bytes;
+            collect.copy_root(src, &dst, name)?;
+            contents.push(json!({"name": name, "bytes": collect.bytes - before}));
         }
 
         // Les valeurs des secrets, sous leur seconde couche ; le manifeste n'en porte que
@@ -227,6 +231,7 @@ impl BuildJob {
             "derived_excluded": DERIVED_TABLES,
             "contents": contents,
             "excluded": self.excluded,
+            "links_skipped": collect.skipped,
             "media_included": self.media,
             "secrets_included": dump.values.keys().collect::<Vec<_>>(),
             "secrets_expected": dump.unreadable,
@@ -551,42 +556,87 @@ async fn nightly_run(s: &Services, messenger: Option<Arc<dyn Messenger>>) -> any
 
 // ------------------------------------------------------------------ utilitaires
 
-/// Copie récursive. Les sockets et les tubes (un pont MCP en laisse dans `mcp-data`) ne
-/// se copient pas : ils sont recréés par leur serveur. Un lien symbolique est suivi.
-pub(crate) fn copy_path(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let meta = std::fs::metadata(src)?;
-    if meta.is_file() {
-        if let Some(p) = dst.parent() {
-            std::fs::create_dir_all(p)?;
-        }
-        std::fs::copy(src, dst)?;
-        return Ok(());
-    }
-    if !meta.is_dir() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dst)?;
-    for e in std::fs::read_dir(src)?.flatten() {
-        let name = e.file_name();
-        match copy_path(&e.path(), &dst.join(name)) {
-            // Lien mort ou fichier disparu entre la lecture et la copie : rien à garder.
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            other => other?,
-        }
-    }
-    Ok(())
+/// Plafond de ce que la collecte copie avant l'archive (base comprise) : la copie se fait
+/// sur le disque, mais une collecte sans borne remplirait le disque et l'archive
+/// dépasserait de toute façon [`penelope_platform::archive::MAX_ARCHIVE_BYTES`], que le
+/// chiffrement vérifie avant de rien charger en mémoire.
+pub const MAX_COLLECTED_BYTES: u64 = 4 * penelope_platform::archive::MAX_ARCHIVE_BYTES;
+
+/// Copie d'arbres bornée, qui ne suit aucun lien symbolique.
+///
+/// Une racine déclarée (le vault, `data/workspace`…) est prise telle que la configuration
+/// la désigne ; **sous** elle, un lien symbolique n'est jamais suivi : il est noté
+/// (`skipped`), ni copié ni recréé. Rien n'entre ainsi de hors des racines, et une boucle
+/// de liens ne peut pas tourner. Les sockets et les tubes (un pont MCP en laisse dans
+/// `mcp-data`) sont notés de même, leur serveur les recrée.
+pub(crate) struct Collect {
+    pub bytes: u64,
+    cap: u64,
+    pub skipped: Vec<String>,
 }
 
-fn dir_size(p: &Path) -> u64 {
-    if p.is_file() {
-        return std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+impl Collect {
+    pub(crate) fn bounded(cap: u64) -> Self {
+        Collect {
+            bytes: 0,
+            cap,
+            skipped: Vec::new(),
+        }
     }
-    std::fs::read_dir(p)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| dir_size(&e.path()))
-        .sum()
+
+    /// Copie la racine `src` vers `dst` ; `label` la nomme dans `skipped`.
+    pub(crate) fn copy_root(&mut self, src: &Path, dst: &Path, label: &str) -> anyhow::Result<()> {
+        self.copy(src, dst, label)
+            .map_err(|e| anyhow::anyhow!("copie de {} : {e}", src.display()))
+    }
+
+    fn copy(&mut self, src: &Path, dst: &Path, rel: &str) -> anyhow::Result<()> {
+        let meta = match std::fs::metadata(src) {
+            Ok(m) => m,
+            // Disparu entre la lecture du dossier et la copie : rien à garder.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if meta.is_file() {
+            self.bytes += meta.len();
+            if self.bytes > self.cap {
+                anyhow::bail!(
+                    "plus de {} Mo à sauvegarder : au-delà du plafond, rien n'est archivé \
+                     (alléger `data/workspace` ou `data/mcp-data`, ou retirer les médias)",
+                    self.cap / (1024 * 1024)
+                );
+            }
+            if let Some(p) = dst.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            std::fs::copy(src, dst)?;
+            return Ok(());
+        }
+        if !meta.is_dir() {
+            self.skipped.push(rel.to_string());
+            return Ok(());
+        }
+        std::fs::create_dir_all(dst)?;
+        for e in std::fs::read_dir(src)?.flatten() {
+            let name = e.file_name();
+            let child_rel = format!("{rel}/{}", name.to_string_lossy());
+            // Le type de l'entrée elle-même, lien compris : jamais suivi sous une racine.
+            match e.file_type() {
+                Ok(t) if t.is_symlink() => self.skipped.push(child_rel),
+                Ok(t) if t.is_file() || t.is_dir() => {
+                    self.copy(&e.path(), &dst.join(&name), &child_rel)?
+                }
+                Ok(_) => self.skipped.push(child_rel),
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Copie récursive sans plafond ni lien suivi : la restauration, depuis l'arbre extrait.
+pub(crate) fn copy_path(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    Collect::bounded(u64::MAX).copy(src, dst, "")
 }
 
 pub(crate) fn sha256_of(p: &Path) -> anyhow::Result<String> {
@@ -602,6 +652,9 @@ mod alert_tests;
 
 #[cfg(test)]
 mod kit_tests;
+
+#[cfg(test)]
+mod links_tests;
 
 #[cfg(test)]
 mod provider_tests;
