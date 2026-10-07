@@ -3217,7 +3217,7 @@ dans un dossier, elle est copiée sous un nom provisoire, sa somme SHA-256 véri
 renommée. La rotation garde 7 quotidiennes, 4 hebdomadaires et 12 mensuelles
 (`keep_daily`, `keep_weekly`, `keep_monthly`), manifestes compris. Une sauvegarde part
 chaque nuit à l'heure de `backup.cron` (4 h par défaut, vide pour désactiver) ; un échec
-arrive sur Telegram, jamais en silence.
+arrive sur Telegram, jamais en silence (voir aussi la surveillance, plus bas).
 
 **Phrase de passe perdue.** Réponse honnête : les archives sont perdues. Elles sont
 chiffrées pour que personne d'autre ne les lise, et personne veut dire aussi le
@@ -3325,8 +3325,21 @@ vraiment à faire : modèles locaux à retélécharger, commandes de serveurs MC
 cette machine, secret illisible au moment de la sauvegarde. `--no-start` s'arrête avant le
 service.
 
-`penelope doctor` suit l'âge de la dernière sauvegarde et alerte au-delà de 48 h, et
-`self_status` le sait : « ta dernière sauvegarde date de cette nuit ».
+### Surveillance et dossier local
+
+Dès qu'aucune sauvegarde n'a réussi depuis **24 h** (ou depuis la mise en route de la
+surveillance, s'il n'y en a jamais eu), une alerte part au foyer avec la cause connue
+(dernier échec, aucun fournisseur, `backup.cron` vide, daemon arrêté à l'heure dite) et la
+commande pour relancer ; elle se répète une fois par jour, pas plus. L'échec de la nuit,
+déjà dit le matin même, vaut l'avis du jour. `penelope doctor` passe en rouge au même seuil
+et donne la cause du dernier échec ; `self_status` le sait : « ta dernière sauvegarde date
+de cette nuit ». Le digest du matin porte une ligne : « Sauvegarde : ✅ cette nuit,
+137 Mo, S3 », ou « ❌ » avec la cause et la commande.
+
+Le dossier local `backups/` n'est pas une seconde rotation : après chaque sauvegarde
+réussie, il ne garde que la dernière archive et le dernier instantané de base
+(`backup.keep_local`, 1 par défaut). Quand le fournisseur `dir` est ce dossier même, c'est
+sa rotation qui vaut.
 
 ```bash
 penelope audit-verify

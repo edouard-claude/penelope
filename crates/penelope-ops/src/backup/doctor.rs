@@ -18,8 +18,15 @@ pub async fn status(s: &Services) -> Value {
         s.platform.dirs.as_ref(),
         penelope_platform::dirs::home_dir().as_deref(),
     );
+    let last_error: Option<Value> = s
+        .kv_get(LAST_ERROR_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok());
     json!({
         "last": last,
+        "last_error": last_error,
         "provider": cfg.backup.effective_provider(),
         "location": target.as_ref().map(|t| t.location()).ok(),
         "provider_error": target.err().map(|e| e.to_string()),
@@ -134,7 +141,7 @@ async fn s3_doctor_check(s: &Services) -> DoctorCheck {
         "bucket `{bucket}` joignable ; dernière sauvegarde S3 il y a {age_h} h ({} Mo, {key})",
         last["pushed"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024)
     );
-    if age_h > 48 {
+    if age_h * 3_600_000 >= penelope_app::backup_state::ALERT_AFTER_MS {
         DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup".into()))
     } else {
         DoctorCheck::ok(ID, LABEL, detail)
@@ -158,12 +165,11 @@ pub async fn doctor_check(s: &Services) -> DoctorCheck {
         return DoctorCheck::fail(ID, LABEL, e, Some("penelope backup setup".into()));
     }
     let Some(created) = st["last"]["manifest"]["created_at"].as_str() else {
-        return DoctorCheck::fail(
-            ID,
-            LABEL,
-            "aucune sauvegarde enregistrée",
-            Some("penelope backup".into()),
-        );
+        let detail = match st["last_error"]["error"].as_str() {
+            Some(e) => format!("aucune sauvegarde réussie ; dernier échec : {e}"),
+            None => "aucune sauvegarde enregistrée".into(),
+        };
+        return DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup".into()));
     };
     let age_h = age_hours(s, created);
     // Durée : l'instantané de la base grossit avec elle, sa dérive se voit ici (#77).
@@ -185,12 +191,16 @@ pub async fn doctor_check(s: &Services) -> DoctorCheck {
         Some(at) => format!("déchiffrement vérifié le {}", local_day(s, at)),
         None => "déchiffrement jamais vérifié".into(),
     };
-    let detail = format!(
+    let mut detail = format!(
         "dernière il y a {age_h} h ({} Mo{duration}), vers {towards} ; {verified}",
         st["last"]["bytes"].as_u64().unwrap_or(0) / (1024 * 1024),
     );
-    if age_h > 48 {
-        DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup".into()))
+    if let Some(e) = st["last_error"]["error"].as_str() {
+        detail.push_str(&format!(" ; dernier échec : {e}"));
+    }
+    // Rouge au même seuil que l'alerte du foyer (#330) : 24 h sans sauvegarde réussie.
+    if age_h * 3_600_000 >= penelope_app::backup_state::ALERT_AFTER_MS {
+        DoctorCheck::fail(ID, LABEL, detail, Some("penelope backup".into())).critical()
     } else {
         DoctorCheck::ok(ID, LABEL, detail)
     }

@@ -140,7 +140,7 @@ async fn a_backup_neither_blocks_the_runtime_nor_the_writer() {
     .unwrap();
     let job = {
         let s = s.clone();
-        tokio::spawn(async move { run(&s, false, None).await })
+        tokio::spawn(async move { run(&s, true, None).await })
     };
     let mut during = 0;
     while !job.is_finished() {

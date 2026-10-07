@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attempts;
+pub mod backup_state;
 pub mod bus;
 pub mod catalog_refresh;
 pub mod channel;

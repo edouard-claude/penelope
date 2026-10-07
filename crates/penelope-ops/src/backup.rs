@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod alert;
 mod doctor;
 pub mod inventory;
 pub mod kit;
@@ -41,8 +42,7 @@ pub use doctor::{doctor_check, doctor_checks, status};
 
 /// Nom du secret qui porte la phrase de passe des sauvegardes.
 pub const PASSPHRASE_SECRET: &str = "backup_passphrase";
-/// Clé de suivi de la dernière sauvegarde réussie.
-const LAST_KEY: &str = "backup.last";
+use penelope_app::backup_state::{LAST_ERROR_KEY, LAST_KEY};
 
 /// Tables laissées hors de l'archive (#289) : chacune se recalcule depuis sa source,
 /// `messages` pour `messages_fts`, `mem_entries` pour `mem_fts`, `mcp_tools` pour
@@ -355,8 +355,30 @@ fn secret_passphrase(platform: &penelope_platform::Platform) -> anyhow::Result<S
 
 /// Sauvegarde complète : archive chiffrée et, si demandé, envoi au fournisseur.
 ///
-/// Le fournisseur est résolu **avant** l'archive : sans lui, rien n'est commencé.
+/// Le fournisseur est résolu **avant** l'archive : sans lui, rien n'est commencé. Une
+/// sauvegarde envoyée devient `backup.last` et efface le dernier échec ; un échec est
+/// retenu avec sa cause, pour l'alerte, `doctor` et le digest (#330). Le dossier local
+/// ne garde ensuite que `backup.keep_local` archives.
 pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Result<Value> {
+    match run_once(s, push, media).await {
+        Ok(report) => {
+            if push {
+                s.kv_set(LAST_KEY, &report.to_string()).await?;
+                s.kv_delete(LAST_ERROR_KEY).await?;
+            }
+            Ok(report)
+        }
+        Err(e) => {
+            if push {
+                let error = json!({"at_ms": s.clock.now_ms(), "error": e.to_string()});
+                let _ = s.kv_set(LAST_ERROR_KEY, &error.to_string()).await;
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn run_once(s: &Services, push: bool, media: Option<bool>) -> anyhow::Result<Value> {
     let cfg = s.config.config();
     let media = media.unwrap_or(cfg.backup.include_media);
     let target = if push {
@@ -373,8 +395,12 @@ pub async fn run(s: &Services, push: bool, media: Option<bool>) -> anyhow::Resul
     if let Some(target) = &target {
         report["pushed"] = provider::push(s, target, &archive, &report).await?;
     }
-
-    s.kv_set(LAST_KEY, &report.to_string()).await?;
+    // Le dossier local n'est pas une deuxième rotation (#330) : la dernière archive
+    // suffit, sauf s'il est lui-même le dossier du fournisseur.
+    let local = archive.parent().map(Path::to_path_buf).unwrap_or_default();
+    let is_provider = matches!(&target, Some(provider::Target::Dir { path, .. }) if *path == local);
+    let keep = (cfg.backup.keep_local as usize).max(usize::from(!push));
+    report["pruned_local"] = json!(alert::prune_local(&local, keep, !is_provider));
     let _ = s
         .events
         .append(EventDraft::new(
@@ -404,6 +430,10 @@ pub async fn rpc(s: &Services, p: &Value) -> anyhow::Result<Value> {
             s.clock.now_rfc3339().replace(':', "-")
         ));
         let took = s.store.snapshot_to(dest.clone()).await?;
+        let keep = (s.config.config().backup.keep_local as usize).max(1);
+        if let Some(dir) = dest.parent() {
+            alert::prune_local(dir, keep, false);
+        }
         return Ok(json!({"path": dest, "snapshot_ms": took.as_millis() as u64}));
     }
     let push = p.get("push").and_then(|v| v.as_bool()).unwrap_or(true);
@@ -464,10 +494,17 @@ pub async fn nightly_tick(
     s: &Services,
     messenger: Option<Arc<dyn Messenger>>,
 ) -> anyhow::Result<()> {
-    let cfg = s.config.config();
-    if cfg.backup.cron.trim().is_empty() {
+    if s.config.config().backup.cron.trim().is_empty() {
         return Ok(());
     }
+    nightly_run(s, messenger.clone()).await?;
+    // Aucune sauvegarde réussie depuis 24 h : dit une fois par jour, après la nuit, dont
+    // l'échec vaut l'avis du jour (#330).
+    alert::tick(s, messenger.as_ref()).await
+}
+
+async fn nightly_run(s: &Services, messenger: Option<Arc<dyn Messenger>>) -> anyhow::Result<()> {
+    let cfg = s.config.config();
     let Ok(cron) = penelope_kernel::cron::Cron::parse(&cfg.backup.cron) else {
         tracing::warn!(cron = %cfg.backup.cron, "backup.cron illisible");
         return Ok(());
@@ -498,9 +535,14 @@ pub async fn nightly_tick(
                 let _ = m
                     .send_text(
                         &origin,
-                        &format!("⚠️ La sauvegarde de cette nuit a échoué : {e}"),
+                        &format!(
+                            "⚠️ La sauvegarde de cette nuit a échoué : {e}. Relancer : \
+                             `penelope backup`."
+                        ),
                     )
                     .await;
+                // Ce message vaut l'alerte du jour : pas de second avis dans la foulée.
+                alert::said(s).await;
             }
         }
     }
@@ -554,6 +596,9 @@ pub(crate) fn sha256_of(p: &Path) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod fake_s3;
+
+#[cfg(test)]
+mod alert_tests;
 
 #[cfg(test)]
 mod kit_tests;
