@@ -114,8 +114,16 @@ Ce que mesure chaque plafond :
 |---|---|
 | `maxUsd` | Coût facturé des appels du run, d'après le ledger d'usage : la borne de référence |
 | `maxTokens` | Tokens **facturés** : entrée hors cache plus sortie. Un préfixe servi par le cache (au dixième du prix) ne compte pas : c'est l'économie voulue (décision 0008) |
-| `maxWallMs` | Durée de travail du run, depuis son démarrage ; l'attente d'une étape `user` (une carte laissée une nuit) ne compte pas (1.0.20, #193) |
+| `maxCachedTokens` | Tokens servis depuis le cache, comptés **à part** (1.0.48, #337). Optionnel : absent ou `0`, sans plafond ; le compteur s'affiche quand même |
+| `maxWallMs` | Durée de **travail** du run, depuis son démarrage : le temps passé `paused` ou `blocked` (1.0.48, #337) et l'attente d'une étape `user` (une carte laissée une nuit, 1.0.20, #193) ne comptent pas. `0` : sans plafond |
 | `maxIterations` | Étapes exécutées |
+
+`/runs` (écran d'un run), la carte de progression et `penelope wf runs` montrent chaque
+plafond face à sa consommation :
+
+```
+Budget : durée 12/120 min · tokens 31 k/2 M · cache 1,2 M · coût 0.40/5.00 $ · itérations 7/40
+```
 
 Avant 0.17.20, `maxTokens` comptait l'entrée entière : un run d'agent qui renvoie un
 préfixe de 40 000 tokens à chaque appel se bloquait vers 2 millions de tokens à moins de
@@ -127,12 +135,31 @@ tokens facturés sur 300000) ») et la commande qui la relève, pour ce run seul
 
 ```bash
 penelope wf control <run> budget --tokens 4000000 --usd 10
+penelope wf control <run> budget --minutes 240 --iterations 80 --cached-tokens 50000000
 ```
 
 Le relèvement laisse une trace (`workflow.budget_raised`) ; `resume` reprend ensuite à
-l'étape courante, sans rejouer les effets faits. Un `resume` sur un run encore au-dessus de
-sa borne répond « toujours bloqué : … » sans changer son état. Relever le plafond de la
-session (`session budget`) ne relève pas celui d'un run.
+l'étape courante, sans rejouer les effets faits. Un `resume` sur un run encore au-dessus
+d'une borne, quelle qu'elle soit (durée et itérations comprises), répond « reprise
+impossible, toujours bloqué : … » avec la commande qui la relève, sans changer son état :
+il n'annonce plus `running` pour se rebloquer la seconde d'après (#337). Relever le
+plafond de la session (`session budget`) ne relève pas celui d'un run.
+
+### Plafond d'appels d'une étape
+
+Un tour d'étape `agent` ou `sub_agent` a droit à `maxCalls` appels au modèle
+(`workflows.step_max_calls`, 60 par défaut ; une conversation garde ses 24). Arrivée au
+plafond sans `step_done()`, l'étape ne s'arrête pas d'emblée : les appels restés en
+attente sont fermés (« non exécuté »), puis un **tour de reprise** lui demande de faire le
+point avec `session_notes` (fait, reste, prochaine action) et de conclure, ou de
+continuer avec un plafond neuf. Il lui est accordé au plus `maxTurns` fois
+(`workflows.step_max_turns`, 2 par défaut) ; au-delà, l'étape échoue en le disant. Une
+étape qui sait qu'il lui faut davantage rend `return_value(result="partial")` puis
+`step_done()` : la transition décide, plutôt qu'un échec.
+
+```json
+{ "id": "dev", "type": "agent", "prompt": "…", "maxCalls": 120, "maxTurns": 3 }
+```
 
 `admission` décide de ce qui arrive quand un run du même workflow tourne déjà :
 
@@ -154,8 +181,8 @@ par identifiant.
 
 | Type | Champs propres | Ce qu'il fait |
 |---|---|---|
-| `agent` | `prompt` (obligatoire), `nudgePrompt`, `model`, `tools`, `agentId`, `context` | Un tour d'agent dans la session du run, ou dans une session neuve (`context: fresh`) |
-| `sub_agent` | `prompt` (obligatoire), `outputSchema`, `subAgentType` | Un sous-agent isolé qui rend une sortie structurée |
+| `agent` | `prompt` (obligatoire), `nudgePrompt`, `model`, `tools`, `agentId`, `context`, `maxCalls`, `maxTurns` | Un tour d'agent dans la session du run, ou dans une session neuve (`context: fresh`) |
+| `sub_agent` | `prompt` (obligatoire), `outputSchema`, `subAgentType`, `maxCalls`, `maxTurns` | Un sous-agent isolé qui rend une sortie structurée |
 | `shell` | `command` (obligatoire), `cwd`, `successExitCodes`, `network` | Une commande, sous bac à sable ; réseau coupé sauf `network: true` (montré dans l'aperçu) ou `sandbox.shell_network` |
 | `tool` | `tool` (obligatoire), `args` | Un outil natif ou MCP, arguments validés contre son schéma |
 | `user` | `template` (obligatoire), `choices` (non vide), `input` | Une question au propriétaire sur Telegram |

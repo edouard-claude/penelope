@@ -118,6 +118,14 @@ pub struct Budget {
     pub max_tokens: u64,
     #[serde(rename = "maxWallMs")]
     pub max_wall_ms: u64,
+    /// Tokens servis depuis le cache, comptés à part des tokens facturés (#337) ; 0 : sans
+    /// plafond.
+    #[serde(rename = "maxCachedTokens", skip_serializing_if = "is_zero")]
+    pub max_cached_tokens: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl Default for Budget {
@@ -126,6 +134,7 @@ impl Default for Budget {
             max_usd: 5.0,
             max_tokens: 2_000_000,
             max_wall_ms: 7_200_000,
+            max_cached_tokens: 0,
         }
     }
 }
@@ -206,6 +215,22 @@ pub struct Step {
     /// étapes, seulement sa consigne et les sorties rendues avant elle (#191).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub context: String,
+    /// `agent`, `sub_agent` : appels au modèle d'un tour de l'étape, avant le tour de
+    /// reprise (#337) ; absent : `workflows.step_max_calls`.
+    #[serde(
+        rename = "maxCalls",
+        alias = "max_calls",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_calls: Option<u32>,
+    /// Tours de reprise accordés à une étape arrivée au plafond sans `step_done()` (#337) ;
+    /// absent : `workflows.step_max_turns`.
+    #[serde(
+        rename = "maxTurns",
+        alias = "max_turns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_turns: Option<u32>,
 
     // --- shell ---
     /// Chaîne, ou table par OS (`unix`, `macos`, `linux`, `windows`), §2.10.
@@ -293,6 +318,8 @@ impl Default for Step {
             tools: Vec::new(),
             output_schema: None,
             context: String::new(),
+            max_calls: None,
+            max_turns: None,
             command: Value::Null,
             cwd: String::new(),
             success_exit_codes: vec![0],

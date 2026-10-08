@@ -322,6 +322,7 @@ fn limits_are_checked() {
         max_usd: 5.0,
         max_tokens: 1000,
         max_wall_ms: 60_000,
+        max_cached_tokens: 0,
     };
     let base = Run {
         id: "r".into(),
@@ -337,6 +338,9 @@ fn limits_are_checked() {
         workdir: None,
         spent_usd: 0.0,
         spent_tokens: 0,
+        spent_cached_tokens: 0,
+        held_ms: 0,
+        held_since_ms: None,
         started_at: "2026-01-01T00:00:00Z".into(),
         finished_at: None,
         result: None,
@@ -415,3 +419,5 @@ async fn a_run_created_under_a_chosen_id_exists_once() {
     assert_eq!(again.params, json!({"x": 1}));
     assert_eq!(rs.list(None, 10).await.unwrap().len(), 1);
 }
+
+mod budget;

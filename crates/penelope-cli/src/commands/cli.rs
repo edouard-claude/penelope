@@ -637,7 +637,8 @@ pub enum WfCmd {
     },
     /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`,
     /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question, ou
-    /// `budget --usd <montant> --tokens <nombre>` pour relever les plafonds du run.
+    /// `budget --usd <montant> --tokens <nombre> --cached-tokens <nombre> --minutes <durée>
+    /// --iterations <nombre>` pour relever les plafonds du run.
     Control {
         run: String,
         op: String,
@@ -649,6 +650,12 @@ pub enum WfCmd {
         usd: Option<f64>,
         #[arg(long)]
         tokens: Option<u64>,
+        #[arg(long)]
+        cached_tokens: Option<u64>,
+        #[arg(long)]
+        minutes: Option<u64>,
+        #[arg(long)]
+        iterations: Option<u64>,
     },
 }
 

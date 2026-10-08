@@ -204,3 +204,16 @@ pub(super) const SQL_0027: &str = r#"
 ALTER TABLE quiet_queue ADD COLUMN schedule TEXT;
 CREATE UNIQUE INDEX quiet_queue_schedule ON quiet_queue(schedule) WHERE schedule IS NOT NULL;
 "#;
+
+/// Budget d'un run lisible et juste (#337) : les tokens servis depuis le cache ont leur
+/// compteur, à part des tokens facturés ; le temps passé `paused` ou `blocked` s'accumule
+/// dans `held_ms` (l'attente en cours part de `held_since_ms`) et sort de la durée
+/// maximale. Un run déjà arrêté à la montée compte son arrêt depuis sa dernière écriture.
+pub(super) const SQL_0028: &str = r#"
+ALTER TABLE workflow_runs ADD COLUMN spent_cached_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflow_runs ADD COLUMN held_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflow_runs ADD COLUMN held_since_ms INTEGER;
+UPDATE workflow_runs
+   SET held_since_ms = CAST(strftime('%s', updated_at) AS INTEGER) * 1000
+ WHERE state IN ('paused','blocked');
+"#;

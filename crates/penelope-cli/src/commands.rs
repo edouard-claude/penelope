@@ -152,6 +152,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Schedule(ScheduleCmd::List) if !cli.json => {
             println!("{}", render_schedule_list(&value));
         }
+        Command::Wf(WfCmd::Runs) if !cli.json => {
+            println!("{}", render_run_list(&value));
+        }
         Command::Session(SessionCmd::List) if !cli.json => {
             println!("{}", render_session_list(&value));
         }

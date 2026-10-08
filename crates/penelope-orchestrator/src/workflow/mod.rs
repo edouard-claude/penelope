@@ -10,7 +10,9 @@
 //! `wf.<quoi>.<run>.<étape>.<itération>` : une boucle qui revient sur une étape repart
 //! d'une page blanche, une reprise après crash retrouve la sienne.
 
-use penelope_agent::{AgentLoop, MemoryConversation, NullSink, TurnOutcome, TurnSpec};
+use penelope_agent::{
+    AgentLoop, Conversation, MemoryConversation, NullSink, TurnOutcome, TurnSpec,
+};
 use penelope_app::bus::Origin;
 use penelope_app::helpers::step_done_key;
 use penelope_app::ports::Slot;
@@ -219,6 +221,7 @@ async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
     format!("Brief de la conversation qui a lancé ce run :\n{brief}\n\n{prompt}")
 }
 
+mod budget;
 mod context;
 mod control;
 mod delivery;
@@ -233,18 +236,20 @@ mod step_shell_tool;
 mod step_user;
 mod step_verify;
 
+pub use budget::{budget_view, effective_budget, raise_budget, runs_listing};
+use budget::{limit_reason, limits_now};
 pub use context::Context;
 pub use control::{answer, control, form_of};
 use delivery::delivery_step;
-use driver::{asked_since, finish, limit_reason, refresh_spent, session_metadata};
-pub use driver::{drive, drive_all, driver_loop, effective_budget, raise_budget};
+use driver::{asked_since, finish, owner_wait_ms, session_metadata};
+pub use driver::{drive, drive_all, driver_loop};
 pub use orchestrator::WorkflowOrchestrator;
 use orchestrator::progress;
 pub use plan_run::{Launched, go as go_plan, plan_runs_of, workflow_of};
 use plan_run::{fresh_session, plan_link, prior_outputs};
 use start::{first_verdict, workdir_for};
 pub use start::{resolve_params, start_run, start_run_briefed};
-pub use step_agent::{SubAgentTask, run_sub_agent};
+pub use step_agent::{CallLimits, SubAgentTask, run_sub_agent};
 use step_agent::{agent_step, extract_json, send_approval_once, sub_agent_step};
 use step_compose::{parallel_step, wait_step, workflow_step};
 use step_ctx::{StepCtx, execute_step, fallbacks_of};

@@ -50,7 +50,7 @@ impl Rpc {
                     })).collect::<Vec<_>>(),
                 }))
             }
-            method::WF_RUNS => Ok(serde_json::to_value(s.runs.list(None, 50).await?)?),
+            method::WF_RUNS => penelope_orchestrator::workflow::runs_listing(s, 50).await,
             method::WF_TRACE => {
                 let id = required_str(p, "run")?;
                 Ok(json!(s.runs.trace(&id).await?))
@@ -101,8 +101,7 @@ impl Rpc {
                     return penelope_orchestrator::workflow::raise_budget(
                         &context_of(&self.daemon),
                         &run,
-                        p.get("usd").and_then(|v| v.as_f64()),
-                        p.get("tokens").and_then(|v| v.as_u64()),
+                        p,
                     )
                     .await;
                 }

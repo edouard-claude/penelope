@@ -233,15 +233,14 @@ impl TelegramGateway {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("run `{id}` introuvable"))?;
             let state = r.state.as_str();
+            // Chaque plafond face à sa consommation (#337).
             let mut t = format!(
-                "{} **{}** · {state}\n`{}`\nÉtape : `{}` · itérations {}/{} · {:.2} $\nDémarré : {}",
+                "{} **{}** · {state}\n`{}`\nÉtape : `{}`\nBudget : {}\nDémarré : {}",
                 run_icon(state),
                 r.workflow_id,
                 r.id,
                 r.current_step.as_deref().unwrap_or("-"),
-                r.iterations,
-                r.max_iterations,
-                r.spent_usd,
+                penelope_orchestrator::workflow::budget_view(s, &r).await,
                 r.started_at.get(..16).unwrap_or(&r.started_at)
             );
             if r.params.as_object().is_some_and(|o| !o.is_empty()) {

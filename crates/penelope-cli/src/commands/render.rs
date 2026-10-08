@@ -111,6 +111,28 @@ pub(super) fn render_schedule_list(v: &Value) -> String {
     output::table(&rows)
 }
 
+/// `penelope wf runs` : un run par ligne, avec sa consommation face à chacun de ses
+/// plafonds (#337).
+pub(super) fn render_run_list(v: &Value) -> String {
+    let list = v.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        return "Aucun run.".into();
+    }
+    let rows: Vec<Value> = list
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r["id"],
+                "workflow": r["workflow_id"],
+                "état": r["state"],
+                "étape": r["current_step"].as_str().unwrap_or("-"),
+                "budget": r["budget"].as_str().unwrap_or(""),
+            })
+        })
+        .collect();
+    output::table(&rows)
+}
+
 /// Colonne « trousseau » de `penelope mcp list` : un serveur distant n'a pas de processus
 /// local, donc rien à dire (issue #122).
 pub(super) fn keychain_cell(s: &Value) -> &'static str {

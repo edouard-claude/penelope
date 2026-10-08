@@ -653,6 +653,11 @@ pub struct Workflows {
     pub max_depth: u32,
     /// Itérations au plus d'un run sans réglage propre. Sans effet dans cette version.
     pub default_max_iterations: u32,
+    /// Appels au modèle d'un tour d'étape `agent` ou `sub_agent` sans `maxCalls` (#337).
+    pub step_max_calls: u32,
+    /// Tours de reprise d'une étape arrivée au plafond d'appels sans `step_done()`, sans
+    /// `maxTurns` (#337) : chacun lui redonne son plafond après un point d'étape.
+    pub step_max_turns: u32,
 }
 
 impl Default for Workflows {
@@ -661,6 +666,8 @@ impl Default for Workflows {
             workspace_retention_days: 7,
             max_depth: 3,
             default_max_iterations: 40,
+            step_max_calls: 60,
+            step_max_turns: 2,
         }
     }
 }

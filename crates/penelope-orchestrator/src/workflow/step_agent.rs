@@ -80,7 +80,12 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
     let exec = ctx.executor_in(&session).await;
     let mut allowed = step.tools.clone();
     if !allowed.is_empty() {
-        for always in ["step_done", "return_value", "session_metadata"] {
+        for always in [
+            "step_done",
+            "return_value",
+            "session_metadata",
+            "session_notes",
+        ] {
             if !allowed.iter().any(|t| t == always) {
                 allowed.push(always.into());
             }
@@ -91,6 +96,14 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
     if let Some(m) = &mcp {
         tools.extend(m.eager_tools().await);
     }
+    // Plafond d'appels d'un tour de l'étape, et tours de reprise au-delà (#337).
+    let limits = call_limits(ctx);
+    let turns_key = visit_key("turns", run, &step.id);
+    let mut turns: u32 = s
+        .kv_get(&turns_key)
+        .await?
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
     let spec = TurnSpec {
         session_id: session.clone(),
         run_id: Some(run.id.clone()),
@@ -114,7 +127,9 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         // Une étape longue se compacte comme une conversation (#335).
         let conv = SessionConversation::new(s.clone(), &session, &model_id, tiers, 0)
             .with_compactor(Arc::new(compactor(ctx.d)));
-        let outcome = AgentLoop::new(ctx.d.agent.clone(), provider.clone())
+        let mut agent = AgentLoop::new(ctx.d.agent.clone(), provider.clone());
+        agent.max_iterations = limits.calls;
+        let outcome = agent
             .run_conversation(&spec, &conv, &exec, &NullSink)
             .await?;
         if let TurnOutcome::AwaitingApproval { approval_id } = &outcome {
@@ -136,6 +151,26 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         }
         match outcome {
             TurnOutcome::Cancelled => return Ok(StepOutcome::Waiting("interrompu".into())),
+            // Plafond atteint sans `step_done()` : un tour de reprise fait le point et
+            // conclut ou continue, avant l'échec (#337). Le 07/10, une spécification a
+            // passé ses 24 appels à lire le dépôt, et l'étape a échoué d'emblée.
+            TurnOutcome::Failed { error } if error.starts_with(penelope_agent::CALLS_EXHAUSTED) => {
+                turns += 1;
+                if turns > limits.turns {
+                    return Ok(done(
+                        StepResult::Error,
+                        json!({"error": format!(
+                            "l'étape a épuisé ses {} appels, {} tour(s) de reprise compris, \
+                             sans `step_done()`",
+                            limits.calls, limits.turns
+                        )}),
+                    ));
+                }
+                s.kv_set(&turns_key, &turns.to_string()).await?;
+                close_pending(&conv).await?;
+                record_user(s, &session, &recovery_prompt(&limits, turns)).await?;
+                continue;
+            }
             TurnOutcome::Failed { error } => {
                 return Ok(done(StepResult::Error, json!({"error": error})));
             }
@@ -177,6 +212,54 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
         record_user(s, &session, &format!("[relance du workflow] {nudge}")).await?;
         s.kv_set(&started_key, &nudges.to_string()).await?;
     }
+}
+
+/// Plafond d'appels d'un tour d'étape et tours de reprise accordés (#337).
+pub struct CallLimits {
+    pub calls: u32,
+    pub turns: u32,
+}
+
+/// Ceux de l'étape (`maxCalls`, `maxTurns`), sinon `workflows.step_max_calls` et
+/// `workflows.step_max_turns`.
+pub(super) fn call_limits(ctx: &StepCtx<'_>) -> CallLimits {
+    let cfg = ctx.s().config.config();
+    CallLimits {
+        calls: ctx
+            .step
+            .max_calls
+            .unwrap_or(cfg.workflows.step_max_calls)
+            .max(1),
+        turns: ctx.step.max_turns.unwrap_or(cfg.workflows.step_max_turns),
+    }
+}
+
+/// Consigne du tour de reprise : faire le point, puis conclure ou continuer.
+pub(super) fn recovery_prompt(limits: &CallLimits, turn: u32) -> String {
+    format!(
+        "[reprise du workflow, tour {turn}/{}] Tu as utilisé les {} appels de ce tour sans \
+         appeler `step_done()`. Fais d'abord le point avec `session_notes` : ce qui est fait, \
+         ce qui reste, la prochaine action. Puis conclus (`return_value` si un résultat est \
+         attendu, puis `step_done()`), ou continue : ce tour te redonne {} appels. S'il en \
+         faut davantage, dis-le dans tes notes, puis `return_value(result=\"partial\")` et \
+         `step_done()` : le workflow décide de la suite au lieu d'échouer.",
+        limits.turns, limits.calls, limits.calls
+    )
+}
+
+/// Ferme les appels restés sans résultat au plafond, avant la consigne de reprise : un
+/// message utilisateur après eux les ferait abandonner sans trace. Le modèle les relance
+/// s'il en a encore besoin.
+async fn close_pending(conv: &dyn penelope_agent::Conversation) -> anyhow::Result<()> {
+    for call in penelope_agent::pending_calls(&conv.tail().await?) {
+        let closed = ChatMessage::tool_result(
+            &call.id,
+            &call.name,
+            "non exécuté : plafond d'appels du tour atteint, voir la consigne de reprise",
+        );
+        conv.record(&closed, false).await?;
+    }
+    Ok(())
 }
 
 fn run_state_line(ctx: &StepCtx<'_>) -> String {
@@ -271,6 +354,9 @@ pub struct SubAgentTask<'a> {
     /// Liste blanche d'outils ; vide : les outils natifs en lecture.
     pub tools: &'a [String],
     pub workspaces: Vec<std::path::PathBuf>,
+    /// Plafond d'appels et tours de reprise d'une étape `sub_agent` (#337) ; `None` : un
+    /// tour au plafond de la conversation.
+    pub limits: Option<CallLimits>,
 }
 
 pub async fn run_sub_agent(
@@ -286,6 +372,7 @@ pub async fn run_sub_agent(
         model_id,
         tools: step_tools,
         workspaces,
+        limits,
     } = task;
     let s = &d.services;
     let provider = d.provider_for(model_id).await?;
@@ -317,10 +404,30 @@ pub async fn run_sub_agent(
         allowed_tools: allowed,
         cancel: cancel.clone(),
     };
-    let outcome = AgentLoop::new(d.agent.clone(), provider)
-        .run_conversation(&spec, &conv, &exec, &NullSink)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut agent = AgentLoop::new(d.agent.clone(), provider);
+    let mut turn = 0;
+    let outcome = loop {
+        if let Some(l) = &limits {
+            agent.max_iterations = l.calls;
+        }
+        let outcome = agent
+            .run_conversation(&spec, &conv, &exec, &NullSink)
+            .await
+            .map_err(|e| e.to_string())?;
+        // Au plafond, un tour de reprise sur le même échange, comme une étape `agent`.
+        match (&outcome, &limits) {
+            (TurnOutcome::Failed { error }, Some(l))
+                if error.starts_with(penelope_agent::CALLS_EXHAUSTED) && turn < l.turns =>
+            {
+                turn += 1;
+                close_pending(&conv).await.map_err(|e| e.to_string())?;
+                conv.record(&ChatMessage::user(recovery_prompt(l, turn)), false)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            _ => break outcome,
+        }
+    };
     match outcome {
         TurnOutcome::Answered { text, .. } => Ok(text),
         TurnOutcome::AwaitingApproval { .. } => {
@@ -394,6 +501,7 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
                 model_id: &model_id,
                 tools: &step.tools,
                 workspaces: vec![ctx.workdir()],
+                limits: Some(call_limits(ctx)),
             },
             ctx.cancel,
         )

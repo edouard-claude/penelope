@@ -288,6 +288,7 @@ fn budget_is_mandatory() {
         max_usd: 0.0,
         max_tokens: 0,
         max_wall_ms: 0,
+        max_cached_tokens: 0,
     };
     assert!(
         validate(&w, Some("demo"), &known())

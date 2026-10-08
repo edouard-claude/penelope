@@ -6,7 +6,7 @@
 {"type":"outcome","step":6,"input":"rpc : wf.run","error":{"code":-32603,"message":"paramètre inconnu `inconnu` pour `build-verify` (attendus : objectif)"}}
 {"type":"outcome","step":7,"input":"rpc : wf.runs","result":{"/*/id":["{{run:1}}"],"/*/workflow_id":["build-verify"],"/*/state":["running"]}}
 {"type":"outcome","step":8,"input":"rpc : wf.trace","result":[]}
-{"type":"outcome","step":9,"input":"rpc : wf.control","result":{"run":"{{run:1}}","max_usd":3.0,"max_tokens":2000000,"spent_usd":0.0,"spent_tokens":0,"still_blocked":null}}
+{"type":"outcome","step":9,"input":"rpc : wf.control","result":{"run":"{{run:1}}","max_usd":3.0,"max_tokens":2000000,"max_cached_tokens":0,"max_wall_ms":7200000,"max_iterations":40,"spent_usd":0.0,"spent_tokens":0,"spent_cached_tokens":0,"still_blocked":null}}
 {"type":"outcome","step":10,"input":"rpc : wf.control","result":{"state":"paused"}}
 {"type":"outcome","step":11,"input":"rpc : wf.control","result":{"state":"running"}}
 {"type":"outcome","step":12,"input":"rpc : wf.control","result":{"state":"cancelled"}}
@@ -17,7 +17,7 @@
 {"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
 {"type":"event","session":"{{session:2}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"workflow_run","parent_id":null}}
 {"type":"event","session":"{{session:2}}","seq":2,"kind":"workflow.started","payload":{"held":false,"parent":null,"run":"{{run:1}}","workflow":"build-verify"}}
-{"type":"event","session":"{{session:2}}","seq":3,"kind":"workflow.budget_raised","payload":{"max_tokens":2000000,"max_usd":3,"run":"{{run:1}}"}}
+{"type":"event","session":"{{session:2}}","seq":3,"kind":"workflow.budget_raised","payload":{"max_cached_tokens":0,"max_iterations":null,"max_tokens":2000000,"max_usd":3,"max_wall_ms":7200000,"run":"{{run:1}}"}}
 {"type":"event","session":null,"seq":2,"kind":"workflow.control","payload":{"op":"Pause","run":"{{run:1}}","state":"paused"}}
 {"type":"event","session":null,"seq":3,"kind":"workflow.control","payload":{"op":"Resume","run":"{{run:1}}","state":"running"}}
 {"type":"event","session":"{{session:2}}","seq":4,"kind":"workflow.finished","payload":{"reason":"annulé par le propriétaire","run":"{{run:1}}","state":"cancelled"}}

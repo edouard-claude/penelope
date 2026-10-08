@@ -579,6 +579,8 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `workflows.workspace_retention_days` | `7` | Durée de conservation de l'espace de travail d'un run terminé, en jours. |
 | `workflows.max_depth` | `3` | Profondeur maximale de sous-workflows. |
 | `workflows.default_max_iterations` | `40` | Itérations au plus d'un run sans réglage propre. Sans effet dans cette version. |
+| `workflows.step_max_calls` | `60` | Appels au modèle d'un tour d'étape `agent` ou `sub_agent` sans `maxCalls` (#337). |
+| `workflows.step_max_turns` | `2` | Tours de reprise d'une étape arrivée au plafond d'appels sans `step_done()`, sans `maxTurns` (#337) : chacun lui redonne son plafond après un point d'étape. |
 
 **[upgrade]**
 

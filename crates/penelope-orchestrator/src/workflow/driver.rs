@@ -108,10 +108,7 @@ async fn drive_claimed(
         let Some(wf) = workflow_of(s, &run).await else {
             return finish(d, &run, RunState::Failed, "workflow retiré du registre").await;
         };
-        let run = refresh_spent(s, run).await?;
-        let budget = effective_budget(s, &run, &wf.settings.budget).await;
-        let now = s.clock.now_ms() - owner_wait_ms(s, &run, &wf).await;
-        let limit = check_limits(&run, &budget, now);
+        let (run, budget, limit) = limits_now(s, run, &wf).await?;
         if limit != Limit::Ok {
             let reason = limit_reason(&limit, &run, &budget);
             return finish(d, &run, RunState::Blocked, &reason).await;
@@ -220,7 +217,7 @@ async fn drive_claimed(
 /// Temps passé à attendre le propriétaire (étapes `user`), attente en cours comprise. La
 /// borne de durée d'un run mesure son travail, pas le temps que prend une décision
 /// humaine : un gate de production approuvé le lendemain reste approuvable (#193).
-async fn owner_wait_ms(s: &Services, run: &Run, wf: &Workflow) -> i64 {
+pub(super) async fn owner_wait_ms(s: &Services, run: &Run, wf: &Workflow) -> i64 {
     let prefix = format!("wf.waited.{}.%", run.id);
     let answered: i64 = s
         .store
@@ -341,140 +338,6 @@ pub(super) async fn finish(
         d.workflows.wake();
     }
     Ok(state)
-}
-
-/// Coût du run d'après le ledger d'usage, pour les bornes de budget. Les tokens sont
-/// ceux **facturés** : l'entrée hors cache plus la sortie. Un préfixe servi par le cache
-/// (décision 0008, #40) est l'économie voulue, pas une dépense (issue #136).
-pub(super) async fn refresh_spent(s: &Services, mut run: Run) -> anyhow::Result<Run> {
-    let id = run.id.clone();
-    let (usd, tokens): (f64, i64) = s
-        .store
-        .read(move |c| {
-            Ok(c.query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0),
-                        COALESCE(SUM(MAX(prompt - cached, 0) + completion), 0)
-                 FROM usage WHERE run_id = ?1",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?)
-        })
-        .await?;
-    if (usd - run.spent_usd).abs() > f64::EPSILON || tokens as u64 != run.spent_tokens {
-        s.runs.set_spent(&run.id, usd, tokens as u64).await?;
-        run.spent_usd = usd;
-        run.spent_tokens = tokens as u64;
-    }
-    Ok(run)
-}
-
-fn budget_key(run_id: &str) -> String {
-    format!("run.budget.{run_id}")
-}
-
-/// Plafonds d'un run : ceux du workflow, relevés au besoin pour ce run seul par
-/// `wf control <run> budget` (issue #136).
-pub async fn effective_budget(
-    s: &Services,
-    run: &Run,
-    declared: &penelope_workflow::model::Budget,
-) -> penelope_workflow::model::Budget {
-    let mut b = *declared;
-    if let Ok(Some(raw)) = s.kv_get(&budget_key(&run.id)).await
-        && let Ok(v) = serde_json::from_str::<Value>(&raw)
-    {
-        if let Some(usd) = v["max_usd"].as_f64() {
-            b.max_usd = usd;
-        }
-        if let Some(tokens) = v["max_tokens"].as_u64() {
-            b.max_tokens = tokens;
-        }
-    }
-    b
-}
-
-/// Borne atteinte, avec ses chiffres et la commande qui la relève (issue #136).
-pub(super) fn limit_reason(
-    limit: &Limit,
-    run: &Run,
-    b: &penelope_workflow::model::Budget,
-) -> String {
-    let raise = |what: &str| format!("`penelope wf control {} budget {what}`", run.id);
-    match limit {
-        Limit::IterationsExhausted => format!(
-            "itérations épuisées ({} sur {})",
-            run.iterations, run.max_iterations
-        ),
-        Limit::BudgetUsd => format!(
-            "budget de {:.2} $ atteint ({:.2} $ dépensés) : {}",
-            b.max_usd,
-            run.spent_usd,
-            raise("--usd <montant>")
-        ),
-        Limit::BudgetTokens => format!(
-            "budget de tokens atteint ({} tokens facturés sur {}) : {}",
-            run.spent_tokens,
-            b.max_tokens,
-            raise("--tokens <nombre>")
-        ),
-        Limit::WallClock => format!("durée maximale atteinte ({} min)", b.max_wall_ms / 60_000),
-        Limit::Ok => String::new(),
-    }
-}
-
-/// Relève les plafonds d'un run, pour lui seul et avec trace (issue #136) : l'équivalent
-/// de `session budget` pour un run. Un run bloqué par la borne relevée redevient
-/// reprenable ; la reprise repart de l'étape courante, sans rejouer les effets faits.
-pub async fn raise_budget(
-    d: &Context,
-    run_id: &str,
-    usd: Option<f64>,
-    tokens: Option<u64>,
-) -> anyhow::Result<Value> {
-    let s = &d.services;
-    let run = s
-        .runs
-        .get(run_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("run {run_id} introuvable"))?;
-    if usd.is_none() && tokens.is_none() {
-        anyhow::bail!("rien à relever : `--usd <montant>` et/ou `--tokens <nombre>`");
-    }
-    let wf = workflow_of(s, &run)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("workflow retiré du registre"))?;
-    let mut b = effective_budget(s, &run, &wf.settings.budget).await;
-    if let Some(u) = usd {
-        b.max_usd = u;
-    }
-    if let Some(t) = tokens {
-        b.max_tokens = t;
-    }
-    s.kv_set(
-        &budget_key(run_id),
-        &json!({"max_usd": b.max_usd, "max_tokens": b.max_tokens}).to_string(),
-    )
-    .await?;
-    let _ = s
-        .events
-        .append(
-            EventDraft::new(
-                "workflow.budget_raised",
-                json!({"run": run_id, "max_usd": b.max_usd, "max_tokens": b.max_tokens}),
-            )
-            .session(&run.session_id),
-        )
-        .await;
-    let run = refresh_spent(s, run).await?;
-    let limit = check_limits(&run, &b, s.clock.now_ms());
-    Ok(json!({
-        "run": run_id,
-        "max_usd": b.max_usd,
-        "max_tokens": b.max_tokens,
-        "spent_usd": run.spent_usd,
-        "spent_tokens": run.spent_tokens,
-        "still_blocked": (limit != Limit::Ok).then(|| limit_reason(&limit, &run, &b)),
-    }))
 }
 
 pub(super) async fn session_metadata(s: &Services, session_id: &str) -> Value {
