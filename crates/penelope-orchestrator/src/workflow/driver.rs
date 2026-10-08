@@ -18,6 +18,7 @@ pub async fn driver_loop(d: Context) {
 /// Un passage : chaque run actif non piloté part dans sa propre tâche.
 pub async fn drive_all(d: &Context) -> anyhow::Result<usize> {
     admit_held(d).await?;
+    credits::resume_due(d).await?;
     let mut started = 0;
     for run in d.services.runs.list(Some(RunState::Running), 500).await? {
         if d.workflows.is_driving(&run.id) {

@@ -89,6 +89,11 @@ pub async fn control(
                 .await?;
             advanced.state
         }
+        Control::Resume => {
+            // Une reprise à la main lève la pause faute de crédits (#339).
+            credits::forget(s, run_id).await?;
+            s.runs.control(run_id, op).await?
+        }
         other => s.runs.control(run_id, other).await?,
     };
     let _ = s

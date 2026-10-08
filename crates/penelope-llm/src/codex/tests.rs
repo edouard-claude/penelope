@@ -299,6 +299,36 @@ async fn a_spent_quota_steps_aside_before_calling() {
     assert!(seen.lock().unwrap().is_empty(), "aucun appel n'est parti");
 }
 
+/// #339 : une fenêtre dont l'heure de remise à zéro est passée ne retient plus : le
+/// premier appel repart et sa réponse rafraîchit la jauge. Sans cela, le retrait durait
+/// jusqu'au redémarrage du daemon.
+#[tokio::test]
+async fn a_reset_window_no_longer_holds_calls_back() {
+    let (url, seen) = scripted_server(vec![(200, String::new())]).await;
+    let p = provider(&url, Default::default());
+    p.remember(Quota {
+        primary: Some(QuotaWindow {
+            used_percent: 100.0,
+            window_minutes: 300,
+            reset_at: now_ms() / 1000 - 5,
+        }),
+        ..Default::default()
+    });
+    let _ = p
+        .chat_stream(request("codex:gpt-6-astra"), CancelToken::new())
+        .await;
+    assert_eq!(seen.lock().unwrap().len(), 1, "l'appel est parti");
+    let e = LlmError::new(LlmErrorKind::RateLimited, "quota");
+    assert!(
+        !e.credits_exhausted(),
+        "une limite de débit n'est pas un crédit épuisé"
+    );
+    let mut e = e;
+    e.error_type = Some(USAGE_LIMIT_REACHED.into());
+    assert!(e.credits_exhausted());
+    assert!(LlmError::from_status(402, "{}").credits_exhausted());
+}
+
 /// #142 : le corps est celui de l'API Responses — items typés, outils à plat, pas de
 /// stockage côté serveur, cache de préfixe nommé.
 #[test]

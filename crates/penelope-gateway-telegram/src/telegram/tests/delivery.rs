@@ -148,12 +148,38 @@ async fn a_turn_out_of_calls_offers_to_continue() {
     )
     .await
     .unwrap();
+    // Crédits épuisés (#339) : une pause dite avec son retour, et « Reprendre ».
+    g.send_failure(
+        OWNER,
+        None,
+        None,
+        &sid,
+        &format!(
+            "{} : crédits Codex épuisés (quota ChatGPT atteint). Retour prévu à 17 h 40, au \
+             retour du quota.",
+            penelope_agent::CREDITS_EXHAUSTED
+        ),
+        None,
+    )
+    .await
+    .unwrap();
     g.send_failure(OWNER, None, None, &sid, "panne du fournisseur", None)
         .await
         .unwrap();
     g.flush_outbox().await.unwrap();
     let sent = t.calls_to(tg::SEND_MESSAGE).await;
-    let out_of_calls = &sent[sent.len() - 2];
+    let credits = &sent[sent.len() - 2];
+    let text = credits["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("⏸ Je me suis arrêtée là, crédits Codex épuisés"),
+        "{text}"
+    );
+    assert!(text.contains("17 h 40"), "{text}");
+    assert_eq!(
+        credits["reply_markup"]["inline_keyboard"][0][0]["text"],
+        "▶️ Reprendre"
+    );
+    let out_of_calls = &sent[sent.len() - 3];
     let text = out_of_calls["text"].as_str().unwrap();
     assert!(
         text.contains("24 appels") && text.contains("0.42 $"),

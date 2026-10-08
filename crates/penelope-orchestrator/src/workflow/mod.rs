@@ -224,6 +224,7 @@ async fn with_brief(ctx: &StepCtx<'_>, prompt: String) -> String {
 mod budget;
 mod context;
 mod control;
+mod credits;
 mod delivery;
 mod driver;
 mod orchestrator;

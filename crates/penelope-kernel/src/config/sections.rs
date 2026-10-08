@@ -658,6 +658,9 @@ pub struct Workflows {
     /// Tours de reprise d'une étape arrivée au plafond d'appels sans `step_done()`, sans
     /// `maxTurns` (#337) : chacun lui redonne son plafond après un point d'étape.
     pub step_max_turns: u32,
+    /// Un run mis en pause faute de crédits (quota Codex, budget journalier) reprend seul
+    /// au retour annoncé (#339) ; `false` : à la main, par « Reprendre ».
+    pub resume_on_quota: bool,
 }
 
 impl Default for Workflows {
@@ -668,6 +671,7 @@ impl Default for Workflows {
             default_max_iterations: 40,
             step_max_calls: 60,
             step_max_turns: 2,
+            resume_on_quota: true,
         }
     }
 }

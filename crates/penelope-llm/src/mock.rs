@@ -17,6 +17,9 @@ pub enum Scripted {
     /// Texte puis appels d'outils.
     ToolCalls(String, Vec<ToolCall>),
     Error(LlmErrorKind, String),
+    /// Quota du plan Codex épuisé (`usage_limit_reached`), avec le retour annoncé en
+    /// secondes s'il l'est (#339).
+    UsageLimit(Option<u64>),
     /// Erreur de dépassement de contexte, pour tester la compaction d'urgence.
     ContextOverflow,
     /// Texte puis images (`data:` URI), pour tester la génération d'image.
@@ -245,6 +248,16 @@ impl Provider for MockProvider {
         }
         if let Scripted::Error(kind, msg) = &scripted {
             return Err(LlmError::new(kind.clone(), msg.clone()));
+        }
+        if let Scripted::UsageLimit(wait) = &scripted {
+            let mut e = LlmError::new(
+                LlmErrorKind::RateLimited,
+                "quota ChatGPT atteint : The usage limit has been reached",
+            );
+            e.status = Some(429);
+            e.error_type = Some(crate::codex::USAGE_LIMIT_REACHED.into());
+            e.retry_after = *wait;
+            return Err(e);
         }
         if matches!(scripted, Scripted::ContextOverflow) {
             return Err(LlmError::context_length(

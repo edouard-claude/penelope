@@ -131,6 +131,24 @@ impl RetryPlan {
     /// d'attendre, pas de changer de modèle avant le flux.
     pub(crate) fn on_error(&mut self, e: &LlmError, phase: Phase, cancelled: bool) -> RetryAction {
         let retryable = penelope_llm::Router::should_fallback(e);
+        // Crédits épuisés (quota Codex, 402 OpenRouter) : jamais relancé sur le même
+        // modèle, les relances de la 1.0.40 ne s'y appliquent pas ; un repli configuré
+        // reste prioritaire, et il est annoncé (#339).
+        if e.credits_exhausted() {
+            if phase == Phase::AfterText {
+                return RetryAction::GiveUp;
+            }
+            self.take_over_fallbacks();
+            if self.attempt + 1 < self.candidates.len() {
+                self.retries = 0;
+                self.stream_retries = 0;
+                self.attempt += 1;
+                return RetryAction::Fallback {
+                    model_id: self.model().to_string(),
+                };
+            }
+            return RetryAction::GiveUp;
+        }
         match phase {
             Phase::AfterText => RetryAction::GiveUp,
             Phase::BeforeStream => {

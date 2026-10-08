@@ -172,7 +172,14 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                 continue;
             }
             TurnOutcome::Failed { error } => {
+                // Crédits épuisés : pause au point sûr, pas un échec d'étape (#339).
+                if let Some(stop) = credits::stop_of(s, &session, &error).await {
+                    return credits::pause(ctx, stop).await;
+                }
                 return Ok(done(StepResult::Error, json!({"error": error})));
+            }
+            TurnOutcome::BudgetExceeded { scope, .. } if scope == "jour" => {
+                return credits::pause(ctx, credits::daily_stop(s)).await;
             }
             TurnOutcome::BudgetExceeded { scope, .. } => {
                 // La carte « continuer ? » part au propriétaire : relever le plafond reprend
@@ -508,7 +515,16 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
         .await
         {
             Ok(t) => t,
-            Err(e) => return Ok(done(StepResult::Error, json!({"error": e}))),
+            Err(e) => {
+                // Crédits épuisés : pause, le sous-agent repartira à la reprise (#339).
+                if let Some(stop) = credits::stop_of(ctx.s(), &ctx.run.session_id, &e).await {
+                    return credits::pause(ctx, stop).await;
+                }
+                if e == "budget jour atteint" {
+                    return credits::pause(ctx, credits::daily_stop(ctx.s())).await;
+                }
+                return Ok(done(StepResult::Error, json!({"error": e})));
+            }
         };
         let Some(schema) = &step.output_schema else {
             return Ok(done(StepResult::Success, json!({"text": text})));

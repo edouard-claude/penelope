@@ -372,6 +372,33 @@ resté en vol au moment du crash devient une question, pas une seconde exécutio
 cargo test -p penelope-evals --test resilience
 ```
 
+### Crédits épuisés
+
+Sur des heures de travail, l'abonnement Codex peut atteindre sa limite, un crédit
+OpenRouter s'épuiser (402) ou le budget journalier (`budget.daily_usd`) être atteint
+(1.0.48, #339). Le run ne meurt pas : il se met en **pause au prochain point sûr**, la fin
+de l'appel d'outil en cours. Les résultats déjà rendus sont au journal, l'étape n'a pas de
+résultat enregistré, rien n'est perdu.
+
+- **Pas de boucle** : une limite d'usage n'est jamais relancée sur le même modèle (les
+  relances Codex de la 1.0.40 ne s'y appliquent pas). Un repli configuré
+  (`[models.profiles.<nom>].fallback`) reste prioritaire, et il est annoncé, jamais
+  silencieux ; sans repli (« rester sur Codex »), le run passe `paused`.
+- **Un message, une fois**, dans le sujet du run :
+  « ⏸ Je me suis arrêtée là, crédits Codex épuisés. Dernier point : story 12/53, étape
+  dev, commit `abc1234` poussé. Reprise prévue à 17 h 40, au retour du quota. » L'heure
+  vient du quota (`resets_at`, en-têtes `x-codex-*`) quand le fournisseur la donne ; pour
+  le budget journalier, c'est minuit chez le propriétaire.
+- **Reprise** automatique à l'heure dite si `workflows.resume_on_quota = true` (défaut) ;
+  sinon, ou sans heure connue (402 : il faut recharger), par ▶️ Reprendre sur le run dans
+  `/runs`, `/resume <run>` ou `penelope wf control <run> resume`. Le temps de pause sort
+  de la durée maximale du run.
+
+Un tour de conversation arrêté de même garde sa réponse partielle ; le message
+« ⏸ Je me suis arrêtée là, … » porte un bouton ▶️ Reprendre qui repart du même
+transcript. Une fenêtre de quota dont l'heure de remise à zéro est passée ne retient
+plus les appels : avant la 1.0.48, le retrait de Codex durait jusqu'au redémarrage.
+
 ## Workflows livrés
 
 | Identifiant | Rôle |

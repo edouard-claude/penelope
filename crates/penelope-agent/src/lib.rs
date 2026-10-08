@@ -58,6 +58,7 @@ pub use loop_abort::{LOOP_STOP_NOTE, last_result_of, split_choices};
 use model::fit_modalities;
 pub use pending::pending_calls;
 pub use penelope_app::conversation::{Compactor, Conversation, MemoryConversation};
+pub use penelope_app::credits::CREDITS_EXHAUSTED;
 pub use penelope_app::outcome::{NullSink, RecordingSink, TurnEvent, TurnOutcome, TurnSink};
 pub use penelope_app::tool_executor::{CallInfo, ToolExecutor};
 pub use penelope_llm::cache::{

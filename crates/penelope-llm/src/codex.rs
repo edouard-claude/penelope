@@ -171,6 +171,18 @@ impl Quota {
             .map(|w| w.used_percent / 100.0)
             .fold(0.0, f64::max)
     }
+    /// [`Quota::worst_ratio`] des seules fenêtres encore ouvertes à `now_s` : une fenêtre
+    /// dont l'heure de remise à zéro est passée ne compte plus. Sans cela, le retrait
+    /// avant l'appel durait jusqu'au redémarrage : plus aucun appel ne partait, donc plus
+    /// aucune jauge ne venait le lever (#339).
+    pub fn live_ratio(&self, now_s: i64) -> f64 {
+        [self.primary, self.secondary]
+            .into_iter()
+            .flatten()
+            .filter(|w| w.reset_at == 0 || w.reset_at > now_s)
+            .map(|w| w.used_percent / 100.0)
+            .fold(0.0, f64::max)
+    }
     /// Vrai si l'instantané ne dit rien.
     pub fn is_empty(&self) -> bool {
         self.primary.is_none() && self.secondary.is_none()
@@ -387,13 +399,14 @@ impl Provider for CodexProvider {
     async fn chat_stream(&self, req: ChatRequest, cancel: CancelToken) -> Result<ChunkStream> {
         // Quota épuisé : inutile d'appeler pour se faire refuser, le routeur se replie.
         let quota = self.quota();
-        if !quota.is_empty() && quota.worst_ratio() >= self.opts.quota_stop_ratio {
+        let ratio = quota.live_ratio(now_ms() / 1000);
+        if !quota.is_empty() && ratio >= self.opts.quota_stop_ratio {
             let mut e = LlmError::new(
                 LlmErrorKind::RateLimited,
                 format!(
                     "quota ChatGPT à {:.0} % de la fenêtre : Pénélope se met en retrait \
                      avant la panne",
-                    quota.worst_ratio() * 100.0
+                    ratio * 100.0
                 ),
             );
             e.error_type = Some(USAGE_LIMIT_REACHED.into());

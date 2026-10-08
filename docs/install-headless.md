@@ -581,6 +581,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `workflows.default_max_iterations` | `40` | Itérations au plus d'un run sans réglage propre. Sans effet dans cette version. |
 | `workflows.step_max_calls` | `60` | Appels au modèle d'un tour d'étape `agent` ou `sub_agent` sans `maxCalls` (#337). |
 | `workflows.step_max_turns` | `2` | Tours de reprise d'une étape arrivée au plafond d'appels sans `step_done()`, sans `maxTurns` (#337) : chacun lui redonne son plafond après un point d'étape. |
+| `workflows.resume_on_quota` | `true` | Un run mis en pause faute de crédits (quota Codex, budget journalier) reprend seul au retour annoncé (#339) ; `false` : à la main, par « Reprendre ». |
 
 **[upgrade]**
 
@@ -995,6 +996,13 @@ de 5 h, une fenêtre hebdomadaire). Pénélope le lit, le range, et l'affiche da
 `quota_stop_ratio` (0,95) : Pénélope se met en retrait **avant** l'appel et laisse le repli
 OpenRouter jouer, plutôt que d'aller chercher un refus. Un quota atteint n'est pas une
 panne : le message dit l'heure de retour.
+
+Sans repli (le choix de rester sur Codex), un quota épuisé n'est jamais relancé en boucle
+(1.0.48, #339) : un tour de conversation s'arrête sur « ⏸ Je me suis arrêtée là, crédits
+Codex épuisés … Retour prévu à 17 h 40 » avec ▶️ Reprendre ; un run de workflow passe
+`paused` au prochain point sûr, prévient une fois dans son sujet, et reprend seul à l'heure
+de retour (`workflows.resume_on_quota`, vrai par défaut). Une fenêtre dont l'heure de remise
+à zéro est passée ne retient plus les appels. Voir [workflows.md](workflows.md#crédits-épuisés).
 
 ### Inférence locale sur Mac
 

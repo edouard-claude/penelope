@@ -280,7 +280,8 @@
         "max_depth": "integer",
         "default_max_iterations": "integer",
         "step_max_calls": "integer",
-        "step_max_turns": "integer"
+        "step_max_turns": "integer",
+        "resume_on_quota": "bool"
       },
       "upgrade": {
         "channel": "string",

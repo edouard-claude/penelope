@@ -52,6 +52,16 @@ impl TelegramGateway {
                 ),
                 format!("▶️ Continuer ({n} appels de plus)"),
             )
+        } else if let Some(rest) = error.strip_prefix(penelope_agent::CREDITS_EXHAUSTED) {
+            // Crédits épuisés : une pause, dite une fois, avec le retour prévu ; le même
+            // bouton reprend sur le transcript, rien n'est perdu (#339).
+            (
+                format!(
+                    "⏸ Je me suis arrêtée là, {}",
+                    rest.trim_start_matches([' ', ':'])
+                ),
+                "▶️ Reprendre".to_string(),
+            )
         } else {
             (format!("❌ {error}"), "🔁 Réessayer".to_string())
         };
