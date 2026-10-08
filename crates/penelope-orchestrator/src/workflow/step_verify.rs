@@ -392,6 +392,7 @@ pub(super) async fn verify_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome
                 model_id: &model_id,
                 tools: &step.tools,
                 workspaces,
+                limits: None,
             },
             ctx.cancel,
         )

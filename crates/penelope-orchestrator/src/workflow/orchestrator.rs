@@ -33,9 +33,16 @@ pub(super) async fn progress(
             step.phase.as_str()
         ));
     }
+    // L'élément courant d'une liste déroulée (#338).
+    if let Some(line) = position_of(&d.services, run).await {
+        text.push_str(&format!("\nListe : {line}"));
+    }
+    // Chaque plafond face à sa consommation (#337).
+    let budget = effective_budget(&d.services, run, &wf.settings.budget).await;
+    let waited = owner_wait_ms(&d.services, run, wf).await;
     text.push_str(&format!(
-        "\nItérations : {}/{} · Coût : {:.2} $",
-        run.iterations, run.max_iterations, run.spent_usd
+        "\nBudget : {}",
+        penelope_workflow::runs::budget_line(run, &budget, d.services.clock.now_ms(), waited)
     ));
     let brief = brief_of(&d.services, &run.id).await;
     if !brief.is_empty() {
@@ -57,7 +64,7 @@ pub(super) async fn progress(
     if let Some(e) = run.error.as_ref().filter(|e| !e.is_empty()) {
         text.push_str(&format!("\nRaison : {e}"));
     }
-    if run.state == RunState::Blocked {
+    if matches!(run.state, RunState::Blocked | RunState::Paused) {
         text.push_str(&format!("\n\n`/resume {}` pour reprendre.", run.id));
     }
     if let Err(e) = m
@@ -197,6 +204,7 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
                 model_id: &model_id,
                 tools: &tools,
                 workspaces: penelope_executor::executor::default_workspaces(&self.context.services),
+                limits: None,
             },
             // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
             // sous-agent qui s'arrête ne touche pas au parent (issue #57).

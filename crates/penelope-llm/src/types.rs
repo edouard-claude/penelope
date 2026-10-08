@@ -445,6 +445,18 @@ impl LlmError {
         self
     }
 
+    /// Crédits du fournisseur épuisés : quota du plan Codex (`usage_limit_reached`, y
+    /// compris le retrait avant l'appel), abonnement sans ce modèle, ou 402 d'OpenRouter.
+    /// Une telle erreur ne se relance pas : il faut attendre le retour du quota ou une
+    /// recharge (#339).
+    pub fn credits_exhausted(&self) -> bool {
+        self.kind == LlmErrorKind::PaymentRequired
+            || matches!(
+                self.error_type.as_deref(),
+                Some("usage_limit_reached" | "insufficient_quota" | "usage_not_included")
+            )
+    }
+
     /// Ce qu'on dit au propriétaire d'une image refusée : trop lourde, format refusé…
     pub fn attachment_motif(&self) -> &'static str {
         self.error_type

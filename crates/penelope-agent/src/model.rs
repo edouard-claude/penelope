@@ -164,11 +164,8 @@ impl AgentLoop {
                             continue;
                         }
                         RetryAction::GiveUp => {
-                            return Ok(Err(with_attempts(
-                                CallFailure::from_llm(&e),
-                                plan.retries(),
-                                plan.waited_secs(),
-                            )));
+                            let failure = with_attempts(&e, plan.retries(), plan.waited_secs());
+                            return Ok(Err(credits_failure(s, spec, &model_id, &e, failure).await));
                         }
                     }
                 }
@@ -269,16 +266,16 @@ impl AgentLoop {
                         // Des fragments sont déjà partis : pas de repli silencieux, on le dit,
                         // en citant le début gardé dans la tentative (#206).
                         RetryAction::GiveUp if shown => {
-                            let mut failure = CallFailure::from_llm(&e);
+                            let failure = CallFailure::from_llm(&e);
+                            let mut failure =
+                                credits_failure(s, spec, &model_id, &e, failure).await;
                             failure.message = stream_cut_message(&failure.message, &text);
                             return Ok(Err(failure));
                         }
                         RetryAction::GiveUp => {
-                            return Ok(Err(with_attempts(
-                                CallFailure::from_llm(&e),
-                                plan.retries() + plan.stream_retries(),
-                                plan.waited_secs(),
-                            )));
+                            let retries = plan.retries() + plan.stream_retries();
+                            let failure = with_attempts(&e, retries, plan.waited_secs());
+                            return Ok(Err(credits_failure(s, spec, &model_id, &e, failure).await));
                         }
                     }
                 }
@@ -354,6 +351,38 @@ async fn watch_served(
     watch.deviate(&place, &key, served, &text).await;
 }
 
+/// Un abandon faute de crédits (#339) : l'arrêt est rangé pour la session du tour, le
+/// message dit une pause et le retour prévu, pas une panne. Le canal y propose
+/// « Reprendre », le moteur de workflows met le run en pause.
+async fn credits_failure(
+    s: &AgentServices,
+    spec: &TurnSpec,
+    model_id: &str,
+    e: &LlmError,
+    mut failure: CallFailure,
+) -> CallFailure {
+    if !e.credits_exhausted() {
+        return failure;
+    }
+    let now = s.clock.now_ms();
+    let provider = match e.error_type.as_deref() {
+        Some("usage_limit_reached" | "usage_not_included") => "codex",
+        _ => penelope_llm::catalog::provider_of(model_id),
+    };
+    let stop = penelope_app::credits::CreditStop {
+        provider: provider.to_string(),
+        model: model_id.to_string(),
+        reason: e.message.chars().take(300).collect(),
+        at_ms: now,
+        until_ms: e.retry_after.map(|w| now + w as i64 * 1000),
+    };
+    if let Err(err) = penelope_app::credits::record(&s.store, &spec.session_id, &stop).await {
+        tracing::warn!(error = %err, "arrêt faute de crédits non rangé");
+    }
+    failure.message = stop.failure_text(&s.config.config().owner.timezone);
+    failure
+}
+
 /// Budget de tentatives : celui du fournisseur du modèle principal (#313) ;
 /// `providers.codex.request_retries` n'était lu nulle part.
 fn retry_budget(cfg: &penelope_kernel::config::Config, model_id: &str) -> u32 {
@@ -382,7 +411,8 @@ fn failed_attempt(
 
 /// Dit combien de fois on a essayé et combien de temps on a attendu : un échec après
 /// trois délais de connexion ne se lit pas comme un échec immédiat (issue #50).
-fn with_attempts(mut failure: CallFailure, retries: u32, waited_secs: u64) -> CallFailure {
+fn with_attempts(e: &LlmError, retries: u32, waited_secs: u64) -> CallFailure {
+    let mut failure = CallFailure::from_llm(e);
     if retries > 0 {
         failure.message = format!(
             "{}\n\n{} tentatives, {waited_secs} s d'attente entre elles.",

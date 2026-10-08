@@ -5,6 +5,7 @@
 pub mod bundled;
 pub mod conditions;
 pub mod delivery;
+pub mod foreach;
 pub mod model;
 pub mod plan;
 pub mod registry;

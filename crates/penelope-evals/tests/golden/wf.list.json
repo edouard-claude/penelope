@@ -4,10 +4,10 @@
   "response": {
     "result": [
       {
-        "name": "string",
-        "scope": "string",
         "steps": "integer",
         "id": "string",
+        "name": "string",
+        "scope": "string",
         "runsHere": "bool"
       }
     ]

@@ -120,7 +120,9 @@
             "number",
             "integer",
             "boolean",
-            "enum"
+            "enum",
+            "object",
+            "array"
           ],
           "default": "string"
         },
@@ -214,7 +216,14 @@
         "maxWallMs": {
           "type": "integer",
           "minimum": 0,
-          "default": 7200000
+          "default": 7200000,
+          "description": "Durée de travail : le temps passé `paused` ou `blocked` et l'attente d'une étape `user` ne comptent pas ; 0 : sans plafond (#337)."
+        },
+        "maxCachedTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Tokens servis depuis le cache, comptés à part des tokens facturés ; 0 : sans plafond (#337)."
         }
       }
     },
@@ -346,6 +355,7 @@
             "user",
             "parallel",
             "workflow",
+            "foreach",
             "wait",
             "verify",
             "delivery"
@@ -444,6 +454,38 @@
           ],
           "description": "`agent` : `run` (défaut, la session du run) ou `fresh`, une session neuve par visite qui ne voit que sa consigne et les sorties rendues avant elle."
         },
+        "maxCalls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "`agent`, `sub_agent` : appels au modèle d'un tour de l'étape ; absent : `workflows.step_max_calls` (#337)."
+        },
+        "max_calls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Alias de `maxCalls`."
+        },
+        "maxTurns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "`agent`, `sub_agent` : tours de reprise au plafond sans `step_done()` ; absent : `workflows.step_max_turns` (#337)."
+        },
+        "max_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Alias de `maxTurns`."
+        },
         "outputSchema": {
           "type": [
             "object",
@@ -515,10 +557,96 @@
         },
         "workflowId": {
           "type": "string",
-          "description": "`workflow` : sous-workflow appelé."
+          "description": "`workflow`, `foreach` : sous-workflow appelé."
         },
         "params": {
-          "description": "`workflow` : paramètres passés au sous-workflow."
+          "description": "`workflow`, `foreach` : paramètres passés au sous-workflow (`{{item}}` pour l'élément d'un `foreach`)."
+        },
+        "items": {
+          "description": "`foreach` : la liste, figée au premier passage. Un tableau, `{file}`, `{step, path}` ou `{tool, args, path}`, avec `filter` et `sortBy` optionnels (#338).",
+          "oneOf": [
+            {
+              "type": "array"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "step": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "args": {
+                  "type": "object"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "filter": {
+                  "type": "object"
+                },
+                "sortBy": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "onError": {
+          "type": "string",
+          "pattern": "^(stop|skip|retry:[0-9]+)$",
+          "description": "`foreach` : `stop` (défaut), `skip` ou `retry:N`."
+        },
+        "on_error": {
+          "type": "string",
+          "pattern": "^(stop|skip|retry:[0-9]+)$",
+          "description": "Alias de `onError`."
+        },
+        "pauseEvery": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "`foreach` : un point d'arrêt tous les N éléments faits."
+        },
+        "pause_every": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Alias de `pauseEvery`."
+        },
+        "pauseAfter": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "`foreach` : point d'arrêt après un élément, `{\"changes\": \"<champ>\"}` ou une condition sur `{item, next}`."
+        },
+        "pause_after": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Alias de `pauseAfter`."
+        },
+        "itemLabel": {
+          "type": "string",
+          "description": "`foreach` : libellé d'un élément, gabarit (`{{item.title}}`)."
+        },
+        "itemNoun": {
+          "type": "string",
+          "description": "`foreach` : nom d'un élément dans le suivi (`story 12/53`)."
+        },
+        "itemBudget": {
+          "$ref": "#/$defs/budget",
+          "description": "`foreach` : plafonds propres au sous-run de chaque élément."
         },
         "on": {
           "type": [

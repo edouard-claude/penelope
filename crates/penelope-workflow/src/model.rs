@@ -118,6 +118,14 @@ pub struct Budget {
     pub max_tokens: u64,
     #[serde(rename = "maxWallMs")]
     pub max_wall_ms: u64,
+    /// Tokens servis depuis le cache, comptés à part des tokens facturés (#337) ; 0 : sans
+    /// plafond.
+    #[serde(rename = "maxCachedTokens", skip_serializing_if = "is_zero")]
+    pub max_cached_tokens: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl Default for Budget {
@@ -126,6 +134,7 @@ impl Default for Budget {
             max_usd: 5.0,
             max_tokens: 2_000_000,
             max_wall_ms: 7_200_000,
+            max_cached_tokens: 0,
         }
     }
 }
@@ -206,6 +215,22 @@ pub struct Step {
     /// étapes, seulement sa consigne et les sorties rendues avant elle (#191).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub context: String,
+    /// `agent`, `sub_agent` : appels au modèle d'un tour de l'étape, avant le tour de
+    /// reprise (#337) ; absent : `workflows.step_max_calls`.
+    #[serde(
+        rename = "maxCalls",
+        alias = "max_calls",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_calls: Option<u32>,
+    /// Tours de reprise accordés à une étape arrivée au plafond sans `step_done()` (#337) ;
+    /// absent : `workflows.step_max_turns`.
+    #[serde(
+        rename = "maxTurns",
+        alias = "max_turns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_turns: Option<u32>,
 
     // --- shell ---
     /// Chaîne, ou table par OS (`unix`, `macos`, `linux`, `windows`), §2.10.
@@ -242,6 +267,45 @@ pub struct Step {
     #[serde(rename = "workflowId")]
     pub workflow_id: String,
     pub params: Value,
+
+    // --- foreach (#338) ---
+    /// La liste à dérouler : un tableau, `{"file": …}`, `{"step": …, "path": …}` ou
+    /// `{"tool": …, "args": …, "path": …}`, avec `filter` et `sortBy` optionnels. Figée
+    /// au premier passage dans l'état du run.
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub items: Value,
+    /// `stop` (défaut), `skip` ou `retry:N` : ce que fait l'échec d'un élément.
+    #[serde(
+        rename = "onError",
+        alias = "on_error",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub on_error: String,
+    /// Un point d'arrêt (validation du propriétaire) tous les N éléments faits.
+    #[serde(
+        rename = "pauseEvery",
+        alias = "pause_every",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pause_every: Option<u32>,
+    /// Un point d'arrêt après un élément qui remplit ce filtre : `{"changes": "epic"}`
+    /// (le suivant change de valeur), ou une condition sur `{item, next}`.
+    #[serde(
+        rename = "pauseAfter",
+        alias = "pause_after",
+        skip_serializing_if = "Value::is_null"
+    )]
+    pub pause_after: Value,
+    /// Libellé d'un élément sur les cartes : gabarit (`{{item.name}}`) ; défaut : son
+    /// `title`, `name` ou `label`.
+    #[serde(rename = "itemLabel", skip_serializing_if = "String::is_empty")]
+    pub item_label: String,
+    /// Le nom d'un élément dans le suivi (`story 12/53`) ; défaut : `élément`.
+    #[serde(rename = "itemNoun", skip_serializing_if = "String::is_empty")]
+    pub item_noun: String,
+    /// Plafonds propres au sous-run de chaque élément.
+    #[serde(rename = "itemBudget", skip_serializing_if = "Option::is_none")]
+    pub item_budget: Option<Budget>,
 
     // --- wait ---
     pub on: Value,
@@ -293,6 +357,8 @@ impl Default for Step {
             tools: Vec::new(),
             output_schema: None,
             context: String::new(),
+            max_calls: None,
+            max_turns: None,
             command: Value::Null,
             cwd: String::new(),
             success_exit_codes: vec![0],
@@ -306,6 +372,13 @@ impl Default for Step {
             max_concurrency: None,
             workflow_id: String::new(),
             params: Value::Null,
+            items: Value::Null,
+            on_error: String::new(),
+            pause_every: None,
+            pause_after: Value::Null,
+            item_label: String::new(),
+            item_noun: String::new(),
+            item_budget: None,
             on: Value::Null,
             criteria_key: "criteria".into(),
             verifier: String::new(),
@@ -463,6 +536,7 @@ pub const STEP_KINDS: &[&str] = &[
     "user",
     "parallel",
     "workflow",
+    "foreach",
     "wait",
     "verify",
     "delivery",

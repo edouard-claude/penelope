@@ -13,6 +13,7 @@ pub mod catalog_refresh;
 pub mod channel;
 pub mod codex_scope;
 pub mod conversation;
+pub mod credits;
 pub mod elicitation;
 pub mod engine;
 pub mod environment;

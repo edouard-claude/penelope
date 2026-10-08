@@ -20,16 +20,17 @@ pub async fn control(
     }
     // Reprendre un run toujours au-dessus de sa borne le re-bloquerait dans la seconde :
     // on le dit au lieu de le faire (issue #136).
+    // Toute borne compte, durée et itérations comprises : « running » annoncé puis
+    // « durée maximale atteinte » la seconde d'après, c'était le cas du 07/10 (#337).
     if *op == Control::Resume
-        && run.state == RunState::Blocked
+        && matches!(run.state, RunState::Blocked | RunState::Paused)
         && let Some(wf) = workflow_of(s, &run).await
     {
-        let current = refresh_spent(s, run.clone()).await?;
-        let budget = effective_budget(s, &current, &wf.settings.budget).await;
-        let limit = check_limits(&current, &budget, s.clock.now_ms());
-        if matches!(limit, Limit::BudgetUsd | Limit::BudgetTokens) {
+        // Le temps d'arrêt en cours ne compte pas : il sera versé à la reprise.
+        let (current, budget, limit) = limits_now(s, run.clone(), &wf).await?;
+        if limit != Limit::Ok {
             anyhow::bail!(
-                "toujours bloqué : {}",
+                "reprise impossible, toujours bloqué : {}",
                 limit_reason(&limit, &current, &budget)
             );
         }
@@ -87,6 +88,11 @@ pub async fn control(
                 .advance(run_id, &step_id, &result, output, &next, phase)
                 .await?;
             advanced.state
+        }
+        Control::Resume => {
+            // Une reprise à la main lève la pause faute de crédits (#339).
+            credits::forget(s, run_id).await?;
+            s.runs.control(run_id, op).await?
         }
         other => s.runs.control(run_id, other).await?,
     };

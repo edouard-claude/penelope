@@ -1,5 +1,5 @@
 //! Workflows livrés (§12.10) : `build-verify`, `review`, `ticket-to-deploy`,
-//! `deploy-generic`.
+//! `deploy-generic`, `backlog` et `tache` (#338).
 
 use crate::model::*;
 use serde_json::json;
@@ -590,13 +590,19 @@ fn ticket_deploy_steps() -> Vec<Step> {
     ]
 }
 
-/// Les quatre workflows livrés.
+mod backlog;
+pub use backlog::{backlog, task};
+
+/// Les six workflows livrés.
 pub fn all() -> Vec<Workflow> {
     vec![
         build_verify(),
         review(),
         ticket_to_deploy(),
         deploy_generic(),
+        // `tache` avant `backlog`, qui l'appelle : le registre valide dans l'ordre.
+        task(),
+        backlog(),
     ]
 }
 
@@ -612,6 +618,8 @@ mod tests {
                 "review",
                 "ticket-to-deploy",
                 "deploy-generic",
+                "backlog",
+                "tache",
             ]
             .into_iter()
             .map(String::from)

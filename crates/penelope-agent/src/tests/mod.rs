@@ -12,6 +12,7 @@ mod approvals;
 mod attachments;
 mod attempts;
 mod call_guards;
+mod credits;
 mod effects;
 mod fallback;
 mod guards;

@@ -123,7 +123,7 @@ pub fn validate(w: &Workflow, file_stem: Option<&str>, known: &Known) -> Report 
         }
         if !matches!(
             p.kind.as_str(),
-            "string" | "number" | "integer" | "boolean" | "enum"
+            "string" | "number" | "integer" | "boolean" | "enum" | "object" | "array"
         ) {
             r.error(
                 format!("/metadata/parameters/{i}/type"),
@@ -413,15 +413,11 @@ fn validate_step(
                 );
             }
         }
-        "workflow" => {
-            if s.workflow_id.is_empty() {
-                r.error(format!("{path}/workflowId"), "sous-workflow absent");
-            } else if !known.workflow_ids.is_empty() && !known.workflow_ids.contains(&s.workflow_id)
-            {
-                r.error(
-                    format!("{path}/workflowId"),
-                    format!("workflow inconnu : `{}`", s.workflow_id),
-                );
+        "workflow" => check_workflow_id(r, s, path, known),
+        "foreach" => {
+            check_workflow_id(r, s, path, known);
+            for (field, message) in crate::foreach::check(s) {
+                r.error(format!("{path}/{field}"), message);
             }
         }
         "wait" => {
@@ -486,6 +482,18 @@ fn validate_step(
                 check_vars(r, &format!("{path}/args/{k}"), t, declared_params);
             }
         }
+    }
+}
+
+/// Le sous-workflow d'une étape `workflow` ou `foreach` : présent et connu.
+fn check_workflow_id(r: &mut Report, s: &Step, path: &str, known: &Known) {
+    if s.workflow_id.is_empty() {
+        r.error(format!("{path}/workflowId"), "sous-workflow absent");
+    } else if !known.workflow_ids.is_empty() && !known.workflow_ids.contains(&s.workflow_id) {
+        r.error(
+            format!("{path}/workflowId"),
+            format!("workflow inconnu : `{}`", s.workflow_id),
+        );
     }
 }
 
@@ -649,8 +657,10 @@ fn check_vars(r: &mut Report, path: &str, text: &str, declared_params: &BTreeSet
         if is_dynamic_var(&name) || known_static_vars().contains(&name.as_str()) {
             continue;
         }
+        // `{{item.title}}` lit un champ du paramètre `item` (#338).
         let bare = name.strip_prefix("params.").unwrap_or(&name);
-        if declared_params.contains(bare) {
+        let root = bare.split('.').next().unwrap_or(bare);
+        if declared_params.contains(bare) || declared_params.contains(root) {
             continue;
         }
         r.error(path, format!("variable inconnue : `{{{{{name}}}}}`"));
@@ -685,7 +695,7 @@ fn check_subworkflows(r: &mut Report, w: &Workflow, known: &Known) {
     let children: Vec<&str> = w
         .steps
         .iter()
-        .filter(|s| s.kind == "workflow")
+        .filter(|s| s.kind == "workflow" || s.kind == "foreach")
         .map(|s| s.workflow_id.as_str())
         .collect();
     for c in children {
@@ -699,7 +709,10 @@ fn check_subworkflows(r: &mut Report, w: &Workflow, known: &Known) {
     // La profondeur réelle est vérifiée à l'exécution (les définitions ne sont pas toutes
     // chargées ici) ; on rappelle la borne dans un avertissement si le workflow en
     // appelle d'autres.
-    if w.steps.iter().any(|s| s.kind == "workflow") {
+    if w.steps
+        .iter()
+        .any(|s| s.kind == "workflow" || s.kind == "foreach")
+    {
         r.warn(
             "/steps",
             format!("profondeur d'imbrication limitée à {max_depth} à l'exécution"),

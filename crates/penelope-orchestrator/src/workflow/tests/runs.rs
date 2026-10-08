@@ -69,7 +69,7 @@ async fn a_run_budget_counts_billed_tokens_and_can_be_raised() {
         RunState::Blocked
     );
 
-    let raised = raise_budget(&e.d, &run.id, None, Some(1_000_000))
+    let raised = raise_budget(&e.d, &run.id, &json!({"tokens": 1_000_000}))
         .await
         .unwrap();
     assert!(raised["still_blocked"].is_null(), "{raised}");
@@ -563,6 +563,7 @@ async fn a_sub_agent_that_needs_an_approval_fails_instead_of_waiting() {
             model_id: "mock:model",
             tools: &["shell_exec".to_string()],
             workspaces: vec![ws.clone()],
+            limits: None,
         },
         &CancelToken::new(),
     )

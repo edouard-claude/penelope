@@ -71,6 +71,15 @@ pub struct Run {
     pub workdir: Option<String>,
     pub spent_usd: f64,
     pub spent_tokens: u64,
+    /// Tokens servis depuis le cache, à part des tokens facturés (#337).
+    #[serde(default)]
+    pub spent_cached_tokens: u64,
+    /// Temps passé `paused` ou `blocked`, hors attente en cours (#337).
+    #[serde(default)]
+    pub held_ms: i64,
+    /// Début de l'arrêt en cours, s'il y en a un.
+    #[serde(default)]
+    pub held_since_ms: Option<i64>,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub result: Option<String>,
@@ -178,6 +187,9 @@ impl RunStore {
             workdir: None,
             spent_usd: 0.0,
             spent_tokens: 0,
+            spent_cached_tokens: 0,
+            held_ms: 0,
+            held_since_ms: None,
             started_at: self.clock.now_rfc3339(),
             finished_at: None,
             result: None,
@@ -273,6 +285,7 @@ impl RunStore {
             next_phase.map(String::from),
             self.clock.now_rfc3339(),
         );
+        let now_ms = self.clock.now_ms();
         self.store
             .write(move |tx| {
                 let raw: String = tx.query_row(
@@ -305,7 +318,9 @@ impl RunStore {
                     "UPDATE workflow_runs SET current_step = ?2, phase = ?3,
                         iterations = iterations + 1, step_outputs = ?4, state = ?5,
                         updated_at = ?6, finished_at = CASE WHEN ?7 = 1 AND ?5 = 'done'
-                            THEN ?6 ELSE finished_at END
+                            THEN ?6 ELSE finished_at END,
+                        held_since_ms = CASE WHEN ?5 = 'blocked'
+                            THEN COALESCE(held_since_ms, ?8) ELSE held_since_ms END
                      WHERE id = ?1",
                     params![
                         id,
@@ -314,7 +329,8 @@ impl RunStore {
                         outputs.to_string(),
                         state,
                         now,
-                        terminal as i64
+                        terminal as i64,
+                        now_ms
                     ],
                 )?;
 
@@ -356,36 +372,57 @@ impl RunStore {
             .await
     }
 
-    /// Dépense du run, recalculée depuis le ledger d'usage.
+    /// Dépense du run, recalculée depuis le ledger d'usage : tokens facturés et tokens
+    /// servis depuis le cache, à part (#337).
     pub async fn set_spent(
         &self,
         run_id: &str,
         usd: f64,
         tokens: u64,
+        cached: u64,
     ) -> penelope_store::Result<()> {
         let id = run_id.to_string();
         self.store
             .write(move |tx| {
                 tx.execute(
-                    "UPDATE workflow_runs SET spent_usd = ?2, spent_tokens = ?3 WHERE id = ?1",
-                    params![id, usd, tokens as i64],
+                    "UPDATE workflow_runs SET spent_usd = ?2, spent_tokens = ?3,
+                        spent_cached_tokens = ?4 WHERE id = ?1",
+                    params![id, usd, tokens as i64, cached as i64],
                 )?;
                 Ok(())
             })
             .await
     }
 
+    /// Relève le plafond d'itérations d'un run, pour lui seul (#337).
+    pub async fn set_max_iterations(&self, run_id: &str, max: u32) -> penelope_store::Result<()> {
+        let id = run_id.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE workflow_runs SET max_iterations = ?2 WHERE id = ?1",
+                    params![id, max as i64],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Pose l'état d'un run. Le temps passé `paused` ou `blocked` est compté à l'entrée
+    /// et versé à `held_ms` à la sortie : la durée maximale ne mesure que le travail
+    /// (#337). SQLite lit l'ancienne ligne dans tout le `SET`.
     pub async fn set_state(
         &self,
         run_id: &str,
         state: RunState,
         error: Option<&str>,
     ) -> penelope_store::Result<()> {
-        let (id, s, e, now) = (
+        let (id, s, e, now, now_ms) = (
             run_id.to_string(),
             state.as_str().to_string(),
             error.map(String::from),
             self.clock.now_rfc3339(),
+            self.clock.now_ms(),
         );
         self.store
             .write(move |tx| {
@@ -393,9 +430,14 @@ impl RunStore {
                     "UPDATE workflow_runs SET state = ?2, error = COALESCE(?3, error),
                         updated_at = ?4,
                         finished_at = CASE WHEN ?2 IN ('done','failed','cancelled') THEN ?4
-                                           ELSE finished_at END
+                                           ELSE finished_at END,
+                        held_ms = held_ms + CASE
+                            WHEN ?2 NOT IN ('paused','blocked') AND held_since_ms IS NOT NULL
+                            THEN MAX(?5 - held_since_ms, 0) ELSE 0 END,
+                        held_since_ms = CASE WHEN ?2 IN ('paused','blocked')
+                            THEN COALESCE(held_since_ms, ?5) ELSE NULL END
                      WHERE id = ?1",
-                    params![id, s, e, now],
+                    params![id, s, e, now, now_ms],
                 )?;
                 Ok(())
             })
@@ -567,7 +609,8 @@ pub enum Admission {
 
 const SELECT: &str = "SELECT id, workflow_id, session_id, params, state, current_step, phase,
      iterations, max_iterations, step_outputs, workdir, spent_usd, spent_tokens, started_at,
-     finished_at, result, error, parent_run, depth FROM workflow_runs";
+     finished_at, result, error, parent_run, depth, spent_cached_tokens, held_ms, held_since_ms
+     FROM workflow_runs";
 
 fn row_to_run(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqlite::Result<Run> {
     let params_s: String = r.get(3)?;
@@ -593,6 +636,9 @@ fn row_to_run(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqlite
         error: r.get(16)?,
         parent_run: r.get(17)?,
         depth: r.get::<_, i64>(18)? as u32,
+        spent_cached_tokens: r.get::<_, i64>(19)? as u64,
+        held_ms: r.get(20)?,
+        held_since_ms: r.get(21)?,
     })
 }
 
@@ -603,7 +649,18 @@ pub enum Limit {
     IterationsExhausted,
     BudgetUsd,
     BudgetTokens,
+    BudgetCachedTokens,
     WallClock,
+}
+
+/// Temps de travail d'un run à `now_ms` : depuis son départ, moins le temps passé
+/// `paused` ou `blocked`, attente en cours comprise (#337).
+pub fn work_ms(run: &Run, now_ms: i64) -> i64 {
+    let started = chrono::DateTime::parse_from_rfc3339(&run.started_at)
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(now_ms);
+    let holding = run.held_since_ms.map_or(0, |h| (now_ms - h).max(0));
+    (now_ms - started - run.held_ms - holding).max(0)
 }
 
 pub fn check_limits(run: &Run, budget: &crate::model::Budget, now_ms: i64) -> Limit {
@@ -616,15 +673,71 @@ pub fn check_limits(run: &Run, budget: &crate::model::Budget, now_ms: i64) -> Li
     if budget.max_tokens > 0 && run.spent_tokens >= budget.max_tokens {
         return Limit::BudgetTokens;
     }
-    if budget.max_wall_ms > 0 {
-        let started = chrono::DateTime::parse_from_rfc3339(&run.started_at)
-            .map(|d| d.timestamp_millis())
-            .unwrap_or(now_ms);
-        if now_ms - started >= budget.max_wall_ms as i64 {
-            return Limit::WallClock;
-        }
+    if budget.max_cached_tokens > 0 && run.spent_cached_tokens >= budget.max_cached_tokens {
+        return Limit::BudgetCachedTokens;
+    }
+    if budget.max_wall_ms > 0 && work_ms(run, now_ms) >= budget.max_wall_ms as i64 {
+        return Limit::WallClock;
     }
     Limit::Ok
+}
+
+/// Consommation d'un run face à chacun de ses plafonds, en une ligne (#337) :
+/// `durée 12/120 min · tokens 31 k/2 M · cache 1,2 M · coût 0,40/5,00 $ · itérations 7/40`.
+/// `waited_ms` : l'attente du propriétaire, déjà retirée de la durée par le pilote.
+pub fn budget_line(run: &Run, b: &crate::model::Budget, now_ms: i64, waited_ms: i64) -> String {
+    let minutes = (work_ms(run, now_ms) - waited_ms).max(0) / 60_000;
+    let cap = |max: String, unlimited: bool| {
+        if unlimited {
+            String::new()
+        } else {
+            format!("/{max}")
+        }
+    };
+    let mut parts = vec![
+        format!(
+            "durée {minutes}{} min",
+            cap((b.max_wall_ms / 60_000).to_string(), b.max_wall_ms == 0)
+        ),
+        format!(
+            "tokens {}{}",
+            tokens_short(run.spent_tokens),
+            cap(tokens_short(b.max_tokens), b.max_tokens == 0)
+        ),
+    ];
+    if run.spent_cached_tokens > 0 || b.max_cached_tokens > 0 {
+        parts.push(format!(
+            "cache {}{}",
+            tokens_short(run.spent_cached_tokens),
+            cap(tokens_short(b.max_cached_tokens), b.max_cached_tokens == 0)
+        ));
+    }
+    parts.push(format!(
+        "coût {:.2}{} $",
+        run.spent_usd,
+        cap(format!("{:.2}", b.max_usd), b.max_usd <= 0.0)
+    ));
+    parts.push(format!(
+        "itérations {}/{}",
+        run.iterations, run.max_iterations
+    ));
+    parts.join(" · ")
+}
+
+/// `950`, `31 k`, `1,2 M` : un nombre de tokens qui se lit d'un coup d'œil.
+pub fn tokens_short(n: u64) -> String {
+    match n {
+        0..1_000 => n.to_string(),
+        1_000..1_000_000 => format!("{} k", n / 1_000),
+        _ => {
+            let tenths = n / 100_000;
+            if tenths.is_multiple_of(10) {
+                format!("{} M", tenths / 10)
+            } else {
+                format!("{},{} M", tenths / 10, tenths % 10)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -59,9 +59,12 @@ fn owner() -> Origin {
 }
 
 mod control;
+mod credits;
 mod delivery;
 mod driver;
 mod fake_forge;
+mod foreach;
+mod long_runs;
 mod plan;
 mod prod;
 mod runs;

@@ -274,3 +274,38 @@ fn stream_retries_are_counted_and_waited() {
     assert_eq!(plan.stream_retries(), 3);
     assert_eq!(plan.waited_secs(), 14);
 }
+
+/// #339 : une limite d'usage (quota Codex épuisé) ou un 402 ne sont jamais relancés sur
+/// le même modèle ; un repli configuré passe d'abord, sinon l'abandon est immédiat.
+#[test]
+fn spent_credits_are_never_retried() {
+    let usage = || {
+        let mut e = err(LlmErrorKind::RateLimited, Some(3_600));
+        e.error_type = Some("usage_limit_reached".into());
+        e
+    };
+    for phase in [BeforeStream, InStream] {
+        let mut alone = RetryPlan::new("codex:m", &[], false, 5);
+        assert_eq!(alone.on_error(&usage(), phase, false), GiveUp);
+        let mut backed = RetryPlan::new("codex:m", &["openrouter:b".into()], false, 5);
+        assert_eq!(
+            backed.on_error(&usage(), phase, false),
+            fallback("openrouter:b")
+        );
+        assert_eq!(backed.on_error(&usage(), phase, false), GiveUp);
+    }
+    let mut credits = RetryPlan::new("m/a", &["m/b".into()], true, 5);
+    assert_eq!(
+        credits.on_error(
+            &err(LlmErrorKind::PaymentRequired, None),
+            BeforeStream,
+            false
+        ),
+        fallback("m/b"),
+        "un 402 prend le repli d'alias côté client"
+    );
+    assert_eq!(
+        RetryPlan::new("codex:m", &[], false, 5).on_error(&usage(), AfterText, false),
+        GiveUp
+    );
+}
