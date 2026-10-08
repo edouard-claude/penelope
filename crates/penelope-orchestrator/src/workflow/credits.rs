@@ -122,6 +122,10 @@ async fn pause_text(ctx: &StepCtx<'_>, stop: &CreditStop) -> String {
 /// Où en est le run : position dans la liste s'il en déroule une, étape, dernier commit.
 async fn last_point(ctx: &StepCtx<'_>) -> String {
     let mut parts = Vec::new();
+    // L'élément de liste que traite ce run, s'il en traite un (#338).
+    if let Some(item) = super::foreach::position_of(ctx.s(), ctx.run).await {
+        parts.push(item);
+    }
     let step = if ctx.step.name.is_empty() {
         &ctx.step.id
     } else {

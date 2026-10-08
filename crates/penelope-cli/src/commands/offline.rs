@@ -302,6 +302,19 @@ pub(super) fn validate_workflow(cli: &Cli, file: PathBuf) -> CliResult<()> {
         max_depth: 3,
         ..Default::default()
     };
+    // Les workflows voisins du fichier sont connus, comme au chargement (#338).
+    let mut known = known;
+    let dir = file.parent().filter(|d| !d.as_os_str().is_empty());
+    if let Ok(entries) = std::fs::read_dir(dir.unwrap_or(std::path::Path::new("."))) {
+        known.workflow_ids.extend(entries.flatten().filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let raw = std::fs::read_to_string(e.path()).ok()?;
+            name.ends_with(".workflow.json")
+                .then(|| penelope_workflow::Workflow::from_json(&raw).ok())
+                .flatten()
+                .map(|w| w.metadata.id)
+        }));
+    }
     let report = penelope_workflow::validate(&w, stem.as_deref(), &known);
 
     if cli.json {

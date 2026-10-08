@@ -33,6 +33,10 @@ pub(super) async fn progress(
             step.phase.as_str()
         ));
     }
+    // L'élément courant d'une liste déroulée (#338).
+    if let Some(line) = position_of(&d.services, run).await {
+        text.push_str(&format!("\nListe : {line}"));
+    }
     // Chaque plafond face à sa consommation (#337).
     let budget = effective_budget(&d.services, run, &wf.settings.budget).await;
     let waited = owner_wait_ms(&d.services, run, wf).await;
@@ -60,7 +64,7 @@ pub(super) async fn progress(
     if let Some(e) = run.error.as_ref().filter(|e| !e.is_empty()) {
         text.push_str(&format!("\nRaison : {e}"));
     }
-    if run.state == RunState::Blocked {
+    if matches!(run.state, RunState::Blocked | RunState::Paused) {
         text.push_str(&format!("\n\n`/resume {}` pour reprendre.", run.id));
     }
     if let Err(e) = m

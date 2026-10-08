@@ -114,6 +114,15 @@ impl WorkflowRegistry {
             })
             .collect();
         paths.sort();
+        // Un workflow du répertoire peut en appeler un autre du même répertoire, rangé
+        // après lui (`backlog-clickup` appelle `tache-clickup`, #338) : les identifiants
+        // du répertoire sont connus avant la validation de chacun.
+        let mut known = known.clone();
+        known.workflow_ids.extend(paths.iter().filter_map(|p| {
+            let raw = std::fs::read_to_string(p).ok()?;
+            Some(Workflow::from_json(&raw).ok()?.metadata.id)
+        }));
+        let known = &known;
 
         let mut loaded = 0;
         let mut g = self.state.write().unwrap_or_else(|p| p.into_inner());
@@ -261,6 +270,8 @@ mod tests {
                 "ticket-to-deploy",
                 "build-verify",
                 "review",
+                "backlog",
+                "tache",
             ]
             .into_iter()
             .map(String::from)
@@ -413,5 +424,29 @@ mod tests {
 
         let p = r.write(dir.path(), &sample("brouillon"), &known()).unwrap();
         assert!(p.exists());
+    }
+
+    /// #338 : un workflow qui en appelle un autre du même répertoire, rangé après lui, se
+    /// charge du premier coup.
+    #[test]
+    fn a_workflow_may_call_a_sibling_loaded_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut caller = sample("appelant");
+        caller.steps[0] = Step {
+            id: caller.steps[0].id.clone(),
+            kind: "workflow".into(),
+            workflow_id: "zz-appele".into(),
+            transitions: caller.steps[0].transitions.clone(),
+            ..Default::default()
+        };
+        for w in [caller, sample("zz-appele")] {
+            std::fs::write(
+                dir.path().join(format!("{}.workflow.json", w.metadata.id)),
+                w.to_json(),
+            )
+            .unwrap();
+        }
+        let r = WorkflowRegistry::with_bundled(&known());
+        assert_eq!(r.load_dir(dir.path(), Scope::User, &known()), 2);
     }
 }

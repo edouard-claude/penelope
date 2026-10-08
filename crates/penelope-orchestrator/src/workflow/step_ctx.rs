@@ -213,6 +213,7 @@ pub(super) async fn execute_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcom
             "user" => user_step(ctx).await,
             "parallel" => parallel_step(ctx).await,
             "workflow" => workflow_step(ctx).await,
+            "foreach" => foreach_step(ctx).await,
             "wait" => wait_step(ctx).await,
             "verify" => verify_step(ctx).await,
             "delivery" => delivery_step(ctx).await,
@@ -224,7 +225,12 @@ pub(super) async fn execute_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcom
     };
     // Une attente se mesure elle-même ; les autres étapes sont bornées ici.
     match timeout {
-        Some(t) if !matches!(ctx.step.kind.as_str(), "wait" | "user" | "workflow") => {
+        Some(t)
+            if !matches!(
+                ctx.step.kind.as_str(),
+                "wait" | "user" | "workflow" | "foreach"
+            ) =>
+        {
             match tokio::time::timeout(t, fut).await {
                 Ok(r) => r,
                 Err(_) => {

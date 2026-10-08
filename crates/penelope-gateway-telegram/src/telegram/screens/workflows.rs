@@ -243,6 +243,13 @@ impl TelegramGateway {
                 penelope_orchestrator::workflow::budget_view(s, &r).await,
                 r.started_at.get(..16).unwrap_or(&r.started_at)
             );
+            // La liste déroulée : élément courant, faits, échecs (#338).
+            if let Some(line) = penelope_orchestrator::workflow::position_of(s, &r).await {
+                t.push_str(&format!("\nListe : {line}"));
+            }
+            if let Some(lines) = penelope_orchestrator::workflow::list_of(s, &r.id).await {
+                t.push_str(&format!("\n{}", trunc(&lines, 1200)));
+            }
             if r.params.as_object().is_some_and(|o| !o.is_empty()) {
                 t.push_str(&format!(
                     "\nParamètres : `{}`",

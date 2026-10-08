@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 7 octobre 2026.
+Dernière mise à jour : 8 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,81 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.48
+
+**Longues charges : dérouler des dizaines de tâches dans l'ordre, sur des heures, et
+s'arrêter proprement quand les crédits manquent. Plafond d'appels réglable par étape avec
+tour de reprise, budget de run juste et visible ; étape `foreach` qui déroule une liste
+figée élément par élément ; pause au point sûr quand le quota Codex, un crédit OpenRouter
+ou le budget journalier est épuisé, message au propriétaire, reprise au retour du quota
+(#337, #338, #339).**
+
+Constat (07/10) : une étape de spécification a passé ses 24 appels à lire le dépôt et le
+run a échoué (« le tour n'a pas convergé en 24 itérations ») ; une reprise après deux
+heures de blocage échouait aussitôt (« durée maximale atteinte ») en annonçant `running` ;
+rien ne montrait la consommation d'un run. Le moteur ne savait pas itérer sur une liste :
+53 stories, c'étaient 53 runs à la main. Et sur des heures de travail, un abonnement Codex
+épuisé, repli désactivé, faisait relancer la limite d'usage comme une limite de débit puis
+échouer le run ; une fenêtre remise à zéro gardait le fournisseur en retrait jusqu'au
+redémarrage.
+
+- **Plafond d'appels par étape** (#337). `maxCalls` et `maxTurns` sur une étape `agent`
+  ou `sub_agent`, défauts `workflows.step_max_calls` (60) et `workflows.step_max_turns`
+  (2) ; une conversation garde ses 24. Au plafond sans `step_done()`, les appels en
+  attente sont fermés (« non exécuté ») et un tour de reprise demande le point
+  (`session_notes`), puis de conclure ou de continuer ; au-delà, l'étape échoue en le
+  disant. `return_value(result="partial")` laisse la transition décider d'une prolongation.
+- **Budget de run juste et visible** (#337). Migration 0028 : les tokens servis par le
+  cache sont comptés à part (`spent_cached_tokens`, plafond optionnel `maxCachedTokens`),
+  le temps passé `paused` ou `blocked` sort de la durée maximale (`held_ms`). `resume`
+  refuse toute borne encore atteinte, durée et itérations comprises, avec la commande qui
+  la relève ; `wf control <run> budget` prend `--cached-tokens`, `--minutes`,
+  `--iterations`. La carte du run, `/runs` et `penelope wf runs` montrent « durée 12/120
+  min · tokens 31 k/2 M · cache 1,2 M · coût 0.40/5.00 $ · itérations 7/40 ».
+- **Étape `foreach`** (#338). Source : tableau, fichier JSON ou Markdown du workspace,
+  sortie d'une étape, outil MCP en lecture (appelé une fois par le chemin d'une étape
+  `tool`), avec `filter` et `sortBy`. La liste est figée au premier passage (migration
+  0029, `workflow_items`) ; un sous-workflow par élément, dans l'ordre, avec `item`,
+  `item_index`, `item_total` et son budget (`itemBudget`). États à faire, en cours, fait,
+  en échec, sauté ; `onError` `stop` (défaut), `skip`, `retry:N` ; points d'arrêt
+  `pauseEvery` et `pauseAfter` (`{"changes": "epic"}` : fin d'épique). Reprise à
+  l'élément courant, à l'étape courante de son sous-run, après pause ou redémarrage.
+  Compte rendu court dans le sujet à chaque élément, bilan à chaque point d'arrêt ;
+  `/runs`, la carte et `penelope wf runs` disent « story 12/53 · 3.2 Moteur de passation ·
+  étape dev », l'écran du run la liste des faits et des échecs. Workflows livrés `backlog`
+  et `tache` (tracker en paramètre : ClickUp, Redmine, GitHub, fichier) ; un exemple
+  ClickUp prêt à l'emploi dans `docs/workflows.md`. Paramètres `object` et `array`
+  acceptés ; un workflow peut appeler un voisin de son répertoire rangé après lui, au
+  chargement comme dans `penelope wf validate`.
+- **Crédits épuisés** (#339). `usage_limit_reached` (retrait d'avant appel compris),
+  `insufficient_quota`, `usage_not_included` et 402 ne sont jamais relancés sur le même
+  modèle (les relances de la 1.0.40 ne s'y appliquent pas) ; un repli configuré passe
+  d'abord, annoncé comme en 1.0.47. Sans repli, un tour de conversation s'arrête sur
+  « ⏸ Je me suis arrêtée là, crédits Codex épuisés … Retour prévu à 17 h 40 » avec
+  ▶️ Reprendre ; un run passe `paused` au point sûr (fin de l'appel d'outil en cours, rien
+  de perdu), prévient une fois dans son sujet (élément de liste, étape, dernier commit et
+  s'il est poussé, heure de retour), et reprend seul à l'heure dite
+  (`workflows.resume_on_quota`, vrai par défaut). Budget journalier atteint : pause
+  jusqu'au minuit du propriétaire. Une fenêtre de quota remise à zéro ne retient plus les
+  appels.
+
+Tests : étape au-delà de `maxCalls` qui conclut au tour de reprise, et sans tour restant ;
+sous-agent au plafond ; run bloqué trois heures puis repris, affichage des budgets ;
+reprise impossible dite ; `foreach` sur cinq éléments avec `stop`, `skip`, `retry:1`,
+redémarrage au 3ᵉ élément, `pauseEvery`, liste tirée d'une étape ; quota épuisé en pleine
+étape, pause, message, reprise automatique (horloge de test) ; 402 qui attend
+« Reprendre » ; budget journalier ; tour de conversation (quota, 402, repli prioritaire) ;
+et de bout en bout, un backlog de cinq éléments factices dont le quota s'épuise au 3ᵉ,
+repris au retour du quota, fini avec ses cinq éléments faits.
+
+Ce qui n'est pas fait : une liste figée ne se rafraîchit qu'en relançant le run ; un 402
+OpenRouter n'a pas d'heure de retour et attend « Reprendre » ; le sous-agent d'une étape
+`sub_agent` interrompu par les crédits repart de zéro à la reprise.
+
+Closes #337.
+Closes #338.
+Closes #339.
 
 ### 1.0.47
 

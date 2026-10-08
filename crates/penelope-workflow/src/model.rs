@@ -268,6 +268,45 @@ pub struct Step {
     pub workflow_id: String,
     pub params: Value,
 
+    // --- foreach (#338) ---
+    /// La liste à dérouler : un tableau, `{"file": …}`, `{"step": …, "path": …}` ou
+    /// `{"tool": …, "args": …, "path": …}`, avec `filter` et `sortBy` optionnels. Figée
+    /// au premier passage dans l'état du run.
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub items: Value,
+    /// `stop` (défaut), `skip` ou `retry:N` : ce que fait l'échec d'un élément.
+    #[serde(
+        rename = "onError",
+        alias = "on_error",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub on_error: String,
+    /// Un point d'arrêt (validation du propriétaire) tous les N éléments faits.
+    #[serde(
+        rename = "pauseEvery",
+        alias = "pause_every",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pause_every: Option<u32>,
+    /// Un point d'arrêt après un élément qui remplit ce filtre : `{"changes": "epic"}`
+    /// (le suivant change de valeur), ou une condition sur `{item, next}`.
+    #[serde(
+        rename = "pauseAfter",
+        alias = "pause_after",
+        skip_serializing_if = "Value::is_null"
+    )]
+    pub pause_after: Value,
+    /// Libellé d'un élément sur les cartes : gabarit (`{{item.name}}`) ; défaut : son
+    /// `title`, `name` ou `label`.
+    #[serde(rename = "itemLabel", skip_serializing_if = "String::is_empty")]
+    pub item_label: String,
+    /// Le nom d'un élément dans le suivi (`story 12/53`) ; défaut : `élément`.
+    #[serde(rename = "itemNoun", skip_serializing_if = "String::is_empty")]
+    pub item_noun: String,
+    /// Plafonds propres au sous-run de chaque élément.
+    #[serde(rename = "itemBudget", skip_serializing_if = "Option::is_none")]
+    pub item_budget: Option<Budget>,
+
     // --- wait ---
     pub on: Value,
 
@@ -333,6 +372,13 @@ impl Default for Step {
             max_concurrency: None,
             workflow_id: String::new(),
             params: Value::Null,
+            items: Value::Null,
+            on_error: String::new(),
+            pause_every: None,
+            pause_after: Value::Null,
+            item_label: String::new(),
+            item_noun: String::new(),
+            item_budget: None,
             on: Value::Null,
             criteria_key: "criteria".into(),
             verifier: String::new(),
@@ -490,6 +536,7 @@ pub const STEP_KINDS: &[&str] = &[
     "user",
     "parallel",
     "workflow",
+    "foreach",
     "wait",
     "verify",
     "delivery",

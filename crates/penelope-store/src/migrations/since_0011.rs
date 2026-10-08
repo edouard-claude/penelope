@@ -217,3 +217,26 @@ UPDATE workflow_runs
    SET held_since_ms = CAST(strftime('%s', updated_at) AS INTEGER) * 1000
  WHERE state IN ('paused','blocked');
 "#;
+
+/// Étape `foreach` (#338) : la liste déroulée par un run, figée au premier passage de
+/// l'étape (une ligne par élément, dans l'ordre), avec l'état de chacun (`todo`, `running`,
+/// `done`, `failed`, `skipped`), le sous-run qui le traite et ses tentatives. La reprise
+/// repart de l'élément courant ; `/runs` y lit « story 12/53 ».
+pub(super) const SQL_0029: &str = r#"
+CREATE TABLE workflow_items (
+  run_id      TEXT NOT NULL,
+  step_id     TEXT NOT NULL,
+  visit       INTEGER NOT NULL,             -- itération du run à la visite de l'étape
+  idx         INTEGER NOT NULL,             -- rang dans la liste figée, depuis 0
+  item        TEXT NOT NULL,                -- l'élément, en JSON
+  label       TEXT NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'todo', -- todo | running | done | failed | skipped
+  child_run   TEXT,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  error       TEXT,
+  started_at  TEXT,
+  ended_at    TEXT,
+  PRIMARY KEY (run_id, step_id, visit, idx)
+);
+CREATE INDEX workflow_items_child ON workflow_items(child_run) WHERE child_run IS NOT NULL;
+"#;

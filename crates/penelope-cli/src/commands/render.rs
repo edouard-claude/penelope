@@ -126,6 +126,7 @@ pub(super) fn render_run_list(v: &Value) -> String {
                 "workflow": r["workflow_id"],
                 "état": r["state"],
                 "étape": r["current_step"].as_str().unwrap_or("-"),
+                "liste": r["progress"].as_str().unwrap_or(""),
                 "budget": r["budget"].as_str().unwrap_or(""),
             })
         })

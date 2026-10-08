@@ -127,7 +127,7 @@ Budget : durée 12/120 min · tokens 31 k/2 M · cache 1,2 M · coût 0.40/5.00 
 
 Avant 0.17.20, `maxTokens` comptait l'entrée entière : un run d'agent qui renvoie un
 préfixe de 40 000 tokens à chaque appel se bloquait vers 2 millions de tokens à moins de
-10 % de son plafond en dollars. Les quatre workflows livrés gardent `maxTokens: 2000000` :
+10 % de son plafond en dollars. Les quatre premiers workflows livrés gardent `maxTokens: 2000000` :
 avec la nouvelle mesure, ce même run en compte environ 220 000.
 
 Un run bloqué par une borne le dit avec ses chiffres (« budget de tokens atteint (440000
@@ -177,7 +177,7 @@ travaille dans l'espace de son parent, sauf s'il demande un espace persistant.
 `forms` déclare les formulaires des étapes `user` (voir plus bas) : un JSON Schema d'objet
 par identifiant.
 
-## Les dix types d'étapes
+## Les onze types d'étapes
 
 | Type | Champs propres | Ce qu'il fait |
 |---|---|---|
@@ -188,6 +188,7 @@ par identifiant.
 | `user` | `template` (obligatoire), `choices` (non vide), `input` | Une question au propriétaire sur Telegram |
 | `parallel` | `children` (non vide), `maxConcurrency` | Plusieurs enfants en parallèle |
 | `workflow` | `workflowId` (obligatoire), `params` | Un sous-workflow, profondeur bornée |
+| `foreach` | `items` et `workflowId` (obligatoires), `params`, `onError`, `pauseEvery`, `pauseAfter`, `itemLabel`, `itemNoun`, `itemBudget` | Une liste ordonnée, un sous-workflow par élément, dans l'ordre (voir « Dérouler une liste ») |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
 | `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») |
@@ -399,6 +400,135 @@ Un tour de conversation arrêté de même garde sa réponse partielle ; le messa
 transcript. Une fenêtre de quota dont l'heure de remise à zéro est passée ne retient
 plus les appels : avant la 1.0.48, le retrait de Codex durait jusqu'au redémarrage.
 
+## Dérouler une liste (`foreach`)
+
+Pour faire des dizaines de tâches dans l'ordre, sprint après sprint (1.0.48, #338) :
+l'étape `foreach` prend une liste, la **fige** au premier passage dans l'état du run
+(table `workflow_items`), puis lance pour chaque élément, dans l'ordre, le sous-workflow
+`workflowId` avec l'élément en paramètre. Un ajout dans le tracker pendant le run ne
+change pas la liste ; pour la rafraîchir, relancer le run.
+
+| Champ | Rôle |
+|---|---|
+| `items` | La liste : un tableau écrit là ; `{"file": "backlog.md"}` (JSON ou Markdown du workspace, une entrée par ligne de liste, cases cochées sautées) ; `{"step": "<étape>", "path": "content"}` (la sortie d'une étape précédente) ; `{"tool": "<outil MCP>", "args": {…}, "path": "…"}` (un outil en lecture, appelé une fois, par le chemin d'une étape `tool` : politique, approbation, ledger). Avec `filter` (`{"status": ["à faire"]}`) et `sortBy` (`"priority"`, `"-date"`) optionnels. Sans `path`, la liste est cherchée seule : un tableau, une chaîne JSON, le `structuredContent` ou le texte d'un résultat MCP, un objet qui ne porte qu'une liste |
+| `workflowId`, `params` | Le sous-workflow d'un élément. `{{item}}`, `{{item.title}}`, `{{item_index}}` (depuis 1) et `{{item_total}}` s'emploient dans `params` ; `item`, `item_index` et `item_total` sont aussi passés d'office aux sous-workflows qui déclarent ces paramètres (`"type": "object"` pour `item`). Chaque sous-run a son propre budget, `itemBudget` en remplace les plafonds non nuls |
+| `onError` | `stop` (défaut) : l'élément passe `failed`, l'étape rend `failure`, le propriétaire est prévenu ; `skip` : l'élément passe `skipped`, noté, et la liste continue (l'étape rend `partial`) ; `retry:N` : N nouveaux sous-runs, puis `stop` |
+| `pauseEvery` | Un point d'arrêt tous les N éléments faits : le run passe `paused` et le propriétaire reçoit le bilan (faits, échecs, suivant), comme une fin de sprint |
+| `pauseAfter` | Un point d'arrêt après un élément : `{"changes": "epic"}` (le suivant change d'épique), ou une condition lue sur `{item, next}` |
+| `itemLabel`, `itemNoun` | Le libellé d'un élément (gabarit, défaut : `title`, `name`, `label` ou `id`) et son nom dans le suivi (défaut : `élément`) |
+
+Chaque élément a son état : à faire, en cours, fait, en échec ou sauté. La reprise, après
+une pause, un point d'arrêt ou un redémarrage du daemon, repart de l'élément courant, à
+l'étape courante de son sous-run ; jamais du début. Un compte rendu court part dans le
+sujet du run à chaque élément fini (« ✅ story 12/53 · 3.2 Moteur de passation : fait
+(0.41 $) »), un bilan à chaque point d'arrêt. `/runs`, la carte du run et `penelope wf
+runs` montrent « story 12/53 · 3.2 Moteur de passation · étape dev », l'écran du run la
+liste des faits et des échecs. La durée de l'étape n'est pas bornée par `timeoutMs` : un
+backlog de 53 stories se borne par son budget, `maxWallMs: 0` le laisse sans plafond de
+durée. Un quota épuisé en route met le sous-run en pause et le reprend (voir « Crédits
+épuisés ») : la liste attend, puis continue.
+
+### Exemple prêt à l'emploi : une liste ClickUp
+
+Deux fichiers à déposer dans le répertoire des workflows (`penelope wf validate` les
+vérifie sans daemon). Le serveur MCP ClickUp est déclaré sous le nom `clickup` : ses
+outils s'appellent `mcp__clickup__<outil>`. Remplacer `<id de la liste>` et le dépôt.
+
+`backlog-clickup.workflow.json` lit les tâches « to do » de la liste, dans l'ordre du tableau, et
+les déroule ; un point d'arrêt à chaque changement d'épique (champ `parent`) :
+
+```json
+{
+  "metadata": {
+    "id": "backlog-clickup",
+    "name": "Backlog ClickUp",
+    "description": "Déroule une liste ClickUp, story par story, avec tache-clickup.",
+    "parameters": [
+      {"id": "liste", "label": "Liste ClickUp", "type": "string", "default": "<id de la liste>"},
+      {"id": "depot", "label": "Dépôt", "type": "string", "default": "/chemin/du/depot"}
+    ]
+  },
+  "entryStep": "stories",
+  "settings": {
+    "maxIterations": 10,
+    "budget": {"maxUsd": 200, "maxWallMs": 0},
+    "workspace": "persistent:backlog-clickup"
+  },
+  "steps": [
+    {
+      "id": "stories", "type": "foreach", "name": "Stories",
+      "items": {
+        "tool": "mcp__clickup__clickup_filter_tasks",
+        "args": {"list_ids": ["{{liste}}"], "statuses": ["to do"], "subtasks": true},
+        "sortBy": "orderindex"
+      },
+      "workflowId": "tache-clickup",
+      "params": {"depot": "{{depot}}"},
+      "onError": "stop",
+      "pauseAfter": {"changes": "parent"},
+      "itemNoun": "story",
+      "itemLabel": "{{item.name}}",
+      "itemBudget": {"maxUsd": 10},
+      "transitions": [
+        {"goto": "$done", "condition": {"type": "step_result", "result": "success"}},
+        {"goto": "$blocked", "tag": "une story en échec arrête la liste"}
+      ]
+    }
+  ]
+}
+```
+
+`tache-clickup.workflow.json` fait une story : spécification, tests, développement, tests locaux,
+revue adverse (contexte neuf), commit et push, puis statut ClickUp par un appel d'outil
+direct :
+
+```json
+{
+  "metadata": {
+    "id": "tache-clickup",
+    "name": "Story ClickUp",
+    "parameters": [
+      {"id": "item", "label": "Story", "type": "object", "required": true},
+      {"id": "item_index", "label": "Rang", "type": "integer"},
+      {"id": "item_total", "label": "Total", "type": "integer"},
+      {"id": "depot", "label": "Dépôt", "type": "string", "default": "."}
+    ]
+  },
+  "entryStep": "spec",
+  "settings": {"maxIterations": 30, "budget": {"maxUsd": 10, "maxWallMs": 0}},
+  "steps": [
+    {"id": "spec", "type": "agent", "phase": "plan", "maxCalls": 60,
+     "prompt": "Story {{item_index}}/{{item_total}} : {{item.name}} ({{item.url}}), dépôt {{depot}}. Lis-la dans ClickUp (`mcp__clickup__clickup_get_task`, identifiant {{item.id}}) et le code concerné. Écris la spécification : comportement, critères d'acceptation vérifiables, fichiers touchés. Pose les critères : `session_metadata` op=set key=criteria entry=[{\"id\": \"…\", \"text\": \"…\", \"status\": \"pending\"}]. Puis `step_done()`.",
+     "transitions": [{"goto": "tests"}]},
+    {"id": "tests", "type": "agent",
+     "prompt": "Écris d'abord les tests des critères, sans toucher au code produit ; lance-les : ils échouent pour la bonne raison. Puis `step_done()`.",
+     "transitions": [{"goto": "dev"}]},
+    {"id": "dev", "type": "agent", "maxCalls": 120, "maxTurns": 3,
+     "prompt": "Implémente jusqu'à ce que les tests passent ; coche chaque critère rempli (op=update). {{pendingCount}} critère(s) restant(s) :\n{{criteriaList}}\nDernier refus, s'il y en a : {{reason}}. Puis `step_done()`.",
+     "transitions": [{"goto": "tests-locaux"}]},
+    {"id": "tests-locaux", "type": "agent", "phase": "verification",
+     "prompt": "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. Tout vert : `return_value(result=\"passed\")`, sinon `return_value(result=\"failed\", content=<l'échec>)`. Puis `step_done()`.",
+     "transitions": [{"goto": "revue", "condition": {"type": "step_result", "result": "passed"}}, {"goto": "dev"}]},
+    {"id": "revue", "type": "agent", "phase": "verification", "context": "fresh",
+     "prompt": "Revue adverse de la story {{item.name}} dans {{depot}} : tu ne l'as pas écrite, tu cherches ce qui casse. Lis le diff, les tests, les critères. Bloquant : `return_value(result=\"failed\", content=<corrections, fichier et raison>)` ; sinon `return_value(result=\"passed\")`. Puis `step_done()`.",
+     "transitions": [{"goto": "commit", "condition": {"type": "step_result", "result": "passed"}}, {"goto": "dev"}]},
+    {"id": "commit", "type": "agent", "phase": "deploy",
+     "prompt": "Commite (ce qui change et pourquoi, avec {{item.id}}) et pousse la branche. `return_value(result=\"success\", content=<SHA court>)`, puis `step_done()`.",
+     "transitions": [{"goto": "statut"}]},
+    {"id": "statut", "type": "tool", "phase": "done",
+     "tool": "mcp__clickup__clickup_update_task",
+     "args": {"task_id": "{{item.id}}", "status": "complete"},
+     "transitions": [{"goto": "$done"}]}
+  ]
+}
+```
+
+Lancer : `penelope wf run backlog-clickup`, ou `/run backlog-clickup`. Les noms d'outils
+et de statuts suivent le serveur ClickUp branché : `penelope mcp show clickup` les
+liste. La même paire marche avec Redmine ou les issues GitHub en changeant les deux
+appels d'outil ; le workflow livré `backlog` fait lire la liste par un agent, pour
+n'importe quel tracker.
+
 ## Workflows livrés
 
 | Identifiant | Rôle |
@@ -407,6 +537,8 @@ plus les appels : avant la 1.0.48, le retrait de Codex durait jusqu'au redémarr
 | `review` | Lint, tests et relecture en parallèle, résultats dans `review_findings` |
 | `ticket-to-deploy` | Scénario de référence du §12.10 : du ticket au déploiement, avec portes humaines |
 | `deploy-generic` | Déploiement du dépôt cloné, appelé en sous-workflow |
+| `backlog` | Lit une liste de tâches dans un tracker (paramètre `tracker` : ClickUp, Redmine, GitHub ou `fichier`) et la déroule avec `tache`, point d'arrêt à chaque fin d'épique (1.0.48, #338) |
+| `tache` | Une tâche : spécification, tests, développement, tests locaux, revue adverse, commit et push, statut du tracker |
 
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.

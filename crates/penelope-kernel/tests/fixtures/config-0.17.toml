@@ -320,6 +320,9 @@ inventory_extra = []
 workspace_retention_days = 7
 max_depth = 3
 default_max_iterations = 40
+step_max_calls = 60
+step_max_turns = 2
+resume_on_quota = true
 
 [upgrade]
 channel = "stable"

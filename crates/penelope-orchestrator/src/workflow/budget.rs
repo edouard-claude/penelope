@@ -63,6 +63,26 @@ pub async fn effective_budget(s: &Services, run: &Run, declared: &Budget) -> Bud
     b
 }
 
+/// Plafonds propres à un run, posés à son départ : `itemBudget` d'un élément de
+/// `foreach` (#338). Seuls les plafonds non nuls remplacent ceux du workflow.
+pub(super) async fn set_caps(s: &Services, run_id: &str, b: &Budget) -> anyhow::Result<()> {
+    let mut caps = serde_json::Map::new();
+    if b.max_usd > 0.0 {
+        caps.insert("max_usd".into(), json!(b.max_usd));
+    }
+    for (k, v) in [
+        ("max_tokens", b.max_tokens),
+        ("max_cached_tokens", b.max_cached_tokens),
+        ("max_wall_ms", b.max_wall_ms),
+    ] {
+        if v > 0 {
+            caps.insert(k.into(), json!(v));
+        }
+    }
+    s.kv_set(&budget_key(run_id), &Value::Object(caps).to_string())
+        .await
+}
+
 /// Borne atteinte, avec ses chiffres et la commande qui la relève (issue #136, #337).
 pub(super) fn limit_reason(limit: &Limit, run: &Run, b: &Budget) -> String {
     let raise = |what: &str| format!("`penelope wf control {} budget {what}`", run.id);
@@ -200,13 +220,15 @@ pub async fn budget_view(s: &Services, run: &Run) -> String {
 }
 
 /// Les runs récents pour `penelope wf runs` : chaque ligne porte sa consommation
-/// (`budget`) face à ses plafonds (#337).
+/// (`budget`) face à ses plafonds (#337) et sa place dans sa liste (`progress`, #338).
 pub async fn runs_listing(s: &Services, limit: i64) -> anyhow::Result<Value> {
     let mut out = Vec::new();
     for run in s.runs.list(None, limit).await? {
         let line = budget_view(s, &run).await;
+        let position = super::foreach::position_of(s, &run).await;
         let mut v = serde_json::to_value(&run)?;
         v["budget"] = json!(line);
+        v["progress"] = json!(position);
         out.push(v);
     }
     Ok(Value::Array(out))
