@@ -69,6 +69,11 @@ libc = "0.2"
 # sans dépendance, MIT ou Apache-2.0, plutôt qu'un découpage à la main qui casserait au
 # premier préfixe inhabituel.
 roxmltree = "0.20"
+# Sauvegarde (#341) : les `.gitignore` des dépôts du workspace (règles négatives,
+# répertoires seuls, `**`, ancrage) lus comme Git les lit. Le module `gitignore` seul,
+# sans son parcours parallèle : la collecte garde le sien, qui ne suit aucun lien.
+# MIT ou Unlicense, déjà la référence de ripgrep.
+ignore = "0.4"
 
 # --- documents (§6.13) ---
 # Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule.

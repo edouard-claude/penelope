@@ -73,14 +73,19 @@ pub fn restore_archive(
     let _ = std::fs::remove_dir_all(&scratch.0);
     std::fs::create_dir_all(&scratch.0)?;
     restrict(&scratch.0);
-    let plain = penelope_platform::archive::open_to_vec(archive, passphrase)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let entries = penelope_platform::process::tar_gz_entries(&plain)
-        .map_err(|e| anyhow::anyhow!("lecture de l'archive : {e}"))?;
+    // En flux (#341) : l'archive est lue bloc par bloc, trois fois (noms, types, puis
+    // extraction), jamais chargée ; la phrase de passe est vérifiée à la première.
+    let open = || penelope_platform::archive::open_reader(archive, passphrase);
+    let first = open().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut first = Some(first);
+    let entries = penelope_platform::process::tar_gz_entries_from(|| match first.take() {
+        Some(r) => Ok(r),
+        None => open(),
+    })
+    .map_err(|e| anyhow::anyhow!("lecture de l'archive : {e}"))?;
     check_entries(&entries)?;
-    penelope_platform::process::extract_tar_gz_bytes(&plain, &scratch.0)
+    penelope_platform::process::extract_tar_gz_from(open()?, &scratch.0)
         .map_err(|e| anyhow::anyhow!("extraction : {e}"))?;
-    drop(plain);
     let root = scratch.0.join("penelope");
     let manifest: Value = std::fs::read_to_string(root.join("MANIFEST.json"))
         .ok()
@@ -149,7 +154,7 @@ pub fn restore_archive(
 
 /// Ce qui reste à faire après la restauration, une ligne chacun : secrets à ressaisir,
 /// modèles à retélécharger, commandes MCP absentes de cette machine.
-fn todo(
+pub(crate) fn todo(
     manifest: &Value,
     failed: &[(String, String)],
     no_store: bool,
@@ -186,6 +191,19 @@ fn todo(
         out.push(format!(
             "retélécharger les modèles locaux ({}) : `penelope doctor` dit lesquels manquent",
             list.join(", ")
+        ));
+    }
+    if let Some(ws) = manifest["excluded"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["name"] == "workspace")
+    {
+        out.push(format!(
+            "régénérer ce que la sauvegarde a laissé hors du workspace ({} élément(s), {} Mo : \
+             `target/`, `node_modules/`, caches…) : `cargo build`, `npm install`, selon le projet",
+            ws["count"].as_u64().unwrap_or(0),
+            ws["bytes"].as_u64().unwrap_or(0).div_ceil(1024 * 1024)
         ));
     }
     for c in inventory::missing_commands(manifest, which) {

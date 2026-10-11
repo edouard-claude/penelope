@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod alert;
+mod collect;
 mod doctor;
 pub mod inventory;
 pub mod kit;
@@ -38,6 +39,8 @@ pub mod s3;
 pub mod secrets;
 pub mod sigv4;
 
+pub(crate) use collect::{Collect, copy_path};
+pub use collect::{DEFAULT_EXCLUDES, IGNORE_FILE};
 pub use doctor::{doctor_check, doctor_checks, status};
 
 /// Nom du secret qui porte la phrase de passe des sauvegardes.
@@ -121,6 +124,8 @@ pub async fn build(s: &Services, media: bool) -> anyhow::Result<(PathBuf, Value)
         platform: s.platform.clone(),
         entries: entries(s, media),
         excluded: excluded(s, media),
+        exclude: s.config.config().backup.exclude.clone(),
+        db_path: s.platform.dirs.db_path(),
         mcp_commands: inventory::mcp_commands(&s.platform.dirs.data().join("mcp.d")),
         // Les LaunchAgents de la machine ; en test (`Discovery::none`), elle n'est pas lue.
         services: inventory::services(
@@ -164,6 +169,10 @@ struct BuildJob {
     platform: std::sync::Arc<penelope_platform::Platform>,
     entries: Vec<(PathBuf, String)>,
     excluded: Vec<Value>,
+    /// `backup.exclude` (#341).
+    exclude: Vec<String>,
+    /// La base vivante : sa taille entre dans l'estimation de l'espace disque.
+    db_path: PathBuf,
     mcp_commands: Vec<Value>,
     services: Vec<Value>,
     out_dir: PathBuf,
@@ -178,7 +187,21 @@ impl BuildJob {
         // Sans phrase de passe, rien n'est commencé.
         let passphrase = secret_passphrase(&self.platform)?;
         std::fs::create_dir_all(&self.out_dir)?;
-        // Répertoire de travail : tout y est copié, puis l'archive est faite d'un bloc.
+        // Plus de plafond de taille (#341) : seul le disque borne la sauvegarde. Le volume
+        // est compté sans rien copier, puis comparé à l'espace libre.
+        let mut estimate = collect::Collect::dry(&self.exclude);
+        estimate.bytes = std::fs::metadata(&self.db_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        for (src, name) in &self.entries {
+            estimate.copy_root(src, Path::new(""), name)?;
+        }
+        collect::check_space(
+            estimate.bytes,
+            penelope_platform::host::free_bytes(&self.out_dir),
+            &self.out_dir,
+        )?;
+        // Répertoire de travail : tout y est copié, puis archivé et chiffré en flux.
         let work = self.out_dir.join(format!("work-{}", self.stamp));
         let result = self.assemble(&work, &passphrase);
         let _ = std::fs::remove_dir_all(&work);
@@ -203,9 +226,9 @@ impl BuildJob {
             .map_err(|e| anyhow::anyhow!("allègement de l'instantané : {e}"))?;
         let snapshot = t.elapsed();
 
-        // Collecte bornée : les liens symboliques ne sont pas suivis (rien n'entre de
-        // hors des racines déclarées, aucune boucle), et la taille est comptée en route.
-        let mut collect = Collect::bounded(MAX_COLLECTED_BYTES);
+        // Collecte : les liens symboliques ne sont pas suivis (rien n'entre de hors des
+        // racines déclarées, aucune boucle), ce qui se régénère reste hors du workspace.
+        let mut collect = Collect::new(&self.exclude);
         collect.bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
         let mut contents: Vec<Value> = Vec::new();
         for (src, name) in &self.entries {
@@ -222,6 +245,8 @@ impl BuildJob {
             root.join(secrets::FILE),
             secrets::seal(&dump.values, passphrase)?,
         )?;
+        let mut excluded = self.excluded.clone();
+        excluded.extend(collect.excluded_entry());
         let manifest = json!({
             "version": crate::VERSION,
             "created_at": self.created_at,
@@ -230,7 +255,7 @@ impl BuildJob {
             "db_full_bytes": full_bytes,
             "derived_excluded": DERIVED_TABLES,
             "contents": contents,
-            "excluded": self.excluded,
+            "excluded": excluded,
             "links_skipped": collect.skipped,
             "media_included": self.media,
             "secrets_included": dump.values.keys().collect::<Vec<_>>(),
@@ -272,10 +297,11 @@ impl BuildJob {
 /// manifeste et les secrets. Renvoie le nombre d'entrées.
 fn verify(sealed: &Path, passphrase: &str) -> anyhow::Result<usize> {
     let fail = |e: String| anyhow::anyhow!("contrôle de déchiffrement en échec : {e}");
-    let plain = penelope_platform::archive::open_to_vec(sealed, passphrase)
+    // En flux (#341) : l'archive est relue bloc par bloc, jamais chargée.
+    let plain = penelope_platform::archive::open_reader(sealed, passphrase)
         .map_err(|e| fail(e.to_string()))?;
     let entries =
-        penelope_platform::process::list_tar_gz_bytes(&plain).map_err(|e| fail(e.to_string()))?;
+        penelope_platform::process::list_tar_gz_from(plain).map_err(|e| fail(e.to_string()))?;
     for needed in [
         "penelope/penelope.db",
         "penelope/MANIFEST.json",
@@ -556,107 +582,13 @@ async fn nightly_run(s: &Services, messenger: Option<Arc<dyn Messenger>>) -> any
 
 // ------------------------------------------------------------------ utilitaires
 
-/// Plafond de ce que la collecte copie avant l'archive (base comprise) : la copie se fait
-/// sur le disque, mais une collecte sans borne remplirait le disque et l'archive
-/// dépasserait de toute façon [`penelope_platform::archive::MAX_ARCHIVE_BYTES`], que le
-/// chiffrement vérifie avant de rien charger en mémoire.
-pub const MAX_COLLECTED_BYTES: u64 = 4 * penelope_platform::archive::MAX_ARCHIVE_BYTES;
-
-/// Copie d'arbres bornée, qui ne suit aucun lien symbolique.
-///
-/// Une racine déclarée (le vault, `data/workspace`…) est prise telle que la configuration
-/// la désigne ; **sous** elle, un lien symbolique n'est jamais suivi : il est noté
-/// (`skipped`), ni copié ni recréé. Rien n'entre ainsi de hors des racines, et une boucle
-/// de liens ne peut pas tourner. Les sockets et les tubes (un pont MCP en laisse dans
-/// `mcp-data`) sont notés de même, leur serveur les recrée.
-pub(crate) struct Collect {
-    pub bytes: u64,
-    cap: u64,
-    pub skipped: Vec<String>,
-}
-
-impl Collect {
-    pub(crate) fn bounded(cap: u64) -> Self {
-        Collect {
-            bytes: 0,
-            cap,
-            skipped: Vec::new(),
-        }
-    }
-
-    /// Copie la racine `src` vers `dst` ; `label` la nomme dans `skipped`. Seules les
-    /// racines que la configuration désigne (le vault de `memory.vault_path`,
-    /// `config.toml`) peuvent être elles-mêmes un lien : le propriétaire l'a voulu.
-    /// `data/workspace` ou `data/mcp-data` en lien ne sont pas suivis.
-    pub(crate) fn copy_root(&mut self, src: &Path, dst: &Path, label: &str) -> anyhow::Result<()> {
-        let follow = matches!(label, "vault" | "config.toml");
-        let meta = if follow {
-            std::fs::metadata(src)
-        } else {
-            std::fs::symlink_metadata(src)
-        };
-        let meta = match meta {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(anyhow::anyhow!("copie de {} : {e}", src.display())),
-        };
-        self.copy(src, meta, dst, label)
-            .map_err(|e| anyhow::anyhow!("copie de {} : {e}", src.display()))
-    }
-
-    /// `meta` : ce qu'est `src` lui-même, lien compris (`symlink_metadata`) ; un lien,
-    /// une socket ou un tube est noté et laissé.
-    fn copy(
-        &mut self,
-        src: &Path,
-        meta: std::fs::Metadata,
-        dst: &Path,
-        rel: &str,
-    ) -> anyhow::Result<()> {
-        if meta.is_file() {
-            // Comptée avant la copie : le plafond franchi, rien de plus n'est lu.
-            self.bytes += meta.len();
-            if self.bytes > self.cap {
-                anyhow::bail!(
-                    "plus de {} Mo à sauvegarder : au-delà du plafond, rien n'est archivé \
-                     (alléger `data/workspace` ou `data/mcp-data`, ou retirer les médias)",
-                    self.cap / (1024 * 1024)
-                );
-            }
-            if let Some(p) = dst.parent() {
-                std::fs::create_dir_all(p)?;
-            }
-            std::fs::copy(src, dst)?;
-            return Ok(());
-        }
-        if !meta.is_dir() {
-            self.skipped.push(rel.to_string());
-            return Ok(());
-        }
-        std::fs::create_dir_all(dst)?;
-        for e in std::fs::read_dir(src)?.flatten() {
-            let path = e.path();
-            let name = e.file_name();
-            let child_rel = format!("{rel}/{}", name.to_string_lossy());
-            match std::fs::symlink_metadata(&path) {
-                Ok(m) => self.copy(&path, m, &dst.join(&name), &child_rel)?,
-                // Disparu entre la lecture du dossier et la copie : rien à garder.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Copie récursive sans plafond ni lien suivi : la restauration, depuis l'arbre extrait.
-pub(crate) fn copy_path(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    Collect::bounded(u64::MAX).copy_root(src, dst, "")
-}
-
+/// Empreinte d'un fichier, lue en flux : une archive de plusieurs gigaoctets n'est pas
+/// chargée (#341).
 pub(crate) fn sha256_of(p: &Path) -> anyhow::Result<String> {
-    let bytes = std::fs::read(p)?;
-    Ok(penelope_kernel::canonical::sha256_hex(&bytes))
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(p)?, &mut h)?;
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
@@ -664,6 +596,9 @@ mod fake_s3;
 
 #[cfg(test)]
 mod alert_tests;
+
+#[cfg(test)]
+mod exclude_tests;
 
 #[cfg(test)]
 mod kit_tests;

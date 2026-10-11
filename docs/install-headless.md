@@ -642,6 +642,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `backup.keep_monthly` | `12` | Sauvegardes mensuelles gardées chez le fournisseur. |
 | `backup.keep_local` | `1` | Archives gardées dans le dossier local `backups/` (instantanés de base compris) ; les plus anciennes sont effacées après chaque sauvegarde réussie. |
 | `backup.include_media` | `false` | Inclure les artefacts et les médias reçus. Lourd, et reconstructible. |
+| `backup.exclude` | `[]` | Motifs écartés de `data/workspace`, au format `.gitignore` (`!` réinclut), en plus des `.gitignore` des dépôts, des `.penelopeignore` et des caches de build reconnus (#341). |
 | `backup.s3.endpoint` | `""` | Adresse du service (`https://s3.exemple.net`, `http://127.0.0.1:9000` en local) ; vide : pas de destination S3. |
 | `backup.s3.bucket` | `""` | Bucket, créé d'avance et réservé aux sauvegardes. |
 | `backup.s3.prefix` | `"penelope/"` | Préfixe des objets dans le bucket. |
@@ -3324,12 +3325,39 @@ restauration.
 Sous chaque racine (vault, workspace, `mcp-data`…), un **lien symbolique n'est jamais
 suivi** : il n'est ni copié ni recréé, et le manifeste le nomme (`links_skipped`), comme
 les sockets qu'un serveur MCP recrée lui-même ; rien n'entre ainsi de hors des racines, et
-une boucle de liens ne tourne pas. La collecte compte ce qu'elle copie et s'arrête
-au-delà de 2 Gio, avant toute archive ; l'archive chiffrée, elle, ne dépasse pas 512 Mio,
-plafond vérifié avant de la charger en mémoire, à l'écriture comme à la lecture.
+une boucle de liens ne tourne pas.
+
+**Ce qui se régénère reste hors du workspace** (#341). Dans `data/workspace` seulement, la
+collecte laisse de côté :
+
+- ce que les `.gitignore` des dépôts ignorent, dépôts imbriqués compris, avec leurs
+  règles négatives (`!fichier`) et `.git/info/exclude` ; comme pour Git, un `.gitignore`
+  hors de tout dépôt ne vaut rien ;
+- les caches et sorties de build reconnus, dépôt Git ou non : `node_modules/`,
+  `.gocache/`, `.gomodcache/`, `.venv/`, `venv/`, `__pycache__/`, `.pytest_cache/`,
+  `.mypy_cache/`, `.ruff_cache/`, `.tox/`, `.next/`, `.nuxt/`, `.svelte-kit/`, `.turbo/`,
+  `.parcel-cache/`, `.gradle/`, et `target/` à côté d'un `Cargo.toml` ;
+- les motifs de `backup.exclude` (format `.gitignore`, relatifs au workspace) et ceux d'un
+  fichier `.penelopeignore`, lu comme un `.gitignore` là où il est posé, dépôt ou non.
+
+La règle la plus proche l'emporte : un `.penelopeignore` ou un `.gitignore` qui réinclut
+(`!node_modules/`) garde ce que la liste des caches écarterait. Rien n'est écarté sous un
+dossier `.git` (l'historique local ne se régénère pas), ni dans le vault, `mcp-data` ou
+les autres racines. Le manifeste dit le volume écarté et les plus gros chemins avec la
+règle qui les a écartés ; `penelope restore` rappelle de les reconstruire (`cargo build`,
+`npm install`…).
+
+**Pas de plafond de taille** (#341). Une sauvegarde de 3 Go fait une archive de 3 Go : la
+collecte est d'abord comptée sans rien copier, et seul l'espace disque libre peut la
+refuser, avant toute copie, en disant combien il manque (il faut environ trois fois le
+volume collecté, la copie de travail, le `tar.gz` et l'archive coexistant un moment). Le
+chiffrement se fait en flux, par blocs de 1 Mio authentifiés chacun (format `PNLPBK02`) :
+la mémoire reste bornée quelle que soit la taille, et un bloc retiré, permuté ou une
+archive coupée font échouer la lecture. Les archives `PNLPBK01` d'avant se restaurent
+toujours.
 
 L'archive est chiffrée (Argon2id puis XChaCha20-Poly1305) avant de quitter la machine, puis
-**relue** : chaque sauvegarde se déchiffre en mémoire et liste son contenu (base, manifeste,
+**relue** : chaque sauvegarde se déchiffre en flux et liste son contenu (base, manifeste,
 secrets) sans rien extraire ; une archive qui ne se relit pas est effacée et la sauvegarde
 échoue. `penelope doctor` date le dernier contrôle (« déchiffrement vérifié le … »).
 
