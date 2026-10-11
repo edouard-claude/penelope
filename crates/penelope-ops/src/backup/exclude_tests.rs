@@ -54,6 +54,12 @@ fn git_rules_of_each_repository_apply() {
     write(w, "app/nouveau-non-suivi.txt", "à garder");
     write(w, "app/trace.log", "bruit");
     write(w, "app/keep.log", "à garder malgré *.log");
+    write(
+        w,
+        "app/garde.log",
+        "réinclus par le .penelopeignore, prioritaire",
+    );
+    write(w, "app/.penelopeignore", "!garde.log\n");
     write(w, "app/local-only/note", "exclu par info/exclude");
     write(w, "app/build/out.txt", "aucune règle : gardé");
     write(w, "app/sous/.git/HEAD", "ref");
@@ -73,6 +79,7 @@ fn git_rules_of_each_repository_apply() {
         "app/src/main.rs",
         "app/nouveau-non-suivi.txt",
         "app/keep.log",
+        "app/garde.log",
         "app/build/out.txt",
         "app/sous/.git/HEAD",
         "notes/idee.md",

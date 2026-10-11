@@ -370,6 +370,7 @@ keep_weekly = 4
 keep_monthly = 12
 keep_local = 1
 include_media = false
+exclude = []
 
 [backup.s3]
 endpoint = ""

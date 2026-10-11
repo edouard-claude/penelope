@@ -105,17 +105,22 @@ impl Scope {
         }
         let git = std::fs::symlink_metadata(dir.join(".git")).ok();
         next.in_repo |= git.is_some();
+        // Dans un même jeu de règles, la dernière qui nomme un chemin l'emporte : du moins
+        // prioritaire au plus prioritaire, `info/exclude`, `.gitignore`, `.penelopeignore`.
         let mut found = Vec::new();
-        found.push(dir.join(IGNORE_FILE));
-        if next.in_repo {
-            found.push(dir.join(".gitignore"));
-        }
         if git.is_some_and(|m| m.is_dir()) {
             found.push(dir.join(".git/info/exclude"));
         }
+        if next.in_repo {
+            found.push(dir.join(".gitignore"));
+        }
+        found.push(dir.join(IGNORE_FILE));
         let mut b = GitignoreBuilder::new(dir);
         let mut any = false;
-        for f in found.iter().filter(|f| f.is_file()) {
+        // Un fichier de règles en lien n'est pas suivi, comme le reste de la collecte.
+        let plain_file =
+            |f: &&std::path::PathBuf| std::fs::symlink_metadata(f).is_ok_and(|m| m.is_file());
+        for f in found.iter().filter(plain_file) {
             // Une ligne illisible d'un `.gitignore` est ignorée, comme Git le fait ; les
             // autres valent.
             let _ = b.add(f);
