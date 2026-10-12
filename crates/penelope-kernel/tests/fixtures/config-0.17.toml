@@ -305,6 +305,7 @@ retention_days = 365
 background_after = "120s"
 jobs_per_session = 3
 jobs_total = 10
+ci_hosts = ["gitlab.com", "github.com"]
 shell = ""
 shell_timeout = "120s"
 http_allowlist = ["api.github.com"]

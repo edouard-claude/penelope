@@ -1,0 +1,24 @@
+name = "commande-secrets"
+description = """`/secrets <projet>` (#350) par la passerelle Telegram (transport simulé) : la
+commande arme la capture, le bloc collé au message suivant (sections `DEV :` et `QA :`,
+libellés `clé : valeur`, une ligne illisible) est rangé au magasin sans tour ni modèle,
+le message est supprimé (`deleteMessage`) et la réponse ne donne que les noms et le
+numéro de la ligne illisible. `/secret list` montre ensuite les noms rangés. Les valeurs
+sont factices."""
+
+[[steps]]
+kind = "telegram"
+text = "/secrets mentaleco"
+
+[[steps]]
+kind = "telegram"
+text = """DEV :
+  Access Key : AKFAKEDEV0000000000
+  Secret Key : valeur-factice-dev
+QA :
+  Access Key : AKFAKEQA00000000000
+ligne illisible sans séparateur"""
+
+[[steps]]
+kind = "telegram"
+text = "/secret list"

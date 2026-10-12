@@ -477,6 +477,12 @@ pub enum SecretCmd {
     Rm {
         name: String,
     },
+    /// Range un bloc de credentials collé tel quel (#350) : sections (`DEV :`, `[qa]`) et
+    /// lignes `clé : valeur` ou `CLÉ=valeur`, sous `<projet>.<env>.<libellé>`. Lu sur
+    /// l'entrée standard (`< fichier`), ou collé au terminal sans écho jusqu'à Ctrl-D.
+    Import {
+        project: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

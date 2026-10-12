@@ -32,6 +32,28 @@ pub fn read_secret(prompt: &str) -> std::io::Result<String> {
     Ok(line)
 }
 
+/// Lit un bloc de secrets (#350) : tout le flux redirigé, ou, au terminal, tout ce qui
+/// est collé jusqu'à Ctrl-D, **sans écho**.
+pub fn read_secret_block(prompt: &str) -> std::io::Result<String> {
+    let stdin = std::io::stdin();
+    let mut raw = String::new();
+    if !stdin.is_terminal() {
+        stdin.lock().read_to_string(&mut raw)?;
+        return Ok(raw);
+    }
+    let mut err = std::io::stderr();
+    write!(err, "{prompt}")?;
+    err.flush()?;
+    let echo_off = set_echo(false);
+    let read = stdin.lock().read_to_string(&mut raw);
+    if echo_off {
+        set_echo(true);
+    }
+    writeln!(err)?;
+    read?;
+    Ok(raw)
+}
+
 /// Active ou coupe l'écho du terminal. Vrai si le réglage a pu être appliqué.
 #[cfg(unix)]
 fn set_echo(on: bool) -> bool {

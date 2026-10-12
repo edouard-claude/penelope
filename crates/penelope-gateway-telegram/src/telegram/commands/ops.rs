@@ -450,8 +450,9 @@ impl TelegramGateway {
                         .show_screen(chat_id, topic_id, reply_to, "confirm", &confirm, None)
                         .await;
                 }
-                _ => "Un secret ne se saisit **jamais** dans une conversation. En SSH : \
-                      `penelope secret set <nom>` puis coller la valeur à l'invite"
+                _ => "Un secret ne se tape **jamais** à Pénélope. `/secrets <projet>` puis colle \
+                      le bloc : aucun modèle ne le voit, le message est effacé. En SSH : \
+                      `penelope secret import <projet>`"
                     .into(),
             }
         };

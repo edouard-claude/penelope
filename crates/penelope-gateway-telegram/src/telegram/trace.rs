@@ -108,9 +108,8 @@ pub(crate) fn family_of(name: &str) -> Option<Family> {
         "fs_read" | "fs_list" | "fs_write" | "fs_edit" | "fs_search" | "artifact_read" => {
             Family::Files
         }
-        "git_status" | "git_diff" | "git_branch" | "git_commit" | "git_clone" | "git_push" => {
-            Family::Git
-        }
+        "git_status" | "git_diff" | "git_branch" | "git_commit" | "git_clone" | "git_push"
+        | "ci_variable_set" => Family::Git,
         "http_fetch" => Family::Web,
         "mem_search" | "mem_get" | "mem_neighbors" | "mem_note" | "mem_remember" | "mem_forget"
         | "session_notes" | "session_metadata" => Family::Memory,

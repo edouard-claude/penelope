@@ -571,6 +571,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `tools.background_after` | `"120s"` | Délai au-delà duquel un appel d'outil se voit **proposer** l'arrière-plan plutôt que d'immobiliser le tour (issue #204). La proposition passe par le texte du résultat : c'est le modèle qui décide, rien n'est détourné d'office. |
 | `tools.jobs_per_session` | `3` | Jobs d'outils simultanés au plus pour une session (issue #204). |
 | `tools.jobs_total` | `10` | Jobs d'outils simultanés au plus pour tout le daemon (issue #204). |
+| `tools.ci_hosts` | `["gitlab.com","github.com"]` | Hôtes de forge où `ci_variable_set` peut poser une variable (#350) : fixés par le propriétaire, jamais par le modèle ; tous les remotes du dépôt doivent en être. |
 
 **[workflows]**
 
@@ -1900,6 +1901,7 @@ et `/stop` interrompt tout le lot.
 |---|---|---|
 | `artifact_read` | read | Lecture paginée d'un artefact ; le curseur n'avance que des octets renvoyés. |
 | `ask_user` | read | Pose une question au propriétaire et attend sa réponse. |
+| `ci_variable_set` | external | Pose une variable CI (GitLab `glab`, GitHub `gh`) depuis un secret du magasin désigné par son nom (`projet.env.libellé`, rangé par le propriétaire avec `/secrets`) ; la valeur n'est jamais vue ni rendue. (à la demande) |
 | `config_set` | write | Modifie un réglage de sa propre configuration et indique son moment d'effet. (à la demande) |
 | `env_explore` | read | Carte de ta machine, dressée hors des tours (démarrage, chaque heure, `doctor`) : exécutables du PATH et des gestionnaires (brew, npm, uv, pipx, cargo) avec source et version, applications et versions, MCP exposés par des applications, serveurs d'inférence locaux et leurs modèles, matériel. (à la demande) |
 | `fs_edit` | write | Remplace une portion exacte d'un fichier. |

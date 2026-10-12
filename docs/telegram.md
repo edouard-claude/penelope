@@ -244,7 +244,7 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 /wf /run /runs /resume
 /schedules
 /approvals /policies /quiet
-/status /doctor /config /logs /restart /upgrade /secret
+/status /doctor /config /logs /restart /upgrade /secret /secrets
 ```
 
 **Aucune commande ne répond par un « Usage : ».** Sans argument, chacune ouvre son écran :
@@ -280,13 +280,23 @@ Workflows (4)
 | `/purge` | confirmation ; efface le contenu de la session (messages, résumés, artefacts, arguments et résultats d'outils, messages envoyés), la chaîne d'audit garde ses lignes sans leur contenu |
 | `/fork` | ↪️ revenir à l'original |
 | `/upgrade` | version installée et disponible, ⬆️ installer, ⏪ revenir (confirmés) ; sur une installation source, carte de bascule vers les releases |
+| `/secrets <projet>` | 🔐 attend le bloc de credentials (5 min) ; réponse : noms rangés, lignes illisibles par numéro, message effacé |
 | `/quiet`, `/secret`, `/p` | plages proposées (pendant la plage, planifications sans `urgent`, alertes MCP et relances d'approbation attendent, puis partent groupées sous « 🌙 Pendant les heures calmes : » ; une réponse au propriétaire et le digest partent toujours, #296) ; 🗑 par secret (confirmé) ; serveurs puis prompts MCP, arguments par formulaire |
 | `/retiens`, `/recall`, `/note`, `/title` | ✏️ bouton qui copie la commande à compléter |
 | `/context` | fenêtre de contexte de la session : modèle et fenêtre (repli prudent signalé pour un modèle absent du catalogue), prompt et cache du dernier appel tels que le fournisseur les compte, barre sur vingt cases, distance à la compaction et compactions passées ; part de chaque tuile T0 à T4 en **estimation locale**, l'écart au prompt réel (définitions d'outils) par différence, puis les totaux de la session ; 🔄 rafraîchir ; des nombres seulement, aucun texte de la conversation ; en CLI `penelope context [session] [--json]` (#322) |
 | `/budget session <montant>` | plafond propre à la session ; au plafond, carte « continuer ? » avec +5 $, +20 $, Arrêter |
 
-`/secret` liste ou supprime, jamais ne saisit : un secret ne transite pas par une
-conversation.
+`/secret` liste ou supprime. Pour **ranger** des secrets, `/secrets <projet>` (1.0.53,
+#350, décision [0022](decisions/0022-secrets-colles-hors-modele.md)) : colle le bloc tel
+quel dans le message suivant, ou à la suite de la commande. Les sections (`DEV :`,
+`[qa]`, `## PROD`) donnent l'environnement, et les lignes `clé : valeur` ou `CLÉ=valeur`
+deviennent `ci.<projet>.<env>.<libellé>` (`ci.mentaleco.dev.access_key`) : le préfixe `ci.`
+les sépare des secrets internes, que `ci_variable_set` refuse de lire.
+
+Le message est intercepté avant toute écriture en base, n'est vu par aucun modèle, puis
+est supprimé du chat. La réponse ne donne que les noms et les numéros des lignes
+illisibles. Pénélope pose ensuite une variable CI par son nom avec `ci_variable_set`, sans
+voir la valeur. En SSH : `penelope secret import <projet> < fichier`.
 
 ### Rafales et messages pendant un tour
 

@@ -74,6 +74,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             };
             return restore::restore(&cli, args).await;
         }
+        Command::Secret(SecretCmd::Import { project }) => {
+            return offline::import_secrets(&cli, project.clone()).await;
+        }
         Command::Secret(SecretCmd::Set { name, value }) => {
             if value.is_some() {
                 return Err(CliError::Usage(format!(

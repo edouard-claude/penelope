@@ -856,3 +856,14 @@ fn wf_run_params_keep_their_spaces() {
         assert!(e.contains("clé=valeur"), "{bad} : {e}");
     }
 }
+
+/// #350 : `penelope secret import <projet>` lit un bloc, sans argument de valeur.
+#[test]
+fn importing_a_block_takes_only_a_project() {
+    let c = parse(&["secret", "import", "mentaleco"]);
+    assert!(
+        matches!(&c.command, Command::Secret(SecretCmd::Import { project }) if project == "mentaleco"),
+        "{:?}",
+        c.command
+    );
+}

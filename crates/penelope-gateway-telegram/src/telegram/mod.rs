@@ -50,6 +50,7 @@ mod notices;
 mod onboarding;
 mod outbox;
 mod screens;
+mod secrets_capture;
 mod sessions_menu;
 mod subjects;
 mod trace;
@@ -370,6 +371,17 @@ impl TelegramGateway {
             .get("update_id")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
+        // Conversations autorisées relues à chaque update : `config set` s'applique à
+        // chaud (issue #113).
+        let access = penelope_telegram::Access {
+            owner_id: self.owner_id,
+            allowed_chats: s.config.config().telegram.allowed_chats.clone(),
+        };
+        // Un bloc de secrets attendu est rangé avant toute écriture : son texte n'entre
+        // jamais en base (#350).
+        if self.capture_secrets(update, &access).await? {
+            return Ok(());
+        }
         let (now, raw) = (s.clock.now_rfc3339(), update.to_string());
         let already = s
             .store
@@ -391,12 +403,6 @@ impl TelegramGateway {
             return Ok(());
         }
 
-        // Conversations autorisées relues à chaque update : `config set` s'applique à
-        // chaud (issue #113).
-        let access = penelope_telegram::Access {
-            owner_id: self.owner_id,
-            allowed_chats: s.config.config().telegram.allowed_chats.clone(),
-        };
         // Nom du sujet Telegram : il est le projet de ses sessions (#119, #301). Un nom
         // qui fait foi (création, renommage) remplace l'ancien ; le nom de naissance
         // répété en tête des messages ne sert qu'à un sujet encore inconnu.

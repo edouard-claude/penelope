@@ -420,9 +420,16 @@ fn control_commands() -> Vec<Command> {
         c(
             "secret",
             "Système",
-            "Liste ou supprime un secret (jamais de saisie)",
+            "Liste ou supprime un secret ; pour en saisir : /secrets",
             "/secret list",
             m::SECRET_LIST,
+        ),
+        c(
+            "secrets",
+            "Système",
+            "Range un bloc de credentials collé, sans modèle, puis l'efface",
+            "/secrets mentaleco",
+            m::SECRET_SET,
         ),
         // Aide
         c(

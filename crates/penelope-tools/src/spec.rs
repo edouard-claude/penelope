@@ -88,6 +88,7 @@ pub fn all() -> Vec<ToolSpec> {
 /// `tool_call`, puis exposés directement à la session qui s'en sert. Le noyau restant
 /// (17 outils d'usage courant et les trois méta-outils) tient sous 20 définitions.
 pub const ON_DEMAND: &[&str] = &[
+    "ci_variable_set",
     "config_set",
     "env_explore",
     "git_branch",

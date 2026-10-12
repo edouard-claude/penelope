@@ -224,12 +224,16 @@ async fn mcp_subcommands_act_on_a_server() {
     }
 }
 
-/// Un secret ne se saisit jamais dans la conversation ; sa suppression se confirme.
+/// Un secret ne se tape jamais à Pénélope : `/secret set` renvoie à `/secrets` (#350) ;
+/// sa suppression se confirme.
 #[tokio::test]
 async fn secrets_are_never_typed_in_the_chat() {
     let (_d, g, t, _p) = gateway().await;
     let out = say(&g, &t, "/secret set jeton").await;
-    assert!(out[0].contains("ne se saisit"), "{out:?}");
+    assert!(
+        out[0].contains("ne se tape") && out[0].contains("/secrets"),
+        "{out:?}"
+    );
     let out = say(&g, &t, "/secret rm jeton").await;
     assert!(out[0].contains("Supprimer le secret"), "{out:?}");
 }
