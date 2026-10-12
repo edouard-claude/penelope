@@ -87,7 +87,33 @@ impl Harness {
 
 /// Les registres de la boucle sur ces services, ports en mémoire (mode d'approbation de
 /// la configuration, ni instantanés, ni audit de cache, ni jobs).
-pub(crate) fn agent_services(s: &Services) -> Arc<AgentServices> {
+/// Modes du harnais : ceux des sessions, et un run autonome n'en demande aucun, comme
+/// dans le daemon (`KvModes`, #346).
+struct RunModes {
+    services: Arc<Services>,
+    sessions: MemoryModes,
+}
+
+#[async_trait::async_trait]
+impl penelope_agent::SessionModes for RunModes {
+    async fn of_session(&self, session_id: &str) -> penelope_agent::ApprovalMode {
+        self.sessions.of_session(session_id).await
+    }
+    async fn of_turn(
+        &self,
+        session_id: &str,
+        run_id: Option<&str>,
+    ) -> penelope_agent::ApprovalMode {
+        match run_id {
+            Some(r) if penelope_app::autonomy::is_autonomous(&self.services, r).await => {
+                penelope_agent::ApprovalMode::Unattended
+            }
+            _ => self.sessions.of_session(session_id).await,
+        }
+    }
+}
+
+pub(crate) fn agent_services(s: &Arc<Services>) -> Arc<AgentServices> {
     Arc::new(AgentServices {
         store: s.store.clone(),
         clock: s.clock.clone(),
@@ -99,7 +125,10 @@ pub(crate) fn agent_services(s: &Services) -> Arc<AgentServices> {
         llm_state: s.llm_state.clone(),
         approvals: s.approvals.clone(),
         policies: s.policies.clone(),
-        modes: Arc::new(MemoryModes::new(s.config.clone())),
+        modes: Arc::new(RunModes {
+            services: s.clone(),
+            sessions: MemoryModes::new(s.config.clone()),
+        }),
         sessions: Arc::new(s.sessions.clone()),
         snapshots: Arc::new(NoAudit),
         jobs: Arc::new(NoJobs),
