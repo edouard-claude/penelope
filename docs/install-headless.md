@@ -571,6 +571,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `tools.background_after` | `"120s"` | Délai au-delà duquel un appel d'outil se voit **proposer** l'arrière-plan plutôt que d'immobiliser le tour (issue #204). La proposition passe par le texte du résultat : c'est le modèle qui décide, rien n'est détourné d'office. |
 | `tools.jobs_per_session` | `3` | Jobs d'outils simultanés au plus pour une session (issue #204). |
 | `tools.jobs_total` | `10` | Jobs d'outils simultanés au plus pour tout le daemon (issue #204). |
+| `tools.ci_hosts` | `["gitlab.com","github.com"]` | Hôtes de forge où `ci_variable_set` peut poser une variable (#350) : fixés par le propriétaire, jamais par le modèle ; tous les remotes du dépôt doivent en être. |
 
 **[workflows]**
 

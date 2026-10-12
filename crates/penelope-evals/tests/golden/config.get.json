@@ -273,7 +273,10 @@
         "inventory_extra": [],
         "background_after": "string",
         "jobs_per_session": "integer",
-        "jobs_total": "integer"
+        "jobs_total": "integer",
+        "ci_hosts": [
+          "string"
+        ]
       },
       "workflows": {
         "workspace_retention_days": "integer",

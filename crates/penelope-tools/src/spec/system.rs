@@ -208,8 +208,9 @@ pub(super) fn git() -> Vec<ToolSpec> {
             RiskClass::External,
             "Pose une variable CI (GitLab `glab`, GitHub `gh`) depuis un secret du magasin \
              désigné par son nom (`projet.env.libellé`, rangé par le propriétaire avec \
-             `/secrets`) ; la valeur n'est jamais vue ni rendue. `env` : GITLAB_HOST, \
-             GH_HOST, HTTPS_PROXY ou HTTP_PROXY seulement.",
+             `/secrets`) ; la valeur n'est jamais vue ni rendue. L'hôte et tous les remotes \
+             du dépôt doivent figurer dans `tools.ci_hosts`. `env` : GITLAB_HOST, GH_HOST, \
+             HTTPS_PROXY ou HTTP_PROXY (local) seulement.",
             obj(
                 json!({
                     "secret": {"type":"string"},

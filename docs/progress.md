@@ -38,8 +38,10 @@ dans `tg_updates`. Le déploiement de `dev` attendait toujours ses variables.
 - **`ci_variable_set`** (à la demande, risque `external`) :
   - lit le secret par son nom et le passe à `glab variable set` (`update` s'il existe) ou
     `gh secret set` sur l'entrée standard ;
-  - `env` est limité à `GITLAB_HOST`, `GH_HOST` (l'hôte d'un remote du dépôt, vérifié) et
-    `HTTPS_PROXY` (local seulement) ;
+  - l'hôte demandé et **tous** les remotes du dépôt doivent figurer dans `tools.ci_hosts`
+    (défaut `gitlab.com`, `github.com`), fixé par le propriétaire : le modèle choisit
+    `cwd` et pourrait y créer un remote ;
+  - `env` est limité à `GITLAB_HOST`, `GH_HOST` et `HTTPS_PROXY` (local seulement) ;
   - le résultat ne porte jamais la valeur.
 - **`tache`** : `verifier` cherche d'abord un secret rangé (`penelope secret list`) et le
   pose avec `ci_variable_set`. À défaut, il dit au propriétaire la commande `/secrets`.

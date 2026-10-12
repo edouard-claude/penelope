@@ -56,30 +56,36 @@ pub fn remote_hosts(remotes: &str) -> Vec<String> {
     out
 }
 
-/// Refuse un hôte de forge qui n'est pas celui d'un remote du dépôt `cwd` : le modèle ne
-/// choisit pas où part la valeur.
-pub async fn check_hosts(req: &Request, cwd: &Path) -> ToolResult<()> {
-    let wanted: Vec<&str> = req
+/// L'hôte où partira la valeur doit être dans `allowed` (`tools.ci_hosts`, fixé par le
+/// propriétaire) : celui que donne `GITLAB_HOST`/`GH_HOST` et **tous** les remotes du
+/// dépôt `cwd`, que `glab` et `gh` lisent faute d'hôte explicite. Le modèle choisit `cwd`
+/// et pourrait y créer un remote : sans la liste, il choisirait la destination.
+pub async fn check_hosts(req: &Request, cwd: &Path, allowed: &[String]) -> ToolResult<()> {
+    let ok = |h: &str| {
+        allowed
+            .iter()
+            .any(|a| a.trim().eq_ignore_ascii_case(h.trim()))
+    };
+    let explicit: Vec<&str> = req
         .env
         .iter()
         .filter(|(k, _)| k == "GITLAB_HOST" || k == "GH_HOST")
         .map(|(_, v)| v.as_str())
         .collect();
-    if wanted.is_empty() {
-        return Ok(());
-    }
     let (_, remotes, _) = crate::git::run(cwd, &["remote", "-v"]).await?;
     let hosts = remote_hosts(&remotes);
-    for h in wanted {
-        if !hosts.iter().any(|r| r.eq_ignore_ascii_case(h)) {
+    if explicit.is_empty() && hosts.is_empty() {
+        return Err(ToolError::Denied(format!(
+            "aucun hôte de forge : lance l'outil depuis le dépôt (`cwd`) ou donne `GITLAB_HOST` \
+             (hôtes permis : {})",
+            allowed.join(", ")
+        )));
+    }
+    for h in explicit.into_iter().chain(hosts.iter().map(String::as_str)) {
+        if !ok(h) {
             return Err(ToolError::Denied(format!(
-                "hôte `{h}` : ce n'est l'hôte d'aucun remote du dépôt `{}` ({})",
-                cwd.display(),
-                if hosts.is_empty() {
-                    "aucun remote".to_string()
-                } else {
-                    hosts.join(", ")
-                }
+                "hôte `{h}` hors de `tools.ci_hosts` ({}) : seul le propriétaire l'ajoute",
+                allowed.join(", ")
             )));
         }
     }
@@ -332,16 +338,28 @@ mod tests {
         let req = |host: &str| {
             Request::from_args(&json!({"key": "K", "env": {"GITLAB_HOST": host}})).unwrap()
         };
-        check_hosts(&req("gitlab.apnl.tech"), dir.path())
+        let allowed = vec!["gitlab.apnl.tech".to_string()];
+        check_hosts(&req("gitlab.apnl.tech"), dir.path(), &allowed)
             .await
             .unwrap();
-        let e = check_hosts(&req("evil.example.org"), dir.path())
+        let e = check_hosts(&req("evil.example.org"), dir.path(), &allowed)
             .await
             .unwrap_err()
             .to_string();
-        assert!(
-            e.contains("aucun remote") || e.contains("gitlab.apnl.tech"),
-            "{e}"
-        );
+        assert!(e.contains("tools.ci_hosts"), "{e}");
+        // Un remote ajouté vers un autre hôte suffit à refuser, même sans hôte explicite.
+        crate::git::run(
+            dir.path(),
+            &["remote", "add", "x", "https://evil.example.org/a.git"],
+        )
+        .await
+        .unwrap();
+        let bare = Request::from_args(&json!({"key": "K"})).unwrap();
+        assert!(check_hosts(&bare, dir.path(), &allowed).await.is_err());
+        let empty = tempfile::tempdir().unwrap();
+        crate::git::run(empty.path(), &["init", "-q"])
+            .await
+            .unwrap();
+        assert!(check_hosts(&bare, empty.path(), &allowed).await.is_err());
     }
 }

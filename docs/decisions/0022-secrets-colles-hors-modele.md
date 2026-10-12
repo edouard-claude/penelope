@@ -36,8 +36,9 @@ Le run est resté bloqué, et la règle censée protéger les secrets ne les pro
    du magasin. La valeur passe sur l'entrée standard de `glab` ou `gh`, est ajoutée au
    caviardage, et n'apparaît ni dans le résultat ni dans les journaux. Pénélope rapproche
    les libellés des variables attendues en ne voyant que les noms. Le modèle ne choisit
-   ni le secret hors du préfixe `ci.` (un secret interne n'en sort pas), ni l'hôte (celui
-   d'un remote du dépôt), ni un relais distant.
+   ni le secret hors du préfixe `ci.` (un secret interne n'en sort pas), ni l'hôte (il doit
+   figurer, avec tous les remotes du dépôt, dans `tools.ci_hosts`, fixé par le
+   propriétaire), ni un relais distant.
 4. **`/secret`** reste la liste et la suppression ; il renvoie à `/secrets`.
 
 ## Conséquences

@@ -12,7 +12,8 @@ impl NativeToolExecutor {
         penelope_tools::ci::check_secret_name(&name)?;
         let req = penelope_tools::ci::Request::from_args(args)?;
         let cwd = self.cwd_arg(args)?;
-        penelope_tools::ci::check_hosts(&req, &cwd).await?;
+        let allowed = self.services.config.config().tools.ci_hosts.clone();
+        penelope_tools::ci::check_hosts(&req, &cwd, &allowed).await?;
         let platform = self.services.platform.clone();
         let wanted = name.clone();
         let value = tokio::task::spawn_blocking(move || platform.secrets.get(&wanted))
