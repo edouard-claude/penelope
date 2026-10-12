@@ -180,6 +180,10 @@
         "deploy_workflow": {
           "type": "string"
         },
+        "autonomous": {
+          "type": "boolean",
+          "description": "Run autonome (#346) : ni le run ni ses sous-runs ne demandent d'approbation ; un refus (`deny`) et les réglages sensibles restent gardés."
+        },
         "forms": {
           "type": "object",
           "description": "Formulaires des étapes `user` (`input: \"form:<id>\"`) : un JSON Schema d'objet par identifiant, présenté champ par champ sur Telegram, la saisie validée arrivant dans `stepOutput.input`.",
