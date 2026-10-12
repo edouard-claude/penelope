@@ -143,6 +143,28 @@ impl NativeToolExecutor {
         Ok(ToolOutcome::ok(v))
     }
 
+    /// Le run de cette étape et ceux qui l'ont lancé (sa série), du plus proche au plus
+    /// lointain.
+    async fn own_runs(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut next = self.env.run_id.clone();
+        while let Some(id) = next.take() {
+            if out.contains(&id) || out.len() > 8 {
+                break;
+            }
+            next = self
+                .services
+                .runs
+                .get(&id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.parent_run);
+            out.push(id);
+        }
+        out
+    }
+
     /// `workflow_status` et `workflow_control` : l'état lisible d'un run et son pilotage
     /// (#346).
     async fn run_tool(&self, name: &str, args: &Value) -> ToolResult<Value> {
@@ -166,6 +188,20 @@ impl NativeToolExecutor {
                 if self.env.in_workflow && matches!(op.as_str(), "autonomous" | "supervised") {
                     return Err(ToolError::Other(
                         "l'autonomie d'un run est une décision du propriétaire".into(),
+                    ));
+                }
+                // Un run ne s'arrête pas lui-même, ni la série qui l'a lancé (#354) : le
+                // 12/10, l'étape `dev` d'une story s'est crue bloquée et a annulé son run
+                // alors qu'il avançait.
+                if self.env.in_workflow
+                    && matches!(op.as_str(), "pause" | "cancel")
+                    && self.own_runs().await.contains(&run_id)
+                {
+                    return Err(ToolError::Denied(
+                        "un run ne s'arrête pas lui-même : s'il est vraiment bloqué, rends \
+                         `return_value(result=\"blocked\", content=<pourquoi, et ce qu'il \
+                         faudrait>)` puis `step_done()` ; le propriétaire décide"
+                            .into(),
                     ));
                 }
                 match &self.orchestrator {

@@ -916,3 +916,56 @@ async fn a_pasted_secret_reaches_a_command_as_a_variable_and_stays_masked() {
         assert!(err.contains(why), "{why} : {err}");
     }
 }
+
+/// #354 : une étape de run ne met en pause ni n'annule son propre run ni la série qui l'a
+/// lancé ; un autre run reste pilotable.
+#[tokio::test]
+async fn a_run_cannot_stop_itself_or_its_series() {
+    let (_dir, mut e) = executor().await;
+    let wf = penelope_workflow::Workflow::from_json(
+        &json!({
+            "metadata": {"id": "serie", "name": "Série", "parameters": []},
+            "entryStep": "faire",
+            "steps": [{"id": "faire", "type": "shell", "command": "true",
+                       "transitions": [{"goto": "$done"}]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let runs = &e.services.runs;
+    let parent = runs
+        .create(&wf, "s_p", json!({}), None, None, 0)
+        .await
+        .unwrap();
+    let child = runs
+        .create(&wf, "s_c", json!({}), None, Some(parent.id.as_str()), 1)
+        .await
+        .unwrap();
+    let other = runs
+        .create(&wf, "s_o", json!({}), None, None, 0)
+        .await
+        .unwrap();
+    e.env.in_workflow = true;
+    e.env.run_id = Some(child.id.clone());
+    for (target, op) in [
+        (&child.id, "cancel"),
+        (&parent.id, "pause"),
+        (&parent.id, "cancel"),
+    ] {
+        let err = e
+            .execute("workflow_control", &json!({"run_id": target, "op": op}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("ne s'arrête pas lui-même"),
+            "{op} {target} : {err}"
+        );
+    }
+    e.execute(
+        "workflow_control",
+        &json!({"run_id": other.id, "op": "pause"}),
+    )
+    .await
+    .unwrap();
+}

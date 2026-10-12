@@ -12,6 +12,20 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.55
+
+**Workflows : un run ne s'annule ni ne se met en pause lui-même (#354).**
+
+Constat (12/10, 14:51 UTC, story 1.1 MentalEco) : l'étape `dev` s'est crue bloquée et a
+annulé son propre run par `workflow_control`. La story avançait pourtant (8 tests
+d'acceptation sur 8 au vert), et un run annulé ne se reprend pas. Le matin, une autre
+étape avait mis son run en pause de la même façon.
+
+- Dans une étape de run, `workflow_control` refuse `pause` et `cancel` sur le run de
+  l'étape et sur sa série (ses ancêtres). Le refus dit de rendre
+  `return_value(result="blocked")` : le propriétaire décide.
+- Un autre run reste pilotable.
+
 ### 1.0.54
 
 **Secrets : `shell_exec` injecte un secret collé en variable d'environnement, règle
