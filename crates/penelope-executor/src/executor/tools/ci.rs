@@ -13,7 +13,7 @@ impl NativeToolExecutor {
         let req = penelope_tools::ci::Request::from_args(args)?;
         let cwd = self.cwd_arg(args)?;
         let allowed = self.services.config.config().tools.ci_hosts.clone();
-        penelope_tools::ci::check_hosts(&req, &cwd, &allowed).await?;
+        let target = penelope_tools::ci::resolve(&req, &cwd, &allowed).await?;
         let platform = self.services.platform.clone();
         let wanted = name.clone();
         let value = tokio::task::spawn_blocking(move || platform.secrets.get(&wanted))
@@ -28,7 +28,7 @@ impl NativeToolExecutor {
                 ))
             })?;
         penelope_observe::register_secret(&value);
-        let out = penelope_tools::ci::set_variable(&req, &cwd, &value).await?;
+        let out = penelope_tools::ci::set_variable(&req, &target, &value).await?;
         let stderr = penelope_observe::redact(out.stderr.trim());
         if out.code != 0 {
             return Err(ToolError::Other(format!(
@@ -41,7 +41,8 @@ impl NativeToolExecutor {
             "forge": req.forge,
             "key": req.key,
             "scope": req.scope.unwrap_or_else(|| "*".into()),
-            "repo": req.repo,
+            "host": target.host,
+            "repo": target.repo,
             "from_secret": name,
             "updated": out.updated,
         })))

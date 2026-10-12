@@ -8,6 +8,7 @@ pin_model = "main"
 
 [config]
 "tools.approval_mode" = "auto"
+"tools.ci_hosts" = ["gitlab.apnl.tech"]
 
 [[steps]]
 kind = "message"

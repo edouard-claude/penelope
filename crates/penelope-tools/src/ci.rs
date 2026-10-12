@@ -37,59 +37,98 @@ fn local_proxy(url: &str) -> bool {
         })
 }
 
-/// Les hôtes des remotes git de `cwd` : `https://hôte/…`, `ssh://git@hôte/…`,
-/// `git@hôte:…`.
-pub fn remote_hosts(remotes: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for url in remotes.split_whitespace() {
-        let rest = url.split_once("://").map_or(url, |(_, r)| r);
+/// `https://hôte/g/p.git`, `ssh://git@hôte:22/g/p.git`, `git@hôte:g/p.git` → (hôte, `g/p`).
+pub fn parse_remote(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let (host, path) = if let Some((_, rest)) = url.split_once("://") {
         let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
-        let host = rest
-            .split(['/', ':'])
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if host.contains('.') && !out.contains(&host) {
-            out.push(host);
-        }
-    }
-    out
+        let (host, path) = rest.split_once('/')?;
+        (host.split(':').next()?.to_string(), path.to_string())
+    } else {
+        let rest = url.rsplit_once('@').map_or(url, |(_, r)| r);
+        let (host, path) = rest.split_once(':')?;
+        (host.to_string(), path.to_string())
+    };
+    let path = path
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
+    (host.contains('.') && path.contains('/')).then(|| (host.to_ascii_lowercase(), path))
 }
 
-/// L'hôte où partira la valeur doit être dans `allowed` (`tools.ci_hosts`, fixé par le
-/// propriétaire) : celui que donne `GITLAB_HOST`/`GH_HOST` et **tous** les remotes du
-/// dépôt `cwd`, que `glab` et `gh` lisent faute d'hôte explicite. Le modèle choisit `cwd`
-/// et pourrait y créer un remote : sans la liste, il choisirait la destination.
-pub async fn check_hosts(req: &Request, cwd: &Path, allowed: &[String]) -> ToolResult<()> {
-    let ok = |h: &str| {
-        allowed
-            .iter()
-            .any(|a| a.trim().eq_ignore_ascii_case(h.trim()))
-    };
-    let explicit: Vec<&str> = req
+/// Un projet `groupe/projet` (sous-groupes permis), sans schéma, sans `@`, sans `..` :
+/// `glab -R` et `gh --repo` accepteraient sinon un hôte caché dans le nom.
+fn check_repo(repo: &str) -> ToolResult<()> {
+    let ok = !repo.contains("..")
+        && !repo.starts_with('/')
+        && !repo.ends_with('/')
+        && repo.split('/').count() >= 2
+        && repo.split('/').all(|seg| !seg.is_empty())
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'));
+    if ok {
+        Ok(())
+    } else {
+        Err(ToolError::Invalid(format!(
+            "`repo` : `groupe/projet` attendu, sans hôte ni schéma ({repo})"
+        )))
+    }
+}
+
+/// Où part la valeur, résolu **une fois** : l'hôte (dans `tools.ci_hosts`) et le projet.
+/// La forge est ensuite appelée hors du dépôt, avec l'un et l'autre explicites : elle ne
+/// relit aucun remote qu'un autre appel aurait pu changer entre-temps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    pub host: String,
+    pub repo: String,
+}
+
+/// Résout l'hôte (`GITLAB_HOST`/`GH_HOST`, sinon celui du remote `origin` de `cwd`) et le
+/// projet (`repo`, sinon celui d'`origin` sur ce même hôte), puis refuse un hôte hors de
+/// `allowed` (`tools.ci_hosts`, fixé par le propriétaire).
+pub async fn resolve(req: &Request, cwd: &Path, allowed: &[String]) -> ToolResult<Target> {
+    let explicit = req
         .env
         .iter()
-        .filter(|(k, _)| k == "GITLAB_HOST" || k == "GH_HOST")
-        .map(|(_, v)| v.as_str())
-        .collect();
-    let (_, remotes, _) = crate::git::run(cwd, &["remote", "-v"]).await?;
-    let hosts = remote_hosts(&remotes);
-    if explicit.is_empty() && hosts.is_empty() {
+        .find(|(k, _)| k == "GITLAB_HOST" || k == "GH_HOST")
+        .map(|(_, v)| v.trim().to_ascii_lowercase());
+    let (_, url, _) = crate::git::run(cwd, &["remote", "get-url", "origin"]).await?;
+    let origin = parse_remote(&url);
+    let host = explicit
+        .or_else(|| origin.as_ref().map(|(h, _)| h.clone()))
+        .ok_or_else(|| {
+            ToolError::Denied(
+                "aucun hôte de forge : lance l'outil depuis le dépôt (`cwd`) ou donne \
+                 `GITLAB_HOST`"
+                    .into(),
+            )
+        })?;
+    if !allowed.iter().any(|a| a.trim().eq_ignore_ascii_case(&host)) {
         return Err(ToolError::Denied(format!(
-            "aucun hôte de forge : lance l'outil depuis le dépôt (`cwd`) ou donne `GITLAB_HOST` \
-             (hôtes permis : {})",
+            "hôte `{host}` hors de `tools.ci_hosts` ({}) : seul le propriétaire l'ajoute",
             allowed.join(", ")
         )));
     }
-    for h in explicit.into_iter().chain(hosts.iter().map(String::as_str)) {
-        if !ok(h) {
-            return Err(ToolError::Denied(format!(
-                "hôte `{h}` hors de `tools.ci_hosts` ({}) : seul le propriétaire l'ajoute",
-                allowed.join(", ")
-            )));
+    let repo = match &req.repo {
+        Some(r) => {
+            check_repo(r)?;
+            r.clone()
         }
-    }
-    Ok(())
+        None => match origin {
+            Some((h, path)) if h == host => {
+                check_repo(&path)?;
+                path
+            }
+            _ => {
+                return Err(ToolError::Invalid(format!(
+                    "`repo` manquant : aucun remote `origin` sur `{host}` dans le dépôt"
+                )));
+            }
+        },
+    };
+    Ok(Target { host, repo })
 }
 
 /// Ce qu'il faut poser.
@@ -158,17 +197,16 @@ impl Request {
         })
     }
 
-    /// Le programme et ses arguments ; `update` : remplacer une variable qui existe.
-    pub fn command(&self, update: bool) -> (&'static str, Vec<String>) {
+    /// Le programme et ses arguments, vers `target` ; `update` : remplacer une variable qui
+    /// existe.
+    pub fn command(&self, target: &Target, update: bool) -> (&'static str, Vec<String>) {
         let mut a: Vec<String> = Vec::new();
         if self.forge == "github" {
             a.extend(["secret".into(), "set".into(), self.key.clone()]);
             if let Some(s) = &self.scope {
                 a.extend(["--env".into(), s.clone()]);
             }
-            if let Some(r) = &self.repo {
-                a.extend(["--repo".into(), r.clone()]);
-            }
+            a.extend(["--repo".into(), format!("{}/{}", target.host, target.repo)]);
             return ("gh", a);
         }
         let verb = if update { "update" } else { "set" };
@@ -182,9 +220,7 @@ impl Request {
         if self.protected {
             a.push("--protected".into());
         }
-        if let Some(r) = &self.repo {
-            a.extend(["-R".into(), r.clone()]);
-        }
+        a.extend(["-R".into(), target.repo.clone()]);
         ("glab", a)
     }
 }
@@ -198,21 +234,35 @@ pub struct Outcome {
     pub updated: bool,
 }
 
-async fn run_once(req: &Request, cwd: &Path, value: &str, update: bool) -> ToolResult<Outcome> {
-    let (program, args) = req.command(update);
+async fn run_once(
+    req: &Request,
+    target: &Target,
+    value: &str,
+    update: bool,
+) -> ToolResult<Outcome> {
+    let (program, args) = req.command(target, update);
     let bin = penelope_platform::which(program)
         .ok_or_else(|| ToolError::Denied(format!("`{program}` est absent du PATH")))?;
     let mut cmd = tokio::process::Command::new(bin);
+    // Hors de tout dépôt : la forge ne lit que l'hôte et le projet donnés.
     cmd.args(&args)
-        .current_dir(cwd)
+        .current_dir(std::env::temp_dir())
         .env("PATH", penelope_platform::process::search_path())
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for (k, v) in &req.env {
+    for (k, v) in req.env.iter().filter(|(k, _)| k.ends_with("_PROXY")) {
         cmd.env(k, v);
     }
+    cmd.env(
+        if req.forge == "github" {
+            "GH_HOST"
+        } else {
+            "GITLAB_HOST"
+        },
+        &target.host,
+    );
     let mut child = cmd
         .spawn()
         .map_err(|e| ToolError::Io(format!("{program} : {e}")))?;
@@ -234,12 +284,12 @@ async fn run_once(req: &Request, cwd: &Path, value: &str, update: bool) -> ToolR
     })
 }
 
-/// Pose la variable ; une variable GitLab qui existe déjà est mise à jour.
-pub async fn set_variable(req: &Request, cwd: &Path, value: &str) -> ToolResult<Outcome> {
-    let first = run_once(req, cwd, value, false).await?;
+/// Pose la variable vers `target` ; une variable GitLab qui existe déjà est mise à jour.
+pub async fn set_variable(req: &Request, target: &Target, value: &str) -> ToolResult<Outcome> {
+    let first = run_once(req, target, value, false).await?;
     let exists = first.stderr.contains("already been taken") || first.stderr.contains("exists");
     if first.code != 0 && req.forge == "gitlab" && exists {
-        return run_once(req, cwd, value, true).await;
+        return run_once(req, target, value, true).await;
     }
     Ok(first)
 }
@@ -249,15 +299,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn target() -> Target {
+        Target {
+            host: "gitlab.apnl.tech".into(),
+            repo: "mentaleco/mentaleco-app".into(),
+        }
+    }
+
     #[test]
-    fn gitlab_and_github_commands_take_the_value_on_stdin() {
-        let r = Request::from_args(&json!({
-            "key": "STORAGE_ACCESS_KEY", "scope": "dev", "repo": "mentaleco/mentaleco-app",
-            "env": {"GITLAB_HOST": "gitlab.apnl.tech"}
-        }))
-        .unwrap();
+    fn gitlab_and_github_commands_name_host_and_project_explicitly() {
+        let r = Request::from_args(&json!({"key": "STORAGE_ACCESS_KEY", "scope": "dev"})).unwrap();
         assert_eq!(
-            r.command(false),
+            r.command(&target(), false),
             (
                 "glab",
                 [
@@ -274,22 +327,34 @@ mod tests {
                 .to_vec()
             )
         );
-        assert_eq!(r.command(true).1[1], "update");
+        assert_eq!(r.command(&target(), true).1[1], "update");
         let g =
             Request::from_args(&json!({"key": "TOKEN", "forge": "github", "scope": "qa"})).unwrap();
+        let t = Target {
+            host: "github.com".into(),
+            repo: "acme/app".into(),
+        };
         assert_eq!(
-            g.command(false),
+            g.command(&t, false),
             (
                 "gh",
-                ["secret", "set", "TOKEN", "--env", "qa"]
-                    .map(String::from)
-                    .to_vec()
+                [
+                    "secret",
+                    "set",
+                    "TOKEN",
+                    "--env",
+                    "qa",
+                    "--repo",
+                    "github.com/acme/app"
+                ]
+                .map(String::from)
+                .to_vec()
             )
         );
     }
 
     #[test]
-    fn a_key_or_an_environment_variable_outside_the_list_is_refused() {
+    fn a_key_an_environment_variable_or_a_remote_proxy_outside_the_rules_is_refused() {
         assert!(Request::from_args(&json!({"key": "A; rm -rf /"})).is_err());
         assert!(Request::from_args(&json!({"key": "A", "env": {"LD_PRELOAD": "x"}})).is_err());
         assert!(Request::from_args(&json!({"key": "A", "forge": "bitbucket"})).is_err());
@@ -308,20 +373,30 @@ mod tests {
         );
     }
 
-    /// Seuls les secrets collés partent ; l'hôte est celui d'un remote du dépôt.
+    #[test]
+    fn remotes_are_parsed_in_their_three_forms() {
+        for url in [
+            "https://gitlab.apnl.tech/mentaleco/mentaleco-app.git",
+            "git@gitlab.apnl.tech:mentaleco/mentaleco-app.git",
+            "ssh://git@GitLab.apnl.tech:2222/mentaleco/mentaleco-app",
+        ] {
+            assert_eq!(
+                parse_remote(url),
+                Some(("gitlab.apnl.tech".into(), "mentaleco/mentaleco-app".into())),
+                "{url}"
+            );
+        }
+        assert_eq!(parse_remote("/chemin/local"), None);
+    }
+
+    /// Seuls les secrets collés partent ; l'hôte doit être dans la liste du propriétaire,
+    /// et un projet ne cache pas d'hôte.
     #[tokio::test]
-    async fn only_pasted_secrets_go_and_only_to_a_remote_of_the_repository() {
+    async fn only_pasted_secrets_go_and_only_to_an_allowed_host() {
         assert!(check_secret_name("ci.mentaleco.dev.access_key").is_ok());
         for internal in ["openrouter_api_key", "codex.oauth", "mcp.clickup.oauth"] {
             assert!(check_secret_name(internal).is_err(), "{internal}");
         }
-        assert_eq!(
-            remote_hosts(
-                "origin\thttps://gitlab.apnl.tech/mentaleco/app.git (fetch)\n\
-                 gh\tgit@github.com:acme/app.git (push)\nx\tssh://git@Forge.Example.org:2222/a.git"
-            ),
-            ["gitlab.apnl.tech", "github.com", "forge.example.org"]
-        );
         let dir = tempfile::tempdir().unwrap();
         crate::git::run(dir.path(), &["init", "-q"]).await.unwrap();
         crate::git::run(
@@ -330,36 +405,45 @@ mod tests {
                 "remote",
                 "add",
                 "origin",
-                "https://gitlab.apnl.tech/mentaleco/app.git",
+                "https://gitlab.apnl.tech/mentaleco/mentaleco-app.git",
             ],
         )
         .await
         .unwrap();
-        let req = |host: &str| {
-            Request::from_args(&json!({"key": "K", "env": {"GITLAB_HOST": host}})).unwrap()
-        };
         let allowed = vec!["gitlab.apnl.tech".to_string()];
-        check_hosts(&req("gitlab.apnl.tech"), dir.path(), &allowed)
-            .await
-            .unwrap();
-        let e = check_hosts(&req("evil.example.org"), dir.path(), &allowed)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("tools.ci_hosts"), "{e}");
-        // Un remote ajouté vers un autre hôte suffit à refuser, même sans hôte explicite.
-        crate::git::run(
-            dir.path(),
-            &["remote", "add", "x", "https://evil.example.org/a.git"],
-        )
-        .await
-        .unwrap();
-        let bare = Request::from_args(&json!({"key": "K"})).unwrap();
-        assert!(check_hosts(&bare, dir.path(), &allowed).await.is_err());
+        let req = |v: Value| Request::from_args(&v).unwrap();
+        assert_eq!(
+            resolve(&req(json!({"key": "K"})), dir.path(), &allowed)
+                .await
+                .unwrap(),
+            target()
+        );
+        for bad in [
+            json!({"key": "K", "env": {"GITLAB_HOST": "evil.example.org"}}),
+            json!({"key": "K", "repo": "https://evil.example.org/a/b"}),
+            json!({"key": "K", "repo": "evil.example.org/a/b@x"}),
+            json!({"key": "K", "repo": "a/../b"}),
+        ] {
+            assert!(
+                resolve(&req(bad.clone()), dir.path(), &allowed)
+                    .await
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        assert!(
+            resolve(&req(json!({"key": "K"})), dir.path(), &[])
+                .await
+                .is_err()
+        );
         let empty = tempfile::tempdir().unwrap();
         crate::git::run(empty.path(), &["init", "-q"])
             .await
             .unwrap();
-        assert!(check_hosts(&bare, empty.path(), &allowed).await.is_err());
+        assert!(
+            resolve(&req(json!({"key": "K"})), empty.path(), &allowed)
+                .await
+                .is_err()
+        );
     }
 }
