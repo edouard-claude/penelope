@@ -12,6 +12,34 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.52
+
+**`tache` pousse, puis prouve sur ce qui tourne, puis fait relire (#348).**
+
+Constat (12/10, story 1.1 « Trois environnements déployés » du backlog MentalEco) : la
+revue exigeait des preuves de déploiement, alors que `tache` ne commitait et ne poussait
+qu'après elle. Le run a donc conclu qu'il ne pouvait rien vérifier, et a tourné entre
+`dev`, `tests-locaux` et `revue`, jusqu'à se mettre lui-même en pause. Il avait pourtant
+`glab`, `curl` et les fichiers `docker compose` sous la main.
+
+- Nouvel ordre : `tests-locaux` → `commit` (push sur la branche que le flux du projet
+  prévoit, jamais `--force`) → `verifier` → `revue` → `statut`.
+- `verifier` (120 appels) suit le pipeline du commit (`glab ci`, `gh run watch`), interroge
+  les URLs (`curl -fsS …/version` = SHA poussé) et compare la configuration ; il coche les
+  critères avec leur preuve.
+  - `passed` mène à la revue ;
+  - `failed` renvoie à `dev` avec la commande et la sortie ;
+  - `owner` (accès que seul le propriétaire peut donner) arrête la liste en disant quoi
+    poser.
+- `spec` demande, pour chaque critère, comment le prouver.
+- La revue lit les preuves de `verifier`.
+
+Posé sur l'instance en `workflows/tache.workflow.json` sans attendre la release : un
+fichier de `workflows/` remplace le workflow livré.
+
+Non fait (#348, point 1) : une approbation coupe toujours le tour d'un run supervisé. Les
+runs autonomes (#346) n'en demandent plus.
+
 ### 1.0.51
 
 **Runs autonomes : un backlog lancé pour la semaine ne demande aucune approbation, ses

@@ -110,8 +110,9 @@ pub fn task() -> Workflow {
         metadata: Metadata {
             id: "tache".into(),
             name: "Tâche du backlog".into(),
-            description: "Spécification, tests, développement, tests locaux, revue adverse, \
-                          commit et push, statut du tracker."
+            description: "Spécification, tests, développement, tests locaux, commit et push, \
+                          vérification sur ce qui tourne (pipeline, URLs, /version), revue \
+                          adverse, statut du tracker."
                 .into(),
             parameters: vec![
                 Parameter {
@@ -148,7 +149,10 @@ pub fn task() -> Workflow {
                 format!(
                     "{ITEM}\nLis la tâche dans son tracker et le code concerné. Écris une \
                      spécification courte : comportement attendu, critères d'acceptation \
-                     vérifiables, fichiers touchés. Pose les critères : `session_metadata` \
+                     vérifiables, fichiers touchés. Chaque critère dit comment le prouver avec \
+                     les outils de la machine (test, commande, pipeline suivi par `glab` ou \
+                     `gh`, URL interrogée par `curl`) : l'étape `verifier` le prouvera après le \
+                     push. Pose les critères : `session_metadata` \
                      op=set key=criteria entry=[{{\"id\": \"…\", \"text\": \"…\", \"status\": \
                      \"pending\"}}, …]. Puis `step_done()`."
                 ),
@@ -178,16 +182,31 @@ pub fn task() -> Workflow {
                     vec![Transition::always("tests-locaux")],
                 )
             },
-            agent(
-                "tests-locaux",
-                Phase::Verification,
-                "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. Tout \
-                 vert : `return_value(result=\"passed\")`. Sinon `return_value(result=\
-                 \"failed\", content=<l'échec, la commande et sa sortie utile>)`. Puis \
-                 `step_done()`."
-                    .into(),
-                passed_or("revue", "dev"),
-            ),
+            // Démarrer l'application avant de pousser (#348) : le 12/10, le test
+            // d'acceptation de la story 1.1 ne lisait que le texte des fichiers compose, et
+            // la revue a trouvé l'isolation des hôtes cassée.
+            Step {
+                max_calls: Some(120),
+                ..agent(
+                    "tests-locaux",
+                    Phase::Verification,
+                    "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. \
+                     Puis fais tourner ce que tu as changé, en local, avant tout push. Si le \
+                     changement touche l'exécution ou le déploiement (Dockerfile, `docker \
+                     compose`, CI, routage, configuration, migrations), démarre la pile \
+                     (`docker compose -f <fichier> up -d --build`) et attends qu'elle réponde. \
+                     Interroge chaque service (`curl -fsS`, avec `-H 'Host: …'` pour un routage \
+                     par hôte) : `/version`, ce que chaque hôte doit servir et ce qu'il doit \
+                     refuser. Arrête-la ensuite (`docker compose down`, sans `-v`). Si c'est du \
+                     code applicatif, lance l'application et exerce le parcours touché (requête, \
+                     page, commande). Tout vert : `return_value(result=\"passed\", content=<les \
+                     commandes et ce qu'elles ont rendu>)`. Sinon `return_value(result=\
+                     \"failed\", content=<l'échec, la commande et sa sortie utile>)`. Puis \
+                     `step_done()`."
+                        .into(),
+                    passed_or("commit", "dev"),
+                )
+            },
             Step {
                 context: "fresh".into(),
                 ..agent(
@@ -200,20 +219,64 @@ pub fn task() -> Workflow {
                          régressions, failles, cas limites non testés : rends \
                          `return_value(result=\"failed\", content=<les corrections, chacune \
                          avec fichier et raison>)`. Rien de bloquant : \
-                         `return_value(result=\"passed\")`. Puis `step_done()`."
+                         `return_value(result=\"passed\")`. La vérification a déjà prouvé les \
+                         critères sur ce qui tourne : {{{{steps.verifier.content}}}}. Puis \
+                         `step_done()`."
                     ),
-                    passed_or("commit", "dev"),
+                    passed_or("statut", "dev"),
                 )
             },
             agent(
                 "commit",
                 Phase::Deploy,
                 "Commite le changement (message : ce qui change et pourquoi, avec \
-                 l'identifiant {{item.id}}) et pousse la branche. Rends \
-                 `return_value(result=\"success\", content=<SHA court>)`, puis `step_done()`."
+                 l'identifiant {{item.id}}) et pousse-le dans {{depot}} sur la branche que le \
+                 flux du projet prévoit pour ce travail (README, CLAUDE.md, CI : la branche de \
+                 développement, ou celle de l'environnement que la tâche déploie), sans \
+                 `--force`. Rends `return_value(result=\"success\", content=<SHA court et \
+                 branche>)`, puis `step_done()`."
                     .into(),
-                vec![Transition::always("statut")],
+                vec![Transition::always("verifier")],
             ),
+            // La preuve sur ce qui tourne vient après le push, avant la revue (#348) : le
+            // 12/10, la revue exigeait des déploiements que le run ne poussait qu'après elle,
+            // et il a conclu, à tort, qu'il ne pouvait rien vérifier.
+            Step {
+                max_calls: Some(120),
+                ..agent(
+                    "verifier",
+                    Phase::Verification,
+                    "Le changement est poussé : {{steps.commit.content}}. Vérifie chaque \
+                     critère d'acceptation sur ce qui tourne vraiment, avec les outils de la \
+                     machine. Suis le pipeline de ce commit jusqu'à sa fin (`glab ci status`, \
+                     `glab ci view`, `glab ci trace` sur GitLab ; `gh run watch` sur GitHub) et \
+                     lis ses journaux s'il échoue. Interroge ce qui est déployé : `curl -fsS \
+                     <url>/version` doit rendre le SHA poussé, chaque hôte doit répondre ce \
+                     qu'il doit et refuser le reste. Compare la configuration (`docker compose \
+                     config`). Chaque critère prouvé : `session_metadata` op=update key=criteria \
+                     entry={\"id\": \"<id>\", \"status\": \"passed\"}, avec la commande et \
+                     sa sortie utile. Ne déclare jamais un critère invérifiable sans l'avoir \
+                     essayé. Ce qui manque à un environnement de développement ou de recette \
+                     (`dev`, `qa`, `staging`) est à toi de le créer : une variable CI absente, \
+                     tu la poses (`glab variable set <CLÉ> --scope <env> --masked`, la valeur \
+                     générée sur la machine, `openssl rand -hex 32` pour un secret, lue sur \
+                     l'entrée standard, jamais affichée, écrite ni rendue), puis tu relances le \
+                     pipeline et tu reprends la vérification. Tout est prouvé : \
+                     `return_value(result=\"passed\", content=<les preuves, une par critère, \
+                     et les variables créées, sans leur valeur>)`. Un critère échoue : \
+                     `return_value(result=\"failed\", content=<critère, commande, sortie, \
+                     correction attendue>)`. Seul ce qui touche la production, un compte ou un \
+                     service externe que tu ne peux pas créer, ou un droit refusé, revient au \
+                     propriétaire : `return_value(result=\"blocked\", content=<ce qui manque, \
+                     exactement, et où le poser>)`. Puis `step_done()`."
+                        .into(),
+                    vec![
+                        Transition::on_result("revue", "passed"),
+                        Transition::on_result(BLOCKED, "blocked"),
+                        Transition::always("dev"),
+                    ],
+                )
+            },
             agent(
                 "statut",
                 Phase::Done,
@@ -224,5 +287,64 @@ pub fn task() -> Workflow {
                 vec![Transition::always(DONE)],
             ),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn next_of(w: &Workflow, id: &str) -> Vec<(String, String)> {
+        w.steps
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("étape {id}"))
+            .transitions
+            .iter()
+            .map(|t| {
+                let on = t
+                    .condition
+                    .get("result")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("*")
+                    .to_string();
+                (on, t.goto.clone())
+            })
+            .collect()
+    }
+
+    /// #348 : le push précède la preuve, la preuve précède la revue ; un échec renvoie au
+    /// développement, un accès que seul le propriétaire peut donner arrête la liste.
+    #[test]
+    fn a_task_is_pushed_then_proved_then_reviewed() {
+        let w = task();
+        let pair = |on: &str, to: &str| (on.to_string(), to.to_string());
+        assert_eq!(
+            next_of(&w, "tests-locaux"),
+            [pair("passed", "commit"), pair("*", "dev")]
+        );
+        assert_eq!(next_of(&w, "commit"), [pair("*", "verifier")]);
+        assert_eq!(
+            next_of(&w, "verifier"),
+            [
+                pair("passed", "revue"),
+                pair("blocked", BLOCKED),
+                pair("*", "dev")
+            ]
+        );
+        assert_eq!(
+            next_of(&w, "revue"),
+            [pair("passed", "statut"), pair("*", "dev")]
+        );
+        let verify = &w.steps.iter().find(|s| s.id == "verifier").unwrap().prompt;
+        for tool in [
+            "glab ci",
+            "gh run watch",
+            "curl -fsS",
+            "/version",
+            "docker compose",
+        ] {
+            assert!(verify.contains(tool), "{tool}");
+        }
     }
 }
