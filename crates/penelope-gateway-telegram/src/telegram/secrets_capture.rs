@@ -37,9 +37,9 @@ impl TelegramGateway {
                     chat_id,
                     topic_id,
                     Some(message_id),
-                    "Usage : `/secrets <projet>`, puis colle le bloc de credentials dans le \
-                     message suivant. Il est rangé au trousseau sans passer par un modèle, \
-                     puis effacé du chat.",
+                    "🔐 Pour ranger des secrets : `/secrets <projet>` (ex. `/secrets \
+                     mentaleco`), puis colle le bloc de credentials dans le message suivant. \
+                     Il est rangé au trousseau sans passer par un modèle, puis effacé du chat.",
                 )
                 .await;
         }
