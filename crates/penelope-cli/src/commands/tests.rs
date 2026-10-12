@@ -820,3 +820,39 @@ fn backup_setup_and_kit_parse() {
         "s3_access_key_id"
     );
 }
+
+/// #344 : chaque `--param` est pris entier, espaces comprises (le chemin du dépôt sous
+/// « Application Support ») ; un nombre reste un nombre ; un `--param` sans `=` est une
+/// erreur d'usage, jamais ignoré.
+#[test]
+fn wf_run_params_keep_their_spaces() {
+    let c = parse(&[
+        "wf",
+        "run",
+        "backlog",
+        "--param",
+        "depot=/Users/e/Library/Application Support/Penelope/workspace/app",
+        "--param",
+        "source=liste ClickUp 1201260000001868",
+        "--param",
+        "n=3",
+        "--param",
+        "egal=a=b",
+    ]);
+    let (method, p) = route(&c.command).unwrap();
+    assert_eq!(method, "wf.run");
+    assert_eq!(
+        p["params"],
+        json!({
+            "depot": "/Users/e/Library/Application Support/Penelope/workspace/app",
+            "source": "liste ClickUp 1201260000001868",
+            "n": 3,
+            "egal": "a=b",
+        })
+    );
+    for bad in ["sans-egal", "=valeur"] {
+        let c = parse(&["wf", "run", "backlog", "--param", bad]);
+        let e = route(&c.command).unwrap_err().to_string();
+        assert!(e.contains("clé=valeur"), "{bad} : {e}");
+    }
+}

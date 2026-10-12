@@ -152,12 +152,24 @@ async fn launch(
     if let Some(run) = s.runs.get(&id).await.map_err(|e| e.to_string())? {
         return Ok((run, false));
     }
-    let limits = s
-        .workflows
-        .get(&draft.workflow_id)
-        .map(|w| Limits::of(&w.settings))
-        .unwrap_or_default();
-    let mut wf = execution::compile(draft, &limits).map_err(|e| e.to_string())?;
+    let registered = s.workflows.get(&draft.workflow_id);
+    let (mut wf, params) = match registered.filter(execution::runs_as_is) {
+        // Un workflow qui déroule sa liste part tel quel, avec les paramètres du plan
+        // (#343) ; un paramètre manquant ou inconnu est dit ici, avant tout run.
+        Some(wf) => {
+            let params = super::resolve_params(&wf, draft.params.clone())?;
+            (wf, params)
+        }
+        None => {
+            let limits = s
+                .workflows
+                .get(&draft.workflow_id)
+                .map(|w| Limits::of(&w.settings))
+                .unwrap_or_default();
+            let wf = execution::compile(draft, &limits).map_err(|e| e.to_string())?;
+            (wf, draft.params.clone())
+        }
+    };
     resolve_models(&mut wf, &s.config.config());
     // Tout ce que le run relira est écrit avant sa ligne : un arrêt entre les deux laisse
     // un clic rejoué refaire la même chose, sous le même identifiant.
@@ -190,7 +202,7 @@ async fn launch(
         .map_err(|e| e.to_string())?;
     let (run, created) = s
         .runs
-        .create_as(&id, &wf, run_session.id.as_str(), draft.params.clone())
+        .create_as(&id, &wf, run_session.id.as_str(), params)
         .await
         .map_err(|e| e.to_string())?;
     if !created {

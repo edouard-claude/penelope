@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 11 octobre 2026.
+Dernière mise à jour : 12 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.50
+
+**Longues charges, suite : un plan qui choisit `backlog` lance vraiment `backlog` (liste
+figée, une story par sous-run, pause en fin d'épique), le brief atteint chaque story, et
+`wf run --param` garde les espaces de ses valeurs (#343, #344).**
+
+Constat (12/10, instance réelle en 1.0.48) : le propriétaire a lancé au « vas-y » le
+backlog MentalEco Lot 1 (53 stories, 10 épiques) préparé en conversation. Le plan portait
+`workflow_id = "backlog"`, mais le run est parti sur un plan compilé en cinq phases
+génériques, chacune suivie d'une porte d'OK : arrêté dès la première, sans liste
+(`workflow_items` vide) ni pause par épique. Relancé à la main par `penelope wf run
+backlog --param …`, il a reçu `source = "liste"` et `depot = …/Library/Application` : la
+CLI recollait les `--param` puis les recoupait à chaque espace. L'étape `lister` a lu une
+autre liste ClickUp (65 tâches internes) ; arrêté avant toute écriture.
+
+- **Lancement direct** (#343). `plan::execution::runs_as_is` : un workflow qui a une
+  étape `foreach` part tel quel au « vas-y », avec les paramètres du plan validés par
+  `resolve_params` (manquant ou inconnu : refusé au clic, sans run). Identifiant
+  `r_plan_…`, lien de plan, idempotence, `workflow.plan.launched` inchangés ; les autres
+  plans sont compilés en phases comme avant.
+- **Brief hérité** (#343). Un sous-workflow lancé sans brief propre reçoit celui de son
+  parent : chaque élément d'un `foreach` lit les consignes de la conversation (RGPD, GA4,
+  branche), pas seulement la première étape du parent.
+- **`--param` entier** (#344). Chaque `--param clé=valeur` est lu seul, valeur entière ;
+  un JSON non chaîne reste typé ; un `--param` sans `=` est une erreur d'usage. Le
+  découpage de `/run` dans Telegram n'est pas touché.
+
+Non fait : la carte du plan ne dit pas encore quel workflow partira ni combien d'éléments
+sont attendus (#343, point 4).
 
 ### 1.0.49
 

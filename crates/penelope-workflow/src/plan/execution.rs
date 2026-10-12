@@ -216,6 +216,15 @@ fn suffix(reworks: u32, free: bool) -> String {
     s
 }
 
+/// Un workflow qui déroule sa propre liste (une étape `foreach`, comme `backlog`, #338)
+/// part tel quel au « vas-y » (#343) : ses arrêts sont les siens (fin d'épique, élément en
+/// échec, crédits), le plan n'y ajoute pas ses portes de phase. Le 12/10, un plan
+/// `backlog` compilé en cinq phases attendait le propriétaire dès la première, sans liste
+/// ni pause par épique.
+pub fn runs_as_is(wf: &Workflow) -> bool {
+    wf.steps.iter().any(|s| s.kind == "foreach")
+}
+
 /// Identifiant du workflow compilé : le plan exact, par son empreinte.
 pub fn workflow_id(fingerprint: &str) -> String {
     format!("plan-{}", &fingerprint[..fingerprint.len().min(12)])
