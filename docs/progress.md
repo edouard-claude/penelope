@@ -12,6 +12,20 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.57
+
+**Runs autonomes : un sous-agent lancé depuis une étape hérite du run et de son autonomie
+(#358).**
+
+Constat (12/10, 16:02 → 17:29 UTC, story 1.1 MentalEco) : un sous-agent
+(`sub_agent_spawn`) lancé par l'étape `tests-locaux` d'un run autonome a demandé une
+approbation, car sa demande ne portait aucun run. La carte n'a pas pu être livrée dans
+le sujet Telegram du run, et le run est resté 1 h 27 immobile.
+
+- `spawn_sub_agent` retrouve le run actif de la session appelante et le passe au
+  sous-agent : autonomie, origine et budget du run.
+- Le harnais de test de l'orchestrateur applique l'autonomie des runs comme le daemon.
+
 ### 1.0.56
 
 **Runs autonomes : un appel coupé par un redémarrage est relancé d'office (#356).**

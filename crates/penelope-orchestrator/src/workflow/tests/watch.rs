@@ -159,3 +159,69 @@ async fn moving_a_run_moves_its_sub_runs() {
         assert_eq!(origin_of(s, id).await.to_value(), topic.to_value(), "{id}");
     }
 }
+
+/// #358 : un sous-agent lancé depuis l'étape d'un run autonome (`sub_agent_spawn`) travaille
+/// pour ce run : une écriture du shell ne demande rien. Hors run, elle demande.
+#[tokio::test]
+async fn a_sub_agent_spawned_by_an_autonomous_run_asks_nothing() {
+    let e = env().await;
+    let s = &e.d.services;
+    let run = waiting_list(&e, true).await;
+    // « Tout demander » : hors run autonome, l'écriture attend forcément le propriétaire.
+    s.config
+        .mutate("test", |c| {
+            c.tools.approval_mode = "ask".into();
+            Ok(vec!["tools.approval_mode".into()])
+        })
+        .unwrap();
+    let o = WorkflowOrchestrator {
+        context: e.d.cx.clone(),
+    };
+    let write = || {
+        Scripted::ToolCalls(
+            String::new(),
+            vec![ToolCall {
+                id: "w1".into(),
+                name: "shell_exec".into(),
+                arguments: json!({"command": "touch essai-sous-agent", "pourquoi": "essai"}),
+            }],
+        )
+    };
+    e.p.push(write());
+    e.p.reply("Fait.");
+    penelope_executor::executor::Orchestrator::spawn_sub_agent(
+        &o,
+        run.session_id.as_str(),
+        "crée le fichier d'essai",
+        None,
+        vec!["shell_exec".into()],
+        &owner(),
+        &penelope_llm::CancelToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        s.approvals.pending(10).await.unwrap().is_empty(),
+        "{:?}",
+        s.approvals.pending(10).await.unwrap()
+    );
+
+    let chat = s
+        .sessions
+        .create(penelope_kernel::session::SessionKind::Chat, None)
+        .await
+        .unwrap();
+    e.p.push(write());
+    e.p.reply("Je demande.");
+    let _ = penelope_executor::executor::Orchestrator::spawn_sub_agent(
+        &o,
+        chat.id.as_str(),
+        "crée le fichier d'essai",
+        None,
+        vec!["shell_exec".into()],
+        &owner(),
+        &penelope_llm::CancelToken::new(),
+    )
+    .await;
+    assert_eq!(s.approvals.pending(10).await.unwrap().len(), 1);
+}

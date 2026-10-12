@@ -194,11 +194,26 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
         // du propriétaire, pas une planification qui passerait par là (#142).
         let model_id =
             penelope_app::codex_scope::for_origin(&self.context.services, &model_id, origin).await;
+        // Lancé depuis l'étape d'un run : le sous-agent travaille pour ce run, son
+        // autonomie et son budget compris (#358). Le 12/10, un sous-agent d'une story
+        // autonome a attendu 1 h 30 une approbation que personne n'a vue.
+        let run_id = self
+            .context
+            .services
+            .runs
+            .list(None, 500)
+            .await
+            .ok()
+            .and_then(|runs| {
+                runs.into_iter()
+                    .find(|r| r.session_id == session_id && !r.state.is_terminal())
+            })
+            .map(|r| r.id);
         let text = run_sub_agent(
             &self.context,
             SubAgentTask {
                 session_id,
-                run_id: None,
+                run_id: run_id.as_deref(),
                 kind: "general",
                 prompt,
                 model_id: &model_id,
