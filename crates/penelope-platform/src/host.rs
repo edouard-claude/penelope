@@ -254,6 +254,20 @@ pub fn parse_loadavg(text: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Espace libre en octets sur le volume de `path` (`df -k`, exécutable, jamais un
+/// shell). `None` : la mesure n'a pas pu être faite. Bloquant.
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    let text = run("/bin/df", &["-k", &path.to_string_lossy()])?;
+    let avail_kb: u64 = text
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()?;
+    Some(avail_kb.saturating_mul(1024))
+}
+
 /// `df -k <chemin>` : renvoie (libre, total) en Go.
 pub fn parse_df(text: &str) -> Option<(f64, f64)> {
     let line = text.lines().nth(1)?;
@@ -267,6 +281,14 @@ pub fn parse_df(text: &str) -> Option<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #341 : l'espace libre d'un dossier existant se mesure en octets.
+    #[cfg(unix)]
+    #[test]
+    fn free_bytes_of_an_existing_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(free_bytes(dir.path()).is_some_and(|b| b > 0));
+    }
 
     #[test]
     fn battery_on_battery_power() {

@@ -21,9 +21,10 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     }
 }
 
-/// Passe `bytes` sur l'entrée de `tar` lancé avec `args`, et rend sa sortie standard.
-fn tar_stdin(args: &[&std::ffi::OsStr], bytes: &[u8]) -> Result<Vec<u8>> {
-    use std::io::Write;
+/// Passe le flux `input` sur l'entrée de `tar` lancé avec `args`, et rend sa sortie
+/// standard. Une erreur de lecture du flux (une archive chiffrée coupée ou retouchée,
+/// #341) l'emporte sur le code de `tar` : c'est elle qui dit ce qui ne va pas.
+fn tar_stdin(args: &[&std::ffi::OsStr], mut input: impl std::io::Read + Send) -> Result<Vec<u8>> {
     let mut child = std::process::Command::new("tar")
         .args(args)
         .stdin(Stdio::piped())
@@ -36,11 +37,20 @@ fn tar_stdin(args: &[&std::ffi::OsStr], bytes: &[u8]) -> Result<Vec<u8>> {
         .take()
         .ok_or_else(|| PlatformError::Process("tar : entrée indisponible".into()))?;
     let written = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || stdin.write_all(bytes));
+        let writer = scope.spawn(move || {
+            let copied = std::io::copy(&mut input, &mut stdin);
+            drop(stdin);
+            copied
+        });
         let out = child.wait_with_output();
         (writer.join(), out)
     });
     let out = written.1?;
+    match written.0 {
+        Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.into()),
+        Err(_) => return Err(PlatformError::Process("tar : écriture interrompue".into())),
+        _ => {}
+    }
     if !out.status.success() {
         return Err(PlatformError::Process(format!(
             "tar : {}",
@@ -48,7 +58,7 @@ fn tar_stdin(args: &[&std::ffi::OsStr], bytes: &[u8]) -> Result<Vec<u8>> {
         )));
     }
     match written.0 {
-        Ok(Ok(())) => Ok(out.stdout),
+        Ok(Ok(_)) => Ok(out.stdout),
         Ok(Err(e)) => Err(e.into()),
         Err(_) => Err(PlatformError::Process("tar : écriture interrompue".into())),
     }
@@ -57,6 +67,12 @@ fn tar_stdin(args: &[&std::ffi::OsStr], bytes: &[u8]) -> Result<Vec<u8>> {
 /// Extrait une archive `tar.gz` tenue en mémoire, sans l'écrire en clair sur le disque
 /// (#329 : la restauration déchiffre en mémoire et passe l'archive à `tar`).
 pub fn extract_tar_gz_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
+    extract_tar_gz_from(bytes, dest)
+}
+
+/// Extrait un flux `tar.gz` dans `dest`, sans clair intermédiaire sur le disque (#341 :
+/// la restauration lit l'archive déchiffrée bloc par bloc).
+pub fn extract_tar_gz_from(input: impl std::io::Read + Send, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(dest)?;
     tar_stdin(
         &[
@@ -65,7 +81,7 @@ pub fn extract_tar_gz_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
             "-C".as_ref(),
             dest.as_os_str(),
         ],
-        bytes,
+        input,
     )
     .map(|_| ())
 }
@@ -73,7 +89,12 @@ pub fn extract_tar_gz_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
 /// Les entrées d'une archive `tar.gz` tenue en mémoire, sans rien extraire (#328 : le
 /// contrôle de déchiffrement de chaque sauvegarde).
 pub fn list_tar_gz_bytes(bytes: &[u8]) -> Result<Vec<String>> {
-    let out = tar_stdin(&["-tzf".as_ref(), "-".as_ref()], bytes)?;
+    list_tar_gz_from(bytes)
+}
+
+/// Les entrées d'un flux `tar.gz`, sans rien extraire (#341).
+pub fn list_tar_gz_from(input: impl std::io::Read + Send) -> Result<Vec<String>> {
+    let out = tar_stdin(&["-tzf".as_ref(), "-".as_ref()], input)?;
     Ok(String::from_utf8_lossy(&out)
         .lines()
         .map(|l| l.trim_end_matches('/').to_string())
@@ -85,8 +106,16 @@ pub fn list_tar_gz_bytes(bytes: &[u8]) -> Result<Vec<String>> {
 /// dossier, `l` lien symbolique, `h` lien physique…), sans rien extraire : la
 /// restauration refuse ce qui sortirait de sa destination (#329).
 pub fn tar_gz_entries(bytes: &[u8]) -> Result<Vec<(char, String)>> {
-    let names = list_tar_gz_bytes(bytes)?;
-    let verbose = tar_stdin(&["-tvzf".as_ref(), "-".as_ref()], bytes)?;
+    tar_gz_entries_from(|| Ok(bytes))
+}
+
+/// Comme [`tar_gz_entries`], depuis un flux qu'`open` rouvre : les noms et les types se
+/// lisent en deux passes (#341).
+pub fn tar_gz_entries_from<R: std::io::Read + Send>(
+    mut open: impl FnMut() -> Result<R>,
+) -> Result<Vec<(char, String)>> {
+    let names = list_tar_gz_from(open()?)?;
+    let verbose = tar_stdin(&["-tvzf".as_ref(), "-".as_ref()], open()?)?;
     let kinds: Vec<char> = String::from_utf8_lossy(&verbose)
         .lines()
         .filter(|l| !l.trim().is_empty())

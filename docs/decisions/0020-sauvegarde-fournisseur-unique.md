@@ -41,10 +41,13 @@ neuf, on la tire et ça repart comme hier.**
    les médias sauf `backup.include_media`. Sous une racine, aucun lien symbolique n'est
    suivi (il est nommé au manifeste) et la collecte est bornée (2 Gio) ; la restauration
    refuse une archive qui porte un chemin absolu, un `..` ou un lien.
+   *Révisé par #341 (1.0.49)* : plus de plafond de taille, seul l'espace disque libre
+   borne la collecte ; ce qui se régénère (règles Git des dépôts, caches de build
+   reconnus, `backup.exclude`, `.penelopeignore`) reste hors de `data/workspace`.
 3. **Les secrets sous une double couche.** Ils sont lus dans le magasin (trousseau) au
    moment de la sauvegarde, sérialisés, chiffrés par une clé dérivée de la même phrase
    de passe avec son propre sel (en-tête `PNLPSK01`), puis rangés dans l'archive, elle-même
-   chiffrée (`PNLPBK01`). Un tar extrait par erreur ne livre aucune valeur. La phrase de
+   chiffrée (`PNLPBK01`, puis `PNLPBK02` en flux par blocs depuis #341). Un tar extrait par erreur ne livre aucune valeur. La phrase de
    passe des sauvegardes n'y est pas : la restauration la reçoit de qui la tape.
 4. **Le vault garde son git local** (historique, retour arrière, `mem diff`). Son push
    devient optionnel, `memory.vault_git_push`, **faux par défaut** : il partirait en

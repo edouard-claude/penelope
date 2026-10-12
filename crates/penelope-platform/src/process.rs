@@ -15,8 +15,8 @@ use std::process::Stdio;
 
 mod tools;
 pub use tools::{
-    binary_version, create_tar_gz, extract_tar_gz, extract_tar_gz_bytes, list_tar_gz_bytes,
-    tar_gz_entries,
+    binary_version, create_tar_gz, extract_tar_gz, extract_tar_gz_bytes, extract_tar_gz_from,
+    list_tar_gz_bytes, list_tar_gz_from, tar_gz_entries, tar_gz_entries_from,
 };
 
 /// Description d'un processus à lancer.

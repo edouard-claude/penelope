@@ -1,4 +1,4 @@
-//! Liens symboliques, plafond de la collecte et archives retouchées (revue de sécurité du
+//! Liens symboliques, espace disque de la collecte et archives retouchées (revue de sécurité du
 //! lot #327-#330) : rien n'entre de hors des racines déclarées, rien ne sort de la
 //! destination à la restauration.
 
@@ -63,24 +63,42 @@ async fn symbolic_links_are_never_followed() {
     assert!(!text.contains("secret de la machine"));
 }
 
-/// Au-delà du plafond, la collecte s'arrête et le dit, avant toute archive.
+/// #341 : plus de plafond de taille ; la collecte à blanc compte sans rien écrire, et un
+/// disque trop plein est refusé avant toute copie, avec ce qui manque.
 #[test]
-fn the_collection_stops_at_its_cap() {
+fn the_collection_is_bounded_by_the_disk_only() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("a"), vec![0u8; 600]).unwrap();
     std::fs::write(src.join("b"), vec![0u8; 600]).unwrap();
-    let mut c = Collect::bounded(1000);
-    let e = c
-        .copy_root(&src, &dir.path().join("dst"), "workspace")
-        .unwrap_err()
-        .to_string();
-    assert!(e.contains("plafond"), "{e}");
-    let mut c = Collect::bounded(2000);
-    c.copy_root(&src, &dir.path().join("dst2"), "workspace")
+    let mut c = Collect::dry(&[]);
+    c.copy_root(&src, &dir.path().join("rien"), "workspace")
         .unwrap();
     assert_eq!(c.bytes, 1200);
+    assert!(
+        !dir.path().join("rien").exists(),
+        "une collecte à blanc n'écrit rien"
+    );
+
+    let gb = 1024 * 1024 * 1024;
+    let needed = collect::space_needed(3 * gb);
+    collect::check_space(3 * gb, Some(needed), dir.path()).unwrap();
+    collect::check_space(3 * gb, None, dir.path()).unwrap();
+    let e = collect::check_space(3 * gb, Some(2 * gb), dir.path())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("espace disque insuffisant") && e.contains("3072 Mo à sauvegarder"),
+        "{e}"
+    );
+    assert!(e.contains("il manque 7424 Mo"), "{e}");
+
+    let mut c = Collect::new(&[]);
+    c.copy_root(&src, &dir.path().join("dst"), "workspace")
+        .unwrap();
+    assert_eq!(c.bytes, 1200);
+    assert_eq!(std::fs::read(dir.path().join("dst/a")).unwrap().len(), 600);
 }
 
 /// Une archive ne s'extrait que si chaque entrée est un fichier ou un dossier sous

@@ -861,6 +861,10 @@ pub struct Backup {
     pub keep_local: u32,
     /// Inclure les artefacts et les médias reçus. Lourd, et reconstructible.
     pub include_media: bool,
+    /// Motifs écartés de `data/workspace`, au format `.gitignore` (`!` réinclut), en plus
+    /// des `.gitignore` des dépôts, des `.penelopeignore` et des caches de build reconnus
+    /// (#341).
+    pub exclude: Vec<String>,
     /// Stockage S3 (Scaleway, AWS, MinIO…), quand `provider = "s3"`.
     pub s3: BackupS3,
 }
@@ -876,6 +880,7 @@ impl Default for Backup {
             keep_monthly: 12,
             keep_local: 1,
             include_media: false,
+            exclude: Vec::new(),
             s3: BackupS3::default(),
         }
     }

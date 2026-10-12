@@ -329,6 +329,7 @@
         "keep_monthly": "integer",
         "keep_local": "integer",
         "include_media": "bool",
+        "exclude": [],
         "s3": {
           "endpoint": "string",
           "bucket": "string",

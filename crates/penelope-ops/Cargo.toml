@@ -31,6 +31,8 @@ reqwest.workspace = true
 # Signature AWS SigV4 des envois S3 (#289) : empreintes des corps ; le HMAC-SHA256 est
 # celui du noyau (`penelope_kernel::hmac`), partagé avec les webhooks (#294).
 sha2.workspace = true
+# Exclusions de la sauvegarde au format `.gitignore` (#341).
+ignore.workspace = true
 # Signature des releases (`upgrade`).
 minisign-verify.workspace = true
 # Découverte parallèle (import Hermes).

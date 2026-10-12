@@ -3,7 +3,7 @@
 Tenu à jour conformément au §21 du PRD : étape, critères d'acceptation couverts,
 décisions. Ce fichier dit aussi, sans détour, ce qui **n'est pas** fait.
 
-Dernière mise à jour : 8 octobre 2026.
+Dernière mise à jour : 11 octobre 2026.
 
 ## Version 1
 
@@ -11,6 +11,47 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 [0015](decisions/0015-gel-0.17-et-branche-v1.md), épopée #208). Les versions `1.0.0-alpha.N`
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
+
+### 1.0.49
+
+**Sauvegarde : plus de plafond de taille, chiffrement en flux par blocs authentifiés, et
+ce qui se régénère reste hors du workspace (règles Git des dépôts, caches de build
+reconnus, `backup.exclude`, `.penelopeignore`) (#341).**
+
+Constat (11/10, instance réelle en 1.0.48) : aucune sauvegarde réussie depuis le 07/10. La
+nuit du 11/10, `provider = "s3"` enfin posé, la collecte a refusé « plus de 2048 Mo à
+sauvegarder » ; le bucket MinIO est resté vide. À collecter : 3 420 Mo (base 803,
+workspace 1 870, vault 614, `mcp-data` 129), dont `ent1-mcp/target` (514 Mo, ignoré par son
+dépôt), les `.gocache` de trois serveurs MCP (environ 530 Mo, qu'aucun `.gitignore` ne
+nomme) et `helloasso/target` (149 Mo, hors dépôt). Les deux plafonds (512 Mio d'archive,
+2 Gio de collecte) venaient de #42 : l'archive était chiffrée d'un bloc, en mémoire.
+
+- **Chiffrement en flux** (`penelope-platform::archive`). Format `PNLPBK02` : sel, préfixe
+  de nonce, puis blocs de 1 Mio de clair scellés chacun (construction STREAM : compteur et
+  marque du dernier bloc dans le nonce, en-tête en données associées). Mémoire bornée à
+  deux blocs ; un bloc retiré, permuté, ajouté ou une archive coupée font échouer la
+  lecture, une mauvaise phrase de passe est dite au premier bloc. `open_reader` lit le
+  clair comme un flux, que `tar` consomme (`list_tar_gz_from`, `extract_tar_gz_from`,
+  `tar_gz_entries_from`). Les archives `PNLPBK01` se lisent toujours.
+- **Plus de plafond.** `MAX_ARCHIVE_BYTES` et `MAX_COLLECTED_BYTES` disparaissent. La
+  collecte est comptée à blanc, puis comparée à l'espace libre (`host::free_bytes`) : il
+  faut trois fois le volume plus 256 Mo, sinon refus avant toute copie, avec ce qui
+  manque. Le contrôle de chaque sauvegarde (#328), la restauration (#329) et l'empreinte
+  SHA-256 lisent en flux.
+- **Exclusions du workspace** (`backup/collect.rs`). Les `.gitignore` des dépôts (imbriqués
+  compris, règles négatives, `.git/info/exclude`), un `.penelopeignore` où qu'il soit, les
+  motifs de `backup.exclude` et les caches reconnus (`DEFAULT_EXCLUDES`, `target/` à côté
+  d'un `Cargo.toml`). La règle la plus proche l'emporte ; rien n'est écarté sous `.git`
+  ni hors du workspace. Le manifeste (`excluded`, entrée `workspace`) dit le volume, le
+  nombre et les cinquante plus gros chemins avec leur règle ; `penelope restore` rappelle
+  de les régénérer. Dépendance `ignore` (module `gitignore` seul), raison écrite dans
+  `Cargo.toml`.
+- Doc : `install-headless.md` (sauvegardes), décision 0020 révisée.
+
+Non fait : la vérification sur l'instance réelle (une sauvegarde envoyée au MinIO local,
+`doctor` qui la confirme) se fait après la mise à jour en 1.0.49. Les commandes
+`git check-ignore` et le `core.excludesFile` global de la machine ne sont pas lus : une
+sauvegarde ne dépend pas de la configuration Git de l'utilisateur.
 
 ### 1.0.48
 
