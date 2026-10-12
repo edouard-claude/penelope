@@ -2,7 +2,7 @@
 
 use super::*;
 
-mod fs_shell;
+pub(super) mod fs_shell;
 mod git_http;
 mod memory;
 mod misc;

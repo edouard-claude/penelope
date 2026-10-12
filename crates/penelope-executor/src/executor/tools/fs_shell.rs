@@ -203,8 +203,8 @@ impl NativeToolExecutor {
                 // Une valeur injectée ne revient jamais au modèle, même affichée par la
                 // commande (#352).
                 for v in &masked {
-                    out.stdout = out.stdout.replace(v.as_str(), "[secret masqué]");
-                    out.stderr = out.stderr.replace(v.as_str(), "[secret masqué]");
+                    out.stdout = mask_value(&out.stdout, v);
+                    out.stderr = mask_value(&out.stderr, v);
                 }
                 let offline = !network
                     && cfg.sandbox.default_profile != "full"
@@ -281,4 +281,25 @@ impl NativeToolExecutor {
             other => Err(ToolError::Unknown(other.to_string())),
         }
     }
+}
+
+/// Masque `value` dans `text`, et le début de `value` que laisserait une sortie tronquée en
+/// plein milieu (#352) : `…AKDEV12` d'une clé coupée ne passe pas non plus.
+fn mask_value(text: &str, value: &str) -> String {
+    let mut out = text.replace(value, "[secret masqué]");
+    for k in (4..value.len()).rev() {
+        if let Some(head) = value.get(..k)
+            && out.ends_with(head)
+        {
+            out.truncate(out.len() - head.len());
+            out.push_str("[secret masqué]");
+            break;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+pub(crate) fn mask_value_for_tests(text: &str, value: &str) -> String {
+    mask_value(text, value)
 }

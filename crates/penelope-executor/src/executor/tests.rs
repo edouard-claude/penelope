@@ -890,6 +890,11 @@ async fn a_pasted_secret_reaches_a_command_as_a_variable_and_stays_masked() {
         .unwrap();
     assert!(out.text.contains(&value.len().to_string()), "{}", out.text);
     assert!(!out.text.contains(value), "{}", out.text);
+    // Une sortie coupée au milieu de la valeur n'en laisse pas le début.
+    assert_eq!(
+        super::tools::fs_shell::mask_value_for_tests("fin : pg-valeur-tr", value),
+        "fin : [secret masqué]"
+    );
     e.services
         .platform
         .secrets
