@@ -94,11 +94,14 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
             cached_tokens,
             minutes,
             iterations,
+            chat,
+            topic,
         }) => (
             m::WF_CONTROL,
             json!({"run": run, "op": op, "choice": choice, "input": input,
                    "usd": usd, "tokens": tokens, "cached_tokens": cached_tokens,
-                   "minutes": minutes, "iterations": iterations}),
+                   "minutes": minutes, "iterations": iterations,
+                   "chat_id": chat, "topic_id": topic}),
         ),
 
         Command::Vault(VaultCmd::Sync) => (m::VAULT_SYNC, json!({})),

@@ -143,144 +143,31 @@ impl NativeToolExecutor {
         Ok(ToolOutcome::ok(v))
     }
 
-    /// Workflows et sous-agents.
-    pub(super) async fn workflow_tools(
-        &self,
-        name: &str,
-        args: &Value,
-        cancel: &penelope_llm::CancelToken,
-    ) -> ToolResult<ToolOutcome> {
+    /// `workflow_status` et `workflow_control` : l'état lisible d'un run et son pilotage
+    /// (#346).
+    async fn run_tool(&self, name: &str, args: &Value) -> ToolResult<Value> {
         let s = &self.services;
-        let cfg = s.config.config();
-
-        let v = match name {
-            "workflow_list" => {
-                json!(
-                s.workflows
-                    .all()
-                    .iter()
-                    .map(|e| json!({"id": e.workflow.metadata.id, "name": e.workflow.metadata.name,
-                                    "description": e.workflow.metadata.description}))
-                    .collect::<Vec<_>>()
-            )
-            }
-            "workflow_describe" => {
-                let id = str_arg(args, "id")?;
-                let w = s
-                    .workflows
-                    .get(&id)
-                    .ok_or_else(|| ToolError::Invalid(format!("workflow `{id}` introuvable")))?;
-                json!({"definition": w, "graphe": w.render_graph()})
-            }
-            "workflow_plan" => {
-                use penelope_workflow::plan::{PlanError, PlanStep, PlanStore};
-                let id = str_arg(args, "id")?;
-                s.workflows
-                    .get(&id)
-                    .ok_or_else(|| ToolError::Invalid(format!("workflow `{id}` introuvable")))?;
-                let plans = PlanStore::new(s.store.clone());
-                let existing = plans.get(&self.env.session_id).await?;
-                let restore = args.get("restore_version").and_then(Value::as_u64);
-                let goal = args.get("goal").and_then(Value::as_str);
-                let steps = args.get("steps");
-                let draft = if let Some(mut old) = existing {
-                    if old.plan.can_execute()
-                        && args.get("expected_version").is_none()
-                        && goal.is_some()
-                        && steps.is_some()
-                    {
-                        let new = new_workflow_plan(&id, args)?;
-                        plans.start_next(&self.env.session_id, &old, &new).await?;
-                        new
-                    } else {
-                        if old.workflow_id != id {
-                            return Err(ToolError::Invalid(format!(
-                                "la session prépare déjà le workflow `{}`",
-                                old.workflow_id
-                            )));
-                        }
-                        if restore.is_some() || goal.is_some() || steps.is_some() {
-                            let previous = old.clone();
-                            let expected = args
-                                .get("expected_version")
-                                .and_then(Value::as_u64)
-                                .ok_or_else(|| {
-                                    ToolError::Invalid(
-                                        "expected_version requis pour réviser".into(),
-                                    )
-                                })?;
-                            // Un plan approuvé ne se révise plus : le refus dit aussi où
-                            // en est son run (#302), pas seulement « déjà approuvé ».
-                            let state = if old.plan.can_execute() {
-                                Some(self.plan_gate().await?.refusal())
-                            } else {
-                                None
-                            };
-                            let refused = |e: PlanError| {
-                                ToolError::Invalid(match (&e, &state) {
-                                    (PlanError::AlreadyApproved, Some(state)) => {
-                                        format!("{e} ; {state}")
-                                    }
-                                    _ => e.to_string(),
-                                })
-                            };
-                            if let Some(version) = restore {
-                                old.restore(expected, version).map_err(refused)?;
-                            } else {
-                                let goal =
-                                    goal.ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
-                                let steps: Vec<PlanStep> =
-                                    serde_json::from_value(steps.cloned().ok_or_else(|| {
-                                        ToolError::Invalid("steps requis".into())
-                                    })?)
-                                    .map_err(|e| ToolError::Invalid(e.to_string()))?;
-                                old.revise(expected, goal, steps).map_err(refused)?;
-                            }
-                            old.params = args.get("params").cloned().unwrap_or(old.params);
-                            old.brief = args
-                                .get("brief")
-                                .and_then(Value::as_str)
-                                .map(String::from)
-                                .or(old.brief);
-                            plans.replace(&self.env.session_id, &previous, &old).await?;
-                        }
-                        old
-                    }
-                } else {
-                    let new = new_workflow_plan(&id, args)?;
-                    plans.create(&self.env.session_id, &new).await?;
-                    new
+        Ok(match name {
+            "workflow_status" => {
+                let run_id = str_arg(args, "run_id")?;
+                let status = match &self.orchestrator {
+                    Some(o) => o.run_status(&run_id).await,
+                    None => None,
                 };
-                if let Some(messenger) = &self.messenger {
-                    messenger
-                        .send_plan_card(&self.env.origin, &self.env.session_id, &draft)
-                        .await
-                        .map_err(ToolError::Other)?;
+                match status {
+                    Some(v) => v.map_err(ToolError::Other)?,
+                    None => serde_json::to_value(s.runs.get(&run_id).await?).unwrap_or_default(),
                 }
-                serde_json::to_value(&draft).unwrap_or_default()
             }
-            "workflow_start" => {
-                // Déjà refusé au précontrôle depuis un canal (#302) ; redit ici au cas où
-                // l'appel l'aurait contourné.
-                self.channel_start_gate().await?;
-                let o = self
-                    .orchestrator
-                    .as_ref()
-                    .ok_or_else(|| ToolError::Other("moteur de workflows indisponible".into()))?;
-                o.start_workflow(
-                    &str_arg(args, "id")?,
-                    args.get("params").cloned().unwrap_or(json!({})),
-                    args.get("brief").and_then(|v| v.as_str()),
-                    &self.env.origin,
-                )
-                .await
-                .map_err(ToolError::Other)?
-            }
-            "workflow_status" => serde_json::to_value(s.runs.get(&str_arg(args, "run_id")?).await?)
-                .unwrap_or_default(),
             "workflow_control" => {
                 let op = str_arg(args, "op")?;
                 let run_id = str_arg(args, "run_id")?;
+                // Un run ne décide pas de sa propre autonomie, ni de celle d'un autre (#346).
+                if self.env.in_workflow && matches!(op.as_str(), "autonomous" | "supervised") {
+                    return Err(ToolError::Other(
+                        "l'autonomie d'un run est une décision du propriétaire".into(),
+                    ));
+                }
                 match &self.orchestrator {
                     Some(o) => o
                         .control_run(&run_id, &op)
@@ -295,60 +182,198 @@ impl NativeToolExecutor {
                     }
                 }
             }
-            "workflow_author" => {
-                let draft = args.get("draft").cloned().unwrap_or(Value::Null);
-                let raw = match &draft {
-                    Value::String(t) => t.clone(),
-                    other => other.to_string(),
-                };
-                // Un brouillon refusé renvoie à la section de la documentation (issue #34).
-                let with_doc = |e: String| {
-                    let (heading, link) = crate::selfdocs::workflow_doc_for(&e);
-                    ToolError::Invalid(format!(
-                        "{e}\nDocumentation : « {heading} », {link} (lire avec `self_docs` \
-                         action `read`, file `docs/workflows.md`, section « {heading} »)."
-                    ))
-                };
-                let w = penelope_workflow::Workflow::from_json(&raw)
-                    .map_err(|e| with_doc(format!("JSON invalide : {e}")))?;
-                let known = penelope_app::services::workflow_known_with(
-                    &cfg,
-                    &s.mcp_tools,
-                    &s.workflows,
-                    &s.channel,
-                )
-                .await;
-                let dir = s.platform.dirs.workflows();
-                let path = s.workflows.write(&dir, &w, &known).map_err(with_doc)?;
-                s.workflows
-                    .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
-                json!({"written": path, "id": w.metadata.id})
-            }
-            "sub_agent_spawn" => {
-                let o = self
-                    .orchestrator
-                    .as_ref()
-                    .ok_or_else(|| ToolError::Other("sous-agents indisponibles".into()))?;
-                o.spawn_sub_agent(
-                    &self.env.session_id,
-                    &str_arg(args, "prompt")?,
-                    args.get("model").and_then(|v| v.as_str()),
-                    args.get("tools")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|x| x.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    &self.env.origin,
-                    cancel,
-                )
-                .await
-                .map_err(ToolError::Other)?
-            }
             other => return Err(ToolError::Unknown(other.to_string())),
-        };
+        })
+    }
+
+    /// Workflows et sous-agents.
+    pub(super) async fn workflow_tools(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: &penelope_llm::CancelToken,
+    ) -> ToolResult<ToolOutcome> {
+        let s = &self.services;
+        let cfg = s.config.config();
+
+        let v =
+            match name {
+                "workflow_list" => {
+                    json!(
+                s.workflows
+                    .all()
+                    .iter()
+                    .map(|e| json!({"id": e.workflow.metadata.id, "name": e.workflow.metadata.name,
+                                    "description": e.workflow.metadata.description}))
+                    .collect::<Vec<_>>()
+            )
+                }
+                "workflow_describe" => {
+                    let id = str_arg(args, "id")?;
+                    let w = s.workflows.get(&id).ok_or_else(|| {
+                        ToolError::Invalid(format!("workflow `{id}` introuvable"))
+                    })?;
+                    json!({"definition": w, "graphe": w.render_graph()})
+                }
+                "workflow_plan" => {
+                    use penelope_workflow::plan::{PlanError, PlanStep, PlanStore};
+                    let id = str_arg(args, "id")?;
+                    s.workflows.get(&id).ok_or_else(|| {
+                        ToolError::Invalid(format!("workflow `{id}` introuvable"))
+                    })?;
+                    let plans = PlanStore::new(s.store.clone());
+                    let existing = plans.get(&self.env.session_id).await?;
+                    let restore = args.get("restore_version").and_then(Value::as_u64);
+                    let goal = args.get("goal").and_then(Value::as_str);
+                    let steps = args.get("steps");
+                    let draft = if let Some(mut old) = existing {
+                        if old.plan.can_execute()
+                            && args.get("expected_version").is_none()
+                            && goal.is_some()
+                            && steps.is_some()
+                        {
+                            let new = new_workflow_plan(&id, args)?;
+                            plans.start_next(&self.env.session_id, &old, &new).await?;
+                            new
+                        } else {
+                            if old.workflow_id != id {
+                                return Err(ToolError::Invalid(format!(
+                                    "la session prépare déjà le workflow `{}`",
+                                    old.workflow_id
+                                )));
+                            }
+                            if restore.is_some() || goal.is_some() || steps.is_some() {
+                                let previous = old.clone();
+                                let expected = args
+                                    .get("expected_version")
+                                    .and_then(Value::as_u64)
+                                    .ok_or_else(|| {
+                                        ToolError::Invalid(
+                                            "expected_version requis pour réviser".into(),
+                                        )
+                                    })?;
+                                // Un plan approuvé ne se révise plus : le refus dit aussi où
+                                // en est son run (#302), pas seulement « déjà approuvé ».
+                                let state = if old.plan.can_execute() {
+                                    Some(self.plan_gate().await?.refusal())
+                                } else {
+                                    None
+                                };
+                                let refused = |e: PlanError| {
+                                    ToolError::Invalid(match (&e, &state) {
+                                        (PlanError::AlreadyApproved, Some(state)) => {
+                                            format!("{e} ; {state}")
+                                        }
+                                        _ => e.to_string(),
+                                    })
+                                };
+                                if let Some(version) = restore {
+                                    old.restore(expected, version).map_err(refused)?;
+                                } else {
+                                    let goal = goal
+                                        .ok_or_else(|| ToolError::Invalid("goal requis".into()))?;
+                                    let steps: Vec<PlanStep> =
+                                        serde_json::from_value(steps.cloned().ok_or_else(
+                                            || ToolError::Invalid("steps requis".into()),
+                                        )?)
+                                        .map_err(|e| ToolError::Invalid(e.to_string()))?;
+                                    old.revise(expected, goal, steps).map_err(refused)?;
+                                }
+                                old.params = args.get("params").cloned().unwrap_or(old.params);
+                                old.brief = args
+                                    .get("brief")
+                                    .and_then(Value::as_str)
+                                    .map(String::from)
+                                    .or(old.brief);
+                                plans.replace(&self.env.session_id, &previous, &old).await?;
+                            }
+                            old
+                        }
+                    } else {
+                        let new = new_workflow_plan(&id, args)?;
+                        plans.create(&self.env.session_id, &new).await?;
+                        new
+                    };
+                    if let Some(messenger) = &self.messenger {
+                        messenger
+                            .send_plan_card(&self.env.origin, &self.env.session_id, &draft)
+                            .await
+                            .map_err(ToolError::Other)?;
+                    }
+                    serde_json::to_value(&draft).unwrap_or_default()
+                }
+                "workflow_start" => {
+                    // Déjà refusé au précontrôle depuis un canal (#302) ; redit ici au cas où
+                    // l'appel l'aurait contourné.
+                    self.channel_start_gate().await?;
+                    let o = self.orchestrator.as_ref().ok_or_else(|| {
+                        ToolError::Other("moteur de workflows indisponible".into())
+                    })?;
+                    o.start_workflow(
+                        &str_arg(args, "id")?,
+                        args.get("params").cloned().unwrap_or(json!({})),
+                        args.get("brief").and_then(|v| v.as_str()),
+                        &self.env.origin,
+                    )
+                    .await
+                    .map_err(ToolError::Other)?
+                }
+                // Avec le moteur : liste, attente et autonomie en plus du run (#346).
+                "workflow_status" | "workflow_control" => self.run_tool(name, args).await?,
+                "workflow_author" => {
+                    let draft = args.get("draft").cloned().unwrap_or(Value::Null);
+                    let raw = match &draft {
+                        Value::String(t) => t.clone(),
+                        other => other.to_string(),
+                    };
+                    // Un brouillon refusé renvoie à la section de la documentation (issue #34).
+                    let with_doc = |e: String| {
+                        let (heading, link) = crate::selfdocs::workflow_doc_for(&e);
+                        ToolError::Invalid(format!(
+                            "{e}\nDocumentation : « {heading} », {link} (lire avec `self_docs` \
+                         action `read`, file `docs/workflows.md`, section « {heading} »)."
+                        ))
+                    };
+                    let w = penelope_workflow::Workflow::from_json(&raw)
+                        .map_err(|e| with_doc(format!("JSON invalide : {e}")))?;
+                    let known = penelope_app::services::workflow_known_with(
+                        &cfg,
+                        &s.mcp_tools,
+                        &s.workflows,
+                        &s.channel,
+                    )
+                    .await;
+                    let dir = s.platform.dirs.workflows();
+                    let path = s.workflows.write(&dir, &w, &known).map_err(with_doc)?;
+                    s.workflows
+                        .load_dir(&dir, penelope_workflow::registry::Scope::User, &known);
+                    json!({"written": path, "id": w.metadata.id})
+                }
+                "sub_agent_spawn" => {
+                    let o = self
+                        .orchestrator
+                        .as_ref()
+                        .ok_or_else(|| ToolError::Other("sous-agents indisponibles".into()))?;
+                    o.spawn_sub_agent(
+                        &self.env.session_id,
+                        &str_arg(args, "prompt")?,
+                        args.get("model").and_then(|v| v.as_str()),
+                        args.get("tools")
+                            .and_then(|v| v.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|x| x.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        &self.env.origin,
+                        cancel,
+                    )
+                    .await
+                    .map_err(ToolError::Other)?
+                }
+                other => return Err(ToolError::Unknown(other.to_string())),
+            };
         Ok(ToolOutcome::ok(v))
     }
 }

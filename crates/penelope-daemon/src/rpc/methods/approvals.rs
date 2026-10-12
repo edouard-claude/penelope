@@ -79,7 +79,7 @@ impl Rpc {
 
     /// Tranche une approbation et remet la suite du tour en file, sur le canal de la
     /// session : un tour né sur Telegram y répond, même approuvé depuis la CLI.
-    async fn decide_and_resume(
+    pub(super) async fn decide_and_resume(
         &self,
         id: &str,
         decision: &penelope_hitl::Decision,

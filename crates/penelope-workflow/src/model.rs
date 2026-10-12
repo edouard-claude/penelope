@@ -93,6 +93,11 @@ pub struct Settings {
     /// Formulaires des étapes `user` (`input: "form:<id>"`) : JSON Schema d'objet, un champ
     /// par écran sur Telegram.
     pub forms: std::collections::BTreeMap<String, Value>,
+    /// Run autonome (#346) : aucune approbation demandée, ni à lui ni à ses sous-runs ;
+    /// un refus (`deny`) et les réglages sensibles restent gardés. Pour une série lancée
+    /// le matin qui doit tourner seule (`backlog`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub autonomous: bool,
 }
 
 impl Default for Settings {
@@ -105,6 +110,7 @@ impl Default for Settings {
             tracker: String::new(),
             deploy_workflow: String::new(),
             forms: Default::default(),
+            autonomous: false,
         }
     }
 }

@@ -50,6 +50,9 @@ pub fn backlog() -> Workflow {
                 max_cached_tokens: 0,
             },
             workspace: "persistent:backlog".into(),
+            // Lancé le matin pour la semaine : il ne s'arrête qu'aux fins d'épique, sur
+            // un élément en échec ou faute de crédits, jamais sur une approbation (#346).
+            autonomous: true,
             ..Settings::default()
         },
         start_condition: json!({"type":"always"}),

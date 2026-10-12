@@ -71,3 +71,4 @@ mod runs;
 mod shell_tool;
 mod steps;
 mod wait;
+mod watch;

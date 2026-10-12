@@ -237,6 +237,7 @@ mod step_ctx;
 mod step_shell_tool;
 mod step_user;
 mod step_verify;
+mod watch;
 
 pub use budget::{budget_view, effective_budget, raise_budget, runs_listing};
 use budget::{limit_reason, limits_now, set_caps};
@@ -265,6 +266,7 @@ use step_verify::{
     classify_project_test, evidence_matches_head, project_test_spec, repository_rules,
     requires_current_sha, verifier_prompt,
 };
+pub use watch::{pending_of_autonomous, retarget, run_status};
 
 #[cfg(test)]
 pub(crate) mod harness;

@@ -593,6 +593,76 @@ async fn approvals_flow_over_rpc() {
     assert_eq!(resp.error.unwrap().code, CONFLICT);
 }
 
+/// #346 : `wf control <run> autonomous` rend le run autonome et lève l'approbation qu'il
+/// attendait ; `move` change sa destination ; `supervised` le remet sous supervision.
+#[tokio::test]
+async fn a_run_made_autonomous_releases_its_pending_approval() {
+    let (_d, r) = rpc().await;
+    let s = r.services();
+    let wf = penelope_workflow::Workflow::from_json(
+        &json!({
+            "metadata": {"id": "serie", "name": "Série", "parameters": []},
+            "entryStep": "faire",
+            "steps": [{"id": "faire", "type": "shell", "command": "true",
+                       "transitions": [{"goto": "$done"}]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let run = s
+        .runs
+        .create(&wf, "s_run", json!({}), None, None, 0)
+        .await
+        .unwrap();
+    let a = s
+        .approvals
+        .create(
+            penelope_hitl::ApprovalKind::ToolCall,
+            "shell_exec",
+            penelope_kernel::risk::RiskClass::Write,
+            json!({}),
+            vec!["Autoriser".into()],
+            None,
+            Some(run.id.as_str()),
+            false,
+        )
+        .await
+        .unwrap();
+    let v = call(
+        &r,
+        method::WF_CONTROL,
+        json!({"run": run.id, "op": "autonomous"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(v["autonomous"], true, "{v}");
+    assert_eq!(v["released"], json!([a.id.0]), "{v}");
+    let decided = s.approvals.get(a.id.0.as_str()).await.unwrap().unwrap();
+    assert_eq!(decided.state, penelope_hitl::ApprovalState::Approved);
+    assert_eq!(decided.decided_via.as_deref(), Some("autonomie"));
+
+    let v = call(
+        &r,
+        method::WF_CONTROL,
+        json!({"run": run.id, "op": "move", "chat_id": 42, "topic_id": 5869}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(v["destination"]["topic_id"], 5869, "{v}");
+    let v = call(
+        &r,
+        method::WF_CONTROL,
+        json!({"run": run.id, "op": "supervised"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(v["autonomous"], false);
+    assert!(!penelope_app::autonomy::is_autonomous(s, &run.id).await);
+}
+
 #[tokio::test]
 async fn shutdown_and_restart_flags() {
     let (_d, r) = rpc().await;

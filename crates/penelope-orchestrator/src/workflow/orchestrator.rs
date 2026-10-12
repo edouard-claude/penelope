@@ -238,7 +238,24 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
         .await
     }
 
+    async fn run_status(&self, run_id: &str) -> Option<Result<Value, String>> {
+        Some(
+            super::run_status(&self.context.services, run_id)
+                .await
+                .map_err(|e| e.to_string()),
+        )
+    }
+
     async fn control_run(&self, run_id: &str, op: &str) -> Result<Value, String> {
+        // Autonomie demandée en conversation (#346) : l'outil `workflow_control` est une
+        // écriture, la carte d'approbation la fait trancher par le propriétaire.
+        if matches!(op, "autonomous" | "supervised") {
+            let on = op == "autonomous";
+            penelope_app::autonomy::set(&self.context.services, run_id, on)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(json!({"run": run_id, "autonomous": on}));
+        }
         let parsed = penelope_workflow::Control::parse(op)
             .ok_or_else(|| format!("opération inconnue : {op}"))?;
         // Passer une étape ou sauter ailleurs reste une décision du propriétaire (§12.7).

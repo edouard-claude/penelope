@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.51
+
+**Runs autonomes : un backlog lancé pour la semaine ne demande aucune approbation, ses
+messages arrivent dans son sujet, et le suivi dit ce qui le retient (#346).**
+
+Constat (12/10, run `backlog` MentalEco Lot 1) : la story 1.1 a attendu 2 h une
+approbation pour `tailscale status`. La carte était partie dans le fil privé, sans sujet,
+parce que le run avait été lancé par la RPC. Le suivi demandé toutes les demi-heures
+répondait « ?/53 », sans voir l'attente.
+
+- **Mode autonome.**
+  - `settings.autonomous` (posé sur `backlog`), le choix du propriétaire
+    (`wf control <run> autonomous|supervised`, kv `wf.autonomous.<run>`) ou celui d'un
+    parent rendent un run autonome. Le statut est relu à chaque appel
+    (`penelope_app::autonomy`).
+  - La politique (`ApprovalMode::Unattended`, port `SessionModes::of_turn`) et l'étape
+    `tool` passent `ask` et `ask_twice` en `auto`. Un `deny` et le plancher des réglages
+    sensibles restent.
+  - `autonomous` lève les approbations déjà en attente. Un run ne peut pas régler
+    l'autonomie par `workflow_control`.
+- **Sujet du run.**
+  - Les relances d'approbation et la carte de budget suivent `wf.origin.<run>`.
+  - `wf control <run> move --chat --topic` déplace le run et ses sous-runs actifs.
+- **Suivi.** `workflow_status` rend `progress`, `budget`, `list` (décompte), `autonomous`
+  et `waiting`, avec l'approbation qu'attend un sous-run et sa durée (`watch.rs`).
+
+Non fait :
+- un sujet Telegram créé pour chaque run (le registre `tg_topics` reste inutilisé) ;
+- l'attente d'une approbation compte toujours dans `maxWallMs`.
+
 ### 1.0.50
 
 **Longues charges, suite : un plan qui choisit `backlog` lance vraiment `backlog` (liste

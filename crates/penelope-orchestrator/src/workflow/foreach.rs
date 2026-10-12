@@ -11,7 +11,7 @@ use penelope_workflow::foreach::{
     self, Item, ItemState, ItemStore, OnError, Source, Tally, default_label,
 };
 
-fn items_of(s: &Services) -> ItemStore {
+pub(super) fn items_of(s: &Services) -> ItemStore {
     ItemStore::new(s.store.clone(), s.clock.clone())
 }
 
@@ -399,7 +399,7 @@ pub(super) fn list_lines(items: &[Item]) -> String {
 }
 
 /// Sortie de l'étape : le décompte et l'état de chaque élément.
-fn summary(items: &[Item]) -> Value {
+pub(super) fn summary(items: &[Item]) -> Value {
     let tally = Tally::of(items);
     json!({
         "total": tally.total,

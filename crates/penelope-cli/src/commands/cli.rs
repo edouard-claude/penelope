@@ -638,7 +638,9 @@ pub enum WfCmd {
     /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`,
     /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question, ou
     /// `budget --usd <montant> --tokens <nombre> --cached-tokens <nombre> --minutes <durée>
-    /// --iterations <nombre>` pour relever les plafonds du run.
+    /// --iterations <nombre>` pour relever les plafonds du run ; `autonomous` (plus aucune
+    /// approbation, celles en attente levées) ou `supervised` ; `move --chat <id> --topic
+    /// <id>` pour la destination de ses messages (#346).
     Control {
         run: String,
         op: String,
@@ -656,6 +658,12 @@ pub enum WfCmd {
         minutes: Option<u64>,
         #[arg(long)]
         iterations: Option<u64>,
+        /// `move` : chat de destination du run (#346).
+        #[arg(long)]
+        chat: Option<i64>,
+        /// `move` : sujet de destination du run (#346).
+        #[arg(long)]
+        topic: Option<i64>,
     },
 }
 

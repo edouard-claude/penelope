@@ -411,6 +411,12 @@ pub trait Orchestrator: Send + Sync {
         let _ = (run_id, op);
         Err("moteur de workflows indisponible".into())
     }
+    /// État lisible d'un run (#346) : le run, sa consommation, sa place dans sa liste et
+    /// ce qui le retient ; `None` : le run brut suffit (moteur absent).
+    async fn run_status(&self, run_id: &str) -> Option<Result<Value, String>> {
+        let _ = run_id;
+        None
+    }
     /// Vecteur d'une requête de recherche, en temps borné ; `None` : recherche lexicale.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let _ = text;

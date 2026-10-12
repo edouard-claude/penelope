@@ -450,8 +450,12 @@ pub(crate) async fn skills_tick(d: &Daemon) -> anyhow::Result<bool> {
     }
 }
 
-/// Conversation d'où vient une demande : le chat de sa session, sinon le propriétaire.
+/// Conversation d'où vient une demande : celle de son run (#346), le chat de sa session,
+/// sinon le propriétaire.
 async fn approval_origin(d: &Daemon, a: &penelope_hitl::ApprovalRequest) -> Origin {
+    if let Some(run) = &a.run_id {
+        return penelope_orchestrator::workflow::origin_of(&d.services, run).await;
+    }
     if let Some(sid) = &a.session_id
         && let Ok(Some(sess)) = d.services.sessions.get(sid).await
         && let Some(chat_id) = sess.tg_chat_id

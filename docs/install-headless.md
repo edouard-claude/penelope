@@ -1955,12 +1955,12 @@ et `/stop` interrompt tout le lot.
 | `sub_agent_spawn` | write | Lance un sub-agent à contexte neuf, outils restreints, retour structuré. |
 | `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
 | `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). (à la demande) |
-| `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape. (à la demande) |
+| `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape ; `autonomous` (plus aucune approbation pour ce run et ses sous-runs) ou `supervised`, à la demande du propriétaire seulement. (à la demande) |
 | `workflow_describe` | read | Décrit un workflow : étapes, paramètres, budget. (à la demande) |
 | `workflow_list` | read | Liste les workflows disponibles. (à la demande) |
 | `workflow_plan` | write | Propose ou révise un plan de workflow avant tout lancement. (à la demande) |
 | `workflow_start` | write | Lancement direct réservé aux contextes internes, à la CLI et aux runs ; depuis une conversation, propose d'abord `workflow_plan` : seul le clic « vas-y » du propriétaire sur la carte lance le run, et un appel ici est refusé avant toute carte, avec l'état du plan et de son run (déjà lancé : `workflow_status`). (à la demande) |
-| `workflow_status` | read | État d'un run. (à la demande) |
+| `workflow_status` | read | État d'un run : le run, `progress` (sa place dans sa liste), `budget`, `list` (décompte de la liste en cours), `autonomous` et `waiting` (ce qui le retient, approbation d'un sous-run comprise, et depuis quand ; null s'il avance). (à la demande) |
 <!-- reference:outils:fin -->
 
 ### Serveurs MCP
