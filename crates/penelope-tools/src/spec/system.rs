@@ -110,11 +110,7 @@ pub(super) fn shell() -> Vec<ToolSpec> {
              parallèle si indépendants. `&&` seulement entre commandes de même nature : \
              `;`, `||`, `$(…)` et redirections empêchent toute règle, donc redemandent à \
              chaque appel. \
-             Ne recopie jamais un secret lu (clé, mot de passe) dans la commande : lis-le \
-             dans son fichier ou une variable d'environnement. Un secret collé par le \
-             propriétaire (`/secrets`, noms `ci.projet.env.libellé`, liste : `penelope secret \
-             list`) entre par `secrets: {\"VAR\": \"ci.…\"}` et s'utilise en `$VAR` : la \
-             valeur n'est jamais vue, la sortie la masque. \
+             Jamais de secret recopié : `secrets: {\"VAR\": \"ci.…\"}` le donne en `$VAR`. \
              `background: true` (tests, build, installation) : rend la main tout de suite, \
              le résultat revient seul dans la conversation.",
         obj(
@@ -125,7 +121,7 @@ pub(super) fn shell() -> Vec<ToolSpec> {
                 "output": {"type":"string","enum":["digest","full"]},
                 "network": {"type":"boolean"},
                 "background": {"type":"boolean"},
-                "secrets": {"type":"object","additionalProperties":{"type":"string"}}
+                "secrets": {"type":"object"}
             }),
             &["command"],
         ),
