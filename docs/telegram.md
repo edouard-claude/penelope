@@ -290,7 +290,8 @@ Workflows (4)
 #350, décision [0022](decisions/0022-secrets-colles-hors-modele.md)) : colle le bloc tel
 quel dans le message suivant, ou à la suite de la commande. Les sections (`DEV :`,
 `[qa]`, `## PROD`) donnent l'environnement, et les lignes `clé : valeur` ou `CLÉ=valeur`
-deviennent `<projet>.<env>.<libellé>` (`mentaleco.dev.access_key`).
+deviennent `ci.<projet>.<env>.<libellé>` (`ci.mentaleco.dev.access_key`) : le préfixe `ci.`
+les sépare des secrets internes, que `ci_variable_set` refuse de lire.
 
 Le message est intercepté avant toute écriture en base, n'est vu par aucun modèle, puis
 est supprimé du chat. La réponse ne donne que les noms et les numéros des lignes

@@ -8,9 +8,83 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 
-/// Variables d'environnement qu'un appel peut fixer : l'hôte de la forge et un relais
-/// (le GitLab APNL passe par un relais Tailscale local).
+/// Variables d'environnement qu'un appel peut fixer : l'hôte de la forge (celui d'un
+/// remote du dépôt, vérifié) et un relais **local** (le GitLab APNL passe par un relais
+/// Tailscale sur 127.0.0.1).
 pub const ALLOWED_ENV: &[&str] = &["GITLAB_HOST", "GH_HOST", "HTTPS_PROXY", "HTTP_PROXY"];
+
+/// Seuls les secrets rangés par un collage (`/secrets`, `secret import`) partent en CI :
+/// jamais un secret interne (`openrouter_api_key`, `codex.oauth`…), quel que soit le nom
+/// que donne le modèle.
+pub fn check_secret_name(name: &str) -> ToolResult<()> {
+    let prefix = penelope_platform::secrets::import::PREFIX;
+    if !name.starts_with(prefix) {
+        return Err(ToolError::Denied(format!(
+            "`{name}` : seuls les secrets rangés par `/secrets <projet>` (`{prefix}…`) partent \
+             en CI"
+        )));
+    }
+    Ok(())
+}
+
+/// Un relais n'est accepté que sur la machine : un relais distant verrait passer la
+/// requête.
+fn local_proxy(url: &str) -> bool {
+    ["http://127.0.0.1", "http://localhost", "http://[::1]"]
+        .iter()
+        .any(|p| {
+            url == *p || url.starts_with(&format!("{p}:")) || url.starts_with(&format!("{p}/"))
+        })
+}
+
+/// Les hôtes des remotes git de `cwd` : `https://hôte/…`, `ssh://git@hôte/…`,
+/// `git@hôte:…`.
+pub fn remote_hosts(remotes: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for url in remotes.split_whitespace() {
+        let rest = url.split_once("://").map_or(url, |(_, r)| r);
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        let host = rest
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if host.contains('.') && !out.contains(&host) {
+            out.push(host);
+        }
+    }
+    out
+}
+
+/// Refuse un hôte de forge qui n'est pas celui d'un remote du dépôt `cwd` : le modèle ne
+/// choisit pas où part la valeur.
+pub async fn check_hosts(req: &Request, cwd: &Path) -> ToolResult<()> {
+    let wanted: Vec<&str> = req
+        .env
+        .iter()
+        .filter(|(k, _)| k == "GITLAB_HOST" || k == "GH_HOST")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let (_, remotes, _) = crate::git::run(cwd, &["remote", "-v"]).await?;
+    let hosts = remote_hosts(&remotes);
+    for h in wanted {
+        if !hosts.iter().any(|r| r.eq_ignore_ascii_case(h)) {
+            return Err(ToolError::Denied(format!(
+                "hôte `{h}` : ce n'est l'hôte d'aucun remote du dépôt `{}` ({})",
+                cwd.display(),
+                if hosts.is_empty() {
+                    "aucun remote".to_string()
+                } else {
+                    hosts.join(", ")
+                }
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Ce qu'il faut poser.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,7 +131,13 @@ impl Request {
                         ALLOWED_ENV.join(", ")
                     )));
                 }
-                env.push((k.clone(), v.as_str().unwrap_or_default().to_string()));
+                let v = v.as_str().unwrap_or_default().to_string();
+                if k.ends_with("_PROXY") && !local_proxy(&v) {
+                    return Err(ToolError::Invalid(format!(
+                        "`env.{k}` : un relais local seulement (http://127.0.0.1:…)"
+                    )));
+                }
+                env.push((k.clone(), v));
             }
         }
         let flag = |k: &str, d: bool| args.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
@@ -208,5 +288,60 @@ mod tests {
         assert!(Request::from_args(&json!({"key": "A", "env": {"LD_PRELOAD": "x"}})).is_err());
         assert!(Request::from_args(&json!({"key": "A", "forge": "bitbucket"})).is_err());
         assert!(Request::from_args(&json!({})).is_err());
+        assert!(
+            Request::from_args(
+                &json!({"key": "A", "env": {"HTTPS_PROXY": "http://evil.example:80"}})
+            )
+            .is_err()
+        );
+        assert!(
+            Request::from_args(
+                &json!({"key": "A", "env": {"HTTPS_PROXY": "http://127.0.0.1:18765"}})
+            )
+            .is_ok()
+        );
+    }
+
+    /// Seuls les secrets collés partent ; l'hôte est celui d'un remote du dépôt.
+    #[tokio::test]
+    async fn only_pasted_secrets_go_and_only_to_a_remote_of_the_repository() {
+        assert!(check_secret_name("ci.mentaleco.dev.access_key").is_ok());
+        for internal in ["openrouter_api_key", "codex.oauth", "mcp.clickup.oauth"] {
+            assert!(check_secret_name(internal).is_err(), "{internal}");
+        }
+        assert_eq!(
+            remote_hosts(
+                "origin\thttps://gitlab.apnl.tech/mentaleco/app.git (fetch)\n\
+                 gh\tgit@github.com:acme/app.git (push)\nx\tssh://git@Forge.Example.org:2222/a.git"
+            ),
+            ["gitlab.apnl.tech", "github.com", "forge.example.org"]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::run(dir.path(), &["init", "-q"]).await.unwrap();
+        crate::git::run(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.apnl.tech/mentaleco/app.git",
+            ],
+        )
+        .await
+        .unwrap();
+        let req = |host: &str| {
+            Request::from_args(&json!({"key": "K", "env": {"GITLAB_HOST": host}})).unwrap()
+        };
+        check_hosts(&req("gitlab.apnl.tech"), dir.path())
+            .await
+            .unwrap();
+        let e = check_hosts(&req("evil.example.org"), dir.path())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("aucun remote") || e.contains("gitlab.apnl.tech"),
+            "{e}"
+        );
     }
 }

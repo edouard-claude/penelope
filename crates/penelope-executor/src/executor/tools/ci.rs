@@ -9,8 +9,10 @@ impl NativeToolExecutor {
         let name = str_arg(args, "secret")?;
         penelope_platform::validate_secret_name(&name)
             .map_err(|e| ToolError::Invalid(e.to_string()))?;
+        penelope_tools::ci::check_secret_name(&name)?;
         let req = penelope_tools::ci::Request::from_args(args)?;
         let cwd = self.cwd_arg(args)?;
+        penelope_tools::ci::check_hosts(&req, &cwd).await?;
         let platform = self.services.platform.clone();
         let wanted = name.clone();
         let value = tokio::task::spawn_blocking(move || platform.secrets.get(&wanted))

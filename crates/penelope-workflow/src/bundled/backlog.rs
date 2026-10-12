@@ -263,7 +263,7 @@ pub fn task() -> Workflow {
                      l'entrée standard, jamais affichée, écrite ni rendue), puis tu relances le \
                      pipeline et tu reprends la vérification. Un secret que seul le \
                      propriétaire détient (clé d'un service, mot de passe d'une base existante) \
-                     est peut-être déjà rangé sous `<projet>.<env>.<libellé>` : `penelope \
+                     est peut-être déjà rangé sous `ci.<projet>.<env>.<libellé>` : `penelope \
                      secret list` donne les noms, `ci_variable_set` le pose par son nom sans \
                      que tu voies la valeur. Tout est prouvé : \
                      `return_value(result=\"passed\", content=<les preuves, une par critère, \

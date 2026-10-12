@@ -29,13 +29,15 @@ Le run est resté bloqué, et la règle censée protéger les secrets ne les pro
    - le message est supprimé du chat.
 2. **Découpage déterministe** (`penelope_platform::secrets::import`). Les sections donnent
    l'environnement, et chaque ligne `clé : valeur` ou `CLÉ=valeur` devient
-   `<projet>.<env>.<libellé>`. Une ligne illisible n'est rendue que par son numéro. Aucun
+   `ci.<projet>.<env>.<libellé>`. Une ligne illisible n'est rendue que par son numéro. Aucun
    modèle, même local : un modèle n'apporterait que du risque à un découpage que des
    règles font sans erreur.
 3. **Usage par référence.** L'outil `ci_variable_set` pose une variable CI depuis un nom
    du magasin. La valeur passe sur l'entrée standard de `glab` ou `gh`, est ajoutée au
    caviardage, et n'apparaît ni dans le résultat ni dans les journaux. Pénélope rapproche
-   les libellés des variables attendues en ne voyant que les noms.
+   les libellés des variables attendues en ne voyant que les noms. Le modèle ne choisit
+   ni le secret hors du préfixe `ci.` (un secret interne n'en sort pas), ni l'hôte (celui
+   d'un remote du dépôt), ni un relais distant.
 4. **`/secret`** reste la liste et la suppression ; il renvoie à `/secrets`.
 
 ## Conséquences

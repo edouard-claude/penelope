@@ -57,10 +57,13 @@ async fn a_pasted_block_is_stored_without_trace_or_turn() {
 
     let secrets = &g.daemon.services.platform.secrets;
     assert_eq!(
-        secrets.get("mentaleco.dev.secret_key").unwrap().as_deref(),
+        secrets
+            .get("ci.mentaleco.dev.secret_key")
+            .unwrap()
+            .as_deref(),
         Some(VALUE)
     );
-    assert!(secrets.get("mentaleco.qa.access_key").unwrap().is_some());
+    assert!(secrets.get("ci.mentaleco.qa.access_key").unwrap().is_some());
     // Rien du bloc en base, aucun tour, le message effacé.
     assert_eq!(traces(&g, VALUE).await, 0);
     assert_eq!(traces(&g, "AKQAXXXX").await, 0);
@@ -70,7 +73,7 @@ async fn a_pasted_block_is_stored_without_trace_or_turn() {
     assert_eq!(deleted[0]["message_id"], 9010);
     // La réponse donne les noms et la ligne illisible, jamais une valeur.
     let out = texts(&t.calls_to(tg::SEND_MESSAGE).await[before..]).join("\n");
-    assert!(out.contains("mentaleco.dev.secret_key"), "{out}");
+    assert!(out.contains("ci.mentaleco.dev.secret_key"), "{out}");
     assert!(
         out.contains("non reconnues (rien n'en est cité) : 8"),
         "{out}"
@@ -92,7 +95,7 @@ async fn a_block_after_the_command_is_stored_too() {
             .services
             .platform
             .secrets
-            .get("app.token")
+            .get("ci.app.token")
             .unwrap()
             .as_deref(),
         Some(VALUE)
@@ -111,11 +114,11 @@ async fn an_expired_wait_or_another_sender_is_not_captured() {
         .unwrap();
     s.clock.as_ref();
     send(&g, 920, "K=v après le délai").await;
-    assert!(s.platform.secrets.get("app.k").unwrap().is_none());
+    assert!(s.platform.secrets.get("ci.app.k").unwrap().is_none());
 
     send(&g, 921, "/secrets app").await;
     g.process_update(&updates::text_message(922, OWNER, 7, "K=v"))
         .await
         .unwrap();
-    assert!(s.platform.secrets.get("app.k").unwrap().is_none());
+    assert!(s.platform.secrets.get("ci.app.k").unwrap().is_none());
 }

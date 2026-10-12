@@ -31,13 +31,15 @@ dans `tg_updates`. Le déploiement de `dev` attendait toujours ses variables.
 - **Découpage** (`penelope_platform::secrets::import`) :
   - sections `DEV :`, `[qa]`, `## PROD` ou un mot seul ;
   - lignes `clé : valeur`, `CLÉ=valeur`, `export`, guillemets, blocs PEM ;
-  - noms `<projet>.<env>.<libellé>`.
+  - noms `ci.<projet>.<env>.<libellé>` ; le préfixe sépare ces secrets des secrets
+    internes (`codex.oauth`, `openrouter_api_key`), que `ci_variable_set` refuse de lire.
 - **CLI** : `penelope secret import <projet>` (entrée standard, ou collage sans écho
   jusqu'à Ctrl-D) ; même rangement, par le daemon s'il répond (#252).
 - **`ci_variable_set`** (à la demande, risque `external`) :
   - lit le secret par son nom et le passe à `glab variable set` (`update` s'il existe) ou
     `gh secret set` sur l'entrée standard ;
-  - `env` est limité à `GITLAB_HOST`, `GH_HOST` et `HTTPS_PROXY` ;
+  - `env` est limité à `GITLAB_HOST`, `GH_HOST` (l'hôte d'un remote du dépôt, vérifié) et
+    `HTTPS_PROXY` (local seulement) ;
   - le résultat ne porte jamais la valeur.
 - **`tache`** : `verifier` cherche d'abord un secret rangé (`penelope secret list`) et le
   pose avec `ci_variable_set`. À défaut, il dit au propriétaire la commande `/secrets`.

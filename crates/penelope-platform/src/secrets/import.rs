@@ -8,11 +8,15 @@
 //!  CERT=-----BEGIN …           ──► le bloc PEM entier, jusqu'à -----END
 //! ```
 //!
-//! Le nom rangé est `<projet>.<env>.<libellé>` en slug, que `validate_secret_name`
-//! accepte. Une ligne illisible n'est rendue que par son numéro : aucune erreur, aucun
+//! Le nom rangé est `ci.<projet>.<env>.<libellé>` en slug, que `validate_secret_name`
+//! accepte. Le préfixe [`PREFIX`] les sépare des secrets internes (`codex.oauth`,
+//! `openrouter_api_key`…) : seuls ceux-là peuvent partir en CI. Une ligne illisible n'est rendue que par son numéro : aucune erreur, aucun
 //! journal ne cite une valeur.
 
 use super::validate_secret_name;
+
+/// Préfixe des secrets rangés par un collage : le seul espace que `ci_variable_set` lit.
+pub const PREFIX: &str = "ci.";
 use crate::dirs::slugify;
 
 /// Ce que le découpage a tiré d'un bloc.
@@ -114,8 +118,8 @@ pub fn parse_block(project: &str, text: &str) -> Result<Parsed, String> {
             }
         }
         let name = match &env {
-            Some(e) => format!("{project}.{e}.{}", slug(key)),
-            None => format!("{project}.{}", slug(key)),
+            Some(e) => format!("{PREFIX}{project}.{e}.{}", slug(key)),
+            None => format!("{PREFIX}{project}.{}", slug(key)),
         };
         if slug(key).is_empty() || validate_secret_name(&name).is_err() {
             out.unread.push(n);
@@ -151,12 +155,12 @@ PROD :
         assert_eq!(
             p.names(),
             [
-                "mentaleco.dev.bucket",
-                "mentaleco.dev.access_key",
-                "mentaleco.dev.secret_key",
-                "mentaleco.qa.access_key",
-                "mentaleco.qa.secret_key",
-                "mentaleco.prod.access_key",
+                "ci.mentaleco.dev.bucket",
+                "ci.mentaleco.dev.access_key",
+                "ci.mentaleco.dev.secret_key",
+                "ci.mentaleco.qa.access_key",
+                "ci.mentaleco.qa.secret_key",
+                "ci.mentaleco.prod.access_key",
             ]
         );
         // La valeur garde ses `=` et `:` : seul le premier séparateur coupe.
@@ -174,9 +178,9 @@ PROD :
         assert_eq!(
             p.entries,
             [
-                ("app.dev.api_secret".to_string(), "a b c".to_string()),
-                ("app.dev.postgres_password".to_string(), "x".to_string()),
-                ("app.qa.token".to_string(), "t".to_string()),
+                ("ci.app.dev.api_secret".to_string(), "a b c".to_string()),
+                ("ci.app.dev.postgres_password".to_string(), "x".to_string()),
+                ("ci.app.qa.token".to_string(), "t".to_string()),
             ]
         );
     }
@@ -192,7 +196,7 @@ PROD :
             p.entries[0].1,
             "-----BEGIN KEY-----\nAAAA\nBBBB\n-----END KEY-----"
         );
-        assert_eq!(p.entries[1].0, "app.next");
+        assert_eq!(p.entries[1].0, "ci.app.next");
     }
 
     /// Une ligne illisible est rendue par son numéro, jamais citée ; un nom repris garde
@@ -205,7 +209,7 @@ PROD :
         )
         .unwrap();
         assert_eq!(p.unread, [2, 5]);
-        assert_eq!(p.entries, [("app.dev.k".to_string(), "2".to_string())]);
+        assert_eq!(p.entries, [("ci.app.dev.k".to_string(), "2".to_string())]);
         assert!(parse_block("  ", "K=1").is_err());
     }
 }
