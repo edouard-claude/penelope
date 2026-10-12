@@ -56,24 +56,33 @@ pub fn parse_remote(url: &str) -> Option<(String, String)> {
     (host.contains('.') && path.contains('/')).then(|| (host.to_ascii_lowercase(), path))
 }
 
-/// Un projet `groupe/projet` (sous-groupes permis), sans schéma, sans `@`, sans `..` :
-/// `glab -R` et `gh --repo` accepteraient sinon un hôte caché dans le nom.
-fn check_repo(repo: &str) -> ToolResult<()> {
-    let ok = !repo.contains("..")
-        && !repo.starts_with('/')
-        && !repo.ends_with('/')
-        && repo.split('/').count() >= 2
-        && repo.split('/').all(|seg| !seg.is_empty())
-        && repo
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'));
-    if ok {
-        Ok(())
-    } else {
-        Err(ToolError::Invalid(format!(
+/// Un projet `groupe/projet` (sous-groupes permis), sans schéma, sans `@`, sans `..`,
+/// rendu sans hôte. `glab -R` et `gh --repo` lisent un premier segment qui contient un
+/// point comme un hôte (`evil.example/a/b`) : il est refusé, sauf s'il est exactement
+/// `host`, auquel cas il est retiré.
+fn clean_repo(repo: &str, host: &str) -> ToolResult<String> {
+    let bad = || {
+        ToolError::Invalid(format!(
             "`repo` : `groupe/projet` attendu, sans hôte ni schéma ({repo})"
-        )))
+        ))
+    };
+    let chars_ok = repo
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'));
+    if !chars_ok || repo.contains("..") || repo.split('/').any(|seg| seg.is_empty()) {
+        return Err(bad());
     }
+    let mut segs: Vec<&str> = repo.split('/').collect();
+    if segs[0].contains('.') {
+        if !segs[0].eq_ignore_ascii_case(host) {
+            return Err(bad());
+        }
+        segs.remove(0);
+    }
+    if segs.len() < 2 || segs[0].contains('.') {
+        return Err(bad());
+    }
+    Ok(segs.join("/"))
 }
 
 /// Où part la valeur, résolu **une fois** : l'hôte (dans `tools.ci_hosts`) et le projet.
@@ -112,15 +121,9 @@ pub async fn resolve(req: &Request, cwd: &Path, allowed: &[String]) -> ToolResul
         )));
     }
     let repo = match &req.repo {
-        Some(r) => {
-            check_repo(r)?;
-            r.clone()
-        }
+        Some(r) => clean_repo(r, &host)?,
         None => match origin {
-            Some((h, path)) if h == host => {
-                check_repo(&path)?;
-                path
-            }
+            Some((h, path)) if h == host => clean_repo(&path, &host)?,
             _ => {
                 return Err(ToolError::Invalid(format!(
                     "`repo` manquant : aucun remote `origin` sur `{host}` dans le dépôt"
@@ -423,6 +426,8 @@ mod tests {
             json!({"key": "K", "repo": "https://evil.example.org/a/b"}),
             json!({"key": "K", "repo": "evil.example.org/a/b@x"}),
             json!({"key": "K", "repo": "a/../b"}),
+            json!({"key": "K", "repo": "evil.example.org/a/b"}),
+            json!({"key": "K", "repo": "seul"}),
         ] {
             assert!(
                 resolve(&req(bad.clone()), dir.path(), &allowed)
