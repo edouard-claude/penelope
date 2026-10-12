@@ -199,3 +199,104 @@ async fn the_eight_policy_reasons_are_byte_identical() {
     assert_eq!(v.layer, VerdictLayer::SensitiveConfig);
     assert_eq!(v.decision, PolicyDecision::AskTwice);
 }
+
+/// Le mode d'un run autonome, pour le seul run `r-auto` ; les autres tours suivent leur
+/// session.
+struct AutonomousRun(Arc<MemoryModes>);
+
+#[async_trait::async_trait]
+impl crate::ports::SessionModes for AutonomousRun {
+    async fn of_session(&self, session_id: &str) -> ApprovalMode {
+        self.0.of_session(session_id).await
+    }
+    async fn of_turn(&self, session_id: &str, run_id: Option<&str>) -> ApprovalMode {
+        if run_id == Some("r-auto") {
+            return ApprovalMode::Unattended;
+        }
+        self.0.of_session(session_id).await
+    }
+}
+
+/// #346 : dans un run autonome, ce qui demandait passe sans demande (écriture du shell,
+/// outil destructif, commande qui peut détruire) ; un refus reste un refus, et un réglage
+/// sensible demande toujours deux fois. Hors du run, rien ne change.
+#[tokio::test]
+async fn an_autonomous_run_asks_nothing_but_keeps_denials_and_sensitive_settings() {
+    let (_d, s, _p) = setup().await;
+    let s = AgentServices {
+        modes: Arc::new(AutonomousRun(Arc::new(MemoryModes::new(s.config.clone())))),
+        ..(*s).clone()
+    };
+    let sid = session(&s).await;
+    let in_run = |sid: &str| TurnSpec {
+        run_id: Some("r-auto".into()),
+        ..spec(sid)
+    };
+    let eval = |info: CallInfo, args: Value| {
+        let s = s.clone();
+        let spec = in_run(&sid);
+        async move {
+            PolicyStage::evaluate(&s, &spec, None, &info, &args)
+                .await
+                .unwrap()
+        }
+    };
+
+    for (tool, risk, args) in [
+        (
+            "shell_exec",
+            RiskClass::Write,
+            json!({"command": "tailscale status"}),
+        ),
+        (
+            "shell_exec",
+            RiskClass::Write,
+            json!({"command": "rm -rf build"}),
+        ),
+        (
+            "mailbridge_delete",
+            RiskClass::Destructive,
+            json!({"uid": 1}),
+        ),
+    ] {
+        let v = eval(info(tool, risk, None), args.clone()).await;
+        assert_eq!(v.decision, PolicyDecision::Auto, "{tool} {args}");
+        assert_eq!(v.reason, "run autonome : aucune approbation demandée");
+        assert_eq!(v.layer, VerdictLayer::SessionMode);
+    }
+    // Ce qu'un serveur MCP impose de demander passe aussi ; ce qu'il refuse, non.
+    let v = eval(
+        info(
+            "srv_send",
+            RiskClass::External,
+            Some(PolicyDecision::AskTwice),
+        ),
+        json!({}),
+    )
+    .await;
+    assert_eq!(v.decision, PolicyDecision::Auto);
+    let v = eval(
+        info("srv_send", RiskClass::External, Some(PolicyDecision::Deny)),
+        json!({}),
+    )
+    .await;
+    assert_eq!(v.decision, PolicyDecision::Deny);
+    // Le run ne change pas lui-même qui le juge.
+    let v = eval(
+        info("config_set", RiskClass::Write, None),
+        json!({"path": "approval.judge", "value": "off"}),
+    )
+    .await;
+    assert_eq!(v.decision, PolicyDecision::AskTwice);
+    assert_eq!(v.layer, VerdictLayer::SensitiveConfig);
+
+    // Hors du run : la politique par défaut.
+    let v = verdict(
+        &s,
+        &sid,
+        &info("shell_exec", RiskClass::Write, None),
+        json!({"command": "tailscale status"}),
+    )
+    .await;
+    assert_eq!(v.decision, PolicyDecision::Ask);
+}

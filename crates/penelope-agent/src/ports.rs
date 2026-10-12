@@ -66,6 +66,12 @@ pub struct AgentServices {
 pub trait SessionModes: Send + Sync {
     /// Le mode de la session s'il a été choisi, sinon celui de la configuration.
     async fn of_session(&self, session_id: &str) -> ApprovalMode;
+
+    /// Le mode d'un tour : celui de la session, sauf dans un run autonome (#346), où rien
+    /// ne demande.
+    async fn of_turn(&self, session_id: &str, _run_id: Option<&str>) -> ApprovalMode {
+        self.of_session(session_id).await
+    }
 }
 
 /// Ce que la boucle sait d'une session : sa nature (le budget suspend une conversation

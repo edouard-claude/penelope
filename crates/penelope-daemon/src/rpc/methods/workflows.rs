@@ -96,6 +96,26 @@ impl Rpc {
                     .await?;
                     return Ok(json!({"run": run, "answered": choice}));
                 }
+                // Autonomie (#346) : `autonomous` lève aussi les approbations déjà posées
+                // par le run et ses sous-runs ; `supervised` les rétablit pour la suite.
+                if matches!(op.as_str(), "autonomous" | "supervised") {
+                    penelope_app::autonomy::set(s, &run, op == "autonomous").await?;
+                    let mut released = Vec::new();
+                    for id in penelope_orchestrator::workflow::pending_of_autonomous(s).await? {
+                        let d = penelope_hitl::Decision::approve_once("autonomie");
+                        if self.decide_and_resume(&id, &d).await.is_ok() {
+                            released.push(id);
+                        }
+                    }
+                    return Ok(json!({"run": run, "autonomous": op == "autonomous",
+                                     "released": released}));
+                }
+                // Nouvelle destination du run et de ses sous-runs (#346).
+                if op == "move" {
+                    let to = destination(s, p)?;
+                    let moved = penelope_orchestrator::workflow::retarget(s, &run, &to).await?;
+                    return Ok(json!({"run": run, "destination": to.to_value(), "moved": moved}));
+                }
                 // Plafonds propres au run (issue #136).
                 if op == "budget" {
                     return penelope_orchestrator::workflow::raise_budget(
@@ -148,18 +168,7 @@ impl Rpc {
             // `chat_id` et `topic_id`.
             method::SCHEDULE_MOVE => {
                 let id = required_str(p, "id")?;
-                let to = if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
-                    penelope_app::helpers::owner_origin_of(s)
-                } else {
-                    let chat = p.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| {
-                        anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`")
-                    })?;
-                    penelope_app::bus::Origin::Telegram {
-                        chat_id: chat,
-                        topic_id: p.get("topic_id").and_then(|v| v.as_i64()),
-                        message_id: None,
-                    }
-                };
+                let to = destination(s, p)?;
                 let to = penelope_orchestrator::scheduler::retarget(s, &id, &to)
                     .await
                     .map_err(anyhow::Error::msg)?;
@@ -251,4 +260,21 @@ async fn skill_install(d: &Core, p: &Value) -> anyhow::Result<Value> {
         "missing": missing,
         "report": penelope_ops::skill_install::report(&src, &installed, &missing),
     }))
+}
+
+/// Destination demandée d'une planification (#124) ou d'un run (#346) : `private`, ou
+/// `chat_id` et `topic_id`.
+fn destination(s: &Services, p: &Value) -> anyhow::Result<penelope_app::bus::Origin> {
+    if p.get("private").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(penelope_app::helpers::owner_origin_of(s));
+    }
+    let chat = p
+        .get("chat_id")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| anyhow::anyhow!("`chat_id` (et `topic_id`) ou `private: true`"))?;
+    Ok(penelope_app::bus::Origin::Telegram {
+        chat_id: chat,
+        topic_id: p.get("topic_id").and_then(|v| v.as_i64()),
+        message_id: None,
+    })
 }

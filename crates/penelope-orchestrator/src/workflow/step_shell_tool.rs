@@ -169,6 +169,15 @@ pub(super) async fn tool_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> 
                 }
                 _ => verdict.decision,
             };
+            // Run autonome (#346) : rien ne demande, un refus reste un refus.
+            let decision = match decision {
+                PolicyDecision::Ask | PolicyDecision::AskTwice
+                    if penelope_app::autonomy::is_autonomous(s, &ctx.run.id).await =>
+                {
+                    PolicyDecision::Auto
+                }
+                d => d,
+            };
             match decision {
                 PolicyDecision::Deny => {
                     return Ok(done(

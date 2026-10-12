@@ -36,6 +36,15 @@ impl penelope_agent::SessionModes for KvModes {
     async fn of_session(&self, session_id: &str) -> ApprovalMode {
         of_session(&self.0, session_id).await
     }
+
+    async fn of_turn(&self, session_id: &str, run_id: Option<&str>) -> ApprovalMode {
+        match run_id {
+            Some(run) if penelope_app::autonomy::is_autonomous(&self.0, run).await => {
+                ApprovalMode::Unattended
+            }
+            _ => of_session(&self.0, session_id).await,
+        }
+    }
 }
 
 /// Fixe le mode d'une session ; `None` : retour au mode de la configuration.

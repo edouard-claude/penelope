@@ -191,7 +191,8 @@ pub(super) async fn agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                             && a.payload["budget"].as_bool() == Some(true)
                     })
                 {
-                    let origin = penelope_app::helpers::owner_origin_of(&ctx.d.services);
+                    // Là où le run parle, pas dans le fil privé (#346).
+                    let origin = origin_of(ctx.s(), &run.id).await;
                     let _ = m.send_approval(&origin, a.id.as_str()).await;
                 }
                 return Ok(done(

@@ -149,7 +149,9 @@ pub(super) fn workflows() -> Vec<ToolSpec> {
         spec(
             "workflow_status",
             RiskClass::Read,
-            "État d'un run.",
+            "État d'un run : le run, `progress` (sa place dans sa liste), `budget`, `list` \
+             (décompte de la liste en cours), `autonomous` et `waiting` (ce qui le retient, \
+             approbation d'un sous-run comprise, et depuis quand ; null s'il avance).",
             obj(json!({"run_id": {"type":"string"}}), &["run_id"]),
             true,
             false,
@@ -158,11 +160,13 @@ pub(super) fn workflows() -> Vec<ToolSpec> {
         spec(
             "workflow_control",
             RiskClass::Write,
-            "Contrôle un run : pause, reprise, annulation, relance d'étape.",
+            "Contrôle un run : pause, reprise, annulation, relance d'étape ; `autonomous` \
+             (plus aucune approbation pour ce run et ses sous-runs) ou `supervised`, à la \
+             demande du propriétaire seulement.",
             obj(
                 json!({
                     "run_id": {"type":"string"},
-                    "op": {"type":"string","enum":["pause","resume","cancel","retry-step","skip-step"]}
+                    "op": {"type":"string","enum":["pause","resume","cancel","retry-step","skip-step","autonomous","supervised"]}
                 }),
                 &["run_id", "op"],
             ),

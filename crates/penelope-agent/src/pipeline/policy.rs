@@ -102,7 +102,23 @@ impl PolicyStage {
             verdict.layer = VerdictLayer::DeclaredAllow;
             verdict.reason = why;
         }
-        match s.modes.of_session(&spec.session_id).await {
+        match s
+            .modes
+            .of_turn(&spec.session_id, spec.run_id.as_deref())
+            .await
+        {
+            // Run autonome (#346) : rien ne demande ; un refus reste un refus, et le
+            // plancher des réglages sensibles, plus bas, reste posé.
+            ApprovalMode::Unattended
+                if matches!(
+                    verdict.decision,
+                    PolicyDecision::Ask | PolicyDecision::AskTwice
+                ) =>
+            {
+                verdict.decision = PolicyDecision::Auto;
+                verdict.layer = VerdictLayer::SessionMode;
+                verdict.reason = "run autonome : aucune approbation demandée".into();
+            }
             ApprovalMode::Ask
                 if verdict.decision == PolicyDecision::Auto
                     && (info.effective_name == "shell_exec" || info.risk != RiskClass::Read) =>
@@ -163,6 +179,9 @@ pub enum ApprovalMode {
     Ask,
     Reads,
     Auto,
+    /// Run autonome (#346) : tout sans demande, sauf un refus et les réglages sensibles.
+    /// Jamais choisi pour une session : il vient du run (`penelope_app::autonomy`).
+    Unattended,
 }
 
 impl ApprovalMode {
@@ -180,6 +199,7 @@ impl ApprovalMode {
             ApprovalMode::Ask => "ask",
             ApprovalMode::Reads => "reads",
             ApprovalMode::Auto => "auto",
+            ApprovalMode::Unattended => "unattended",
         }
     }
 
@@ -188,6 +208,7 @@ impl ApprovalMode {
             ApprovalMode::Ask => "demander tout",
             ApprovalMode::Reads => "lectures sans demande",
             ApprovalMode::Auto => "tout sauf le destructif",
+            ApprovalMode::Unattended => "run autonome, rien ne demande",
         }
     }
 }

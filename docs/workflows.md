@@ -105,6 +105,37 @@ l'auteur reprend la citation à sa charge.
 }
 ```
 
+**Run autonome** (`"autonomous": true`, 1.0.51, #346) : le run et ses sous-runs ne
+demandent **aucune** approbation. Tout ce qui demanderait (écriture, réseau, outil
+destructif, décision imposée par un serveur MCP) passe d'office. Deux choses restent
+gardées : un refus (`deny`, d'une règle ou d'un serveur) et les réglages sensibles
+(`config_set` du bac à sable, des providers, de Telegram ou de `approval.*`). Le workflow
+livré `backlog` l'est : on le lance le matin, il ne s'arrête qu'aux fins d'épique, sur un
+élément en échec ou faute de crédits.
+
+Le propriétaire décide pour un run déjà lancé, sans le relancer :
+
+- `penelope wf control <run> autonomous` : le run et ses sous-runs deviennent autonomes,
+  et les approbations qu'ils attendaient sont levées d'office ;
+- `penelope wf control <run> supervised` : retour aux approbations ;
+- en conversation, demander à Pénélope de rendre le run autonome passe par l'outil
+  `workflow_control`, que tu confirmes sur la carte. Un run ne décide pas de sa propre
+  autonomie.
+
+`penelope wf control <run> move --chat <id> --topic <id>` envoie les messages d'un run (et
+de ses sous-runs) dans un autre sujet. C'est utile pour un run lancé par la CLI, qui
+parlerait sinon dans le fil privé. Les relances d'approbation suivent aussi le sujet du
+run.
+
+`workflow_status` (et le suivi périodique qu'on demande en conversation) rend, en plus du
+run, ces champs :
+
+- `progress` : « élément 3/53 · 1.3 Écran ordinateur · étape dev » ;
+- `list` : le décompte fait, en échec, sauté, à faire ;
+- `autonomous` ;
+- `waiting`, quand quelque chose le retient : par exemple « bloqué : en attente
+  d'approbation `shell_exec` depuis 1 h 40 (run r_…) ».
+
 Un budget global est **obligatoire** : au moins un des trois plafonds doit être non nul.
 Un workflow sans plafond est un workflow qui peut coûter n'importe quoi.
 
