@@ -569,7 +569,7 @@ n'importe quel tracker.
 | `ticket-to-deploy` | Scénario de référence du §12.10 : du ticket au déploiement, avec portes humaines |
 | `deploy-generic` | Déploiement du dépôt cloné, appelé en sous-workflow |
 | `backlog` | Lit une liste de tâches dans un tracker (paramètre `tracker` : ClickUp, Redmine, GitHub ou `fichier`) et la déroule avec `tache`, point d'arrêt à chaque fin d'épique (1.0.48, #338) |
-| `tache` | Une tâche : spécification, tests, développement, tests locaux, revue adverse, commit et push, statut du tracker |
+| `tache` | Une tâche : spécification, tests, développement, tests locaux, commit et push, **vérification sur ce qui tourne** (pipeline suivi par `glab`/`gh`, URLs et `/version` par `curl`, `docker compose config` ; 1.0.52, #348), revue adverse, statut du tracker. Un accès que seul le propriétaire peut donner arrête la liste en disant quoi poser |
 
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
