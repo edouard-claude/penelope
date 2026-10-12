@@ -146,6 +146,7 @@ impl TelegramGateway {
                 self.cmd_forget(chat_id, topic_id, message_id, command, args)
                     .await
             }
+            "secrets" => self.cmd_secrets(chat_id, topic_id, message_id, args).await,
             "secret" => {
                 self.cmd_secret(chat_id, topic_id, message_id, command, args)
                     .await

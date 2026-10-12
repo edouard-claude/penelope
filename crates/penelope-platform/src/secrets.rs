@@ -22,6 +22,9 @@ use std::path::{Path, PathBuf};
 ///
 /// La valeur est donc écrite en plusieurs items, et un item de tête dit combien. Un
 /// secret court garde sa forme d'avant : la lecture reste compatible.
+/// Bloc de secrets collé, découpé sans modèle (#350).
+pub mod import;
+
 pub mod chunks {
     /// Longueur maximale d'une commande envoyée à `security -i` ; la limite réelle est de
     /// 4 096 octets, la marge couvre les variantes de version.

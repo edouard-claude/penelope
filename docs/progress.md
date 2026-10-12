@@ -12,6 +12,40 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.53
+
+**Secrets : `/secrets <projet>` range un bloc de credentials collé tel quel, sans modèle,
+et `ci_variable_set` le pose en CI par son nom (#350, décision 0022).**
+
+Constat (12/10, backlog MentalEco) : le propriétaire a collé dans Telegram les clés MinIO
+de dev, qa et prod. Codex a refusé de les recopier, `/secret` ne saisit jamais, et
+`penelope secret set` exige un terminal sur la machine. Le collage était resté en clair
+dans `tg_updates`. Le déploiement de `dev` attendait toujours ses variables.
+
+- **`/secrets <projet>`.** Le message suivant (5 min), ou le bloc qui suit la commande,
+  est intercepté **avant** l'écriture de `tg_updates` (ligne sans contenu), sans tour ni
+  modèle.
+  - Il est découpé, rangé au magasin, passé au caviardage, puis supprimé du chat
+    (`Bot::delete_message`).
+  - La réponse ne cite que les noms et les numéros des lignes illisibles.
+- **Découpage** (`penelope_platform::secrets::import`) :
+  - sections `DEV :`, `[qa]`, `## PROD` ou un mot seul ;
+  - lignes `clé : valeur`, `CLÉ=valeur`, `export`, guillemets, blocs PEM ;
+  - noms `<projet>.<env>.<libellé>`.
+- **CLI** : `penelope secret import <projet>` (entrée standard, ou collage sans écho
+  jusqu'à Ctrl-D) ; même rangement, par le daemon s'il répond (#252).
+- **`ci_variable_set`** (à la demande, risque `external`) :
+  - lit le secret par son nom et le passe à `glab variable set` (`update` s'il existe) ou
+    `gh secret set` sur l'entrée standard ;
+  - `env` est limité à `GITLAB_HOST`, `GH_HOST` et `HTTPS_PROXY` ;
+  - le résultat ne porte jamais la valeur.
+- **`tache`** : `verifier` cherche d'abord un secret rangé (`penelope secret list`) et le
+  pose avec `ci_variable_set`. À défaut, il dit au propriétaire la commande `/secrets`.
+- `/secret` renvoie à `/secrets`. Scénarios `commande-secrets` et `outils-ci`.
+
+Non fait : un collage coupé par Telegram en plusieurs messages est découpé morceau par
+morceau ; une ligne coupée en deux est signalée illisible.
+
 ### 1.0.52
 
 **`tache` pousse, puis prouve sur ce qui tourne, puis fait relire (#348).**

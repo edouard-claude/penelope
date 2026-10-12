@@ -103,3 +103,4 @@ daemon par la socket locale.
 - [0019](decisions/0019-webhook-entrant.md) : un déclencheur `webhook` entrant, signé en HMAC, sur un listener local dédié (`[webhooks]`) ; le mode webhook de Telegram est refusé plutôt que promis.
 - [0020](decisions/0020-sauvegarde-fournisseur-unique.md) : une sauvegarde, un fournisseur (S3, dossier ou iCloud Drive) ; GitHub retiré, les secrets dans l'archive sous une seconde couche, le vault en clair plus poussé par défaut.
 - [0021](decisions/0021-profils-de-modeles.md) : un modèle principal par profil, une résolution unique pour tous les rôles, la voix à part ; la garde Codex devient un réglage, tout écart de modèle est annoncé.
+- [0022](decisions/0022-secrets-colles-hors-modele.md) : un secret entre par la conversation par un seul chemin, `/secrets <projet>`, intercepté avant toute écriture et sans modèle ; il se pose en CI par son nom (`ci_variable_set`).

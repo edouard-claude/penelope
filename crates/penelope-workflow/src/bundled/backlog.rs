@@ -261,14 +261,19 @@ pub fn task() -> Workflow {
                      tu la poses (`glab variable set <CLÉ> --scope <env> --masked`, la valeur \
                      générée sur la machine, `openssl rand -hex 32` pour un secret, lue sur \
                      l'entrée standard, jamais affichée, écrite ni rendue), puis tu relances le \
-                     pipeline et tu reprends la vérification. Tout est prouvé : \
+                     pipeline et tu reprends la vérification. Un secret que seul le \
+                     propriétaire détient (clé d'un service, mot de passe d'une base existante) \
+                     est peut-être déjà rangé sous `<projet>.<env>.<libellé>` : `penelope \
+                     secret list` donne les noms, `ci_variable_set` le pose par son nom sans \
+                     que tu voies la valeur. Tout est prouvé : \
                      `return_value(result=\"passed\", content=<les preuves, une par critère, \
                      et les variables créées, sans leur valeur>)`. Un critère échoue : \
                      `return_value(result=\"failed\", content=<critère, commande, sortie, \
                      correction attendue>)`. Seul ce qui touche la production, un compte ou un \
-                     service externe que tu ne peux pas créer, ou un droit refusé, revient au \
-                     propriétaire : `return_value(result=\"blocked\", content=<ce qui manque, \
-                     exactement, et où le poser>)`. Puis `step_done()`."
+                     service externe que tu ne peux pas créer et qui n'est pas rangé, ou un droit \
+                     refusé, revient au propriétaire : `return_value(result=\"blocked\", \
+                     content=<ce qui manque, exactement, et la commande pour le donner : \
+                     \"/secrets <projet>\" puis coller le bloc>)`. Puis `step_done()`."
                         .into(),
                     vec![
                         Transition::on_result("revue", "passed"),

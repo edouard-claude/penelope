@@ -111,6 +111,35 @@ pub(super) async fn set_secret(cli: &Cli, name: String) -> CliResult<()> {
     Ok(())
 }
 
+/// `penelope secret import <projet>` (#350) : un bloc collé, découpé sans modèle, rangé
+/// nom par nom ; seuls les noms et les numéros de lignes illisibles sont affichés.
+pub(super) async fn import_secrets(cli: &Cli, project: String) -> CliResult<()> {
+    let raw = penelope_platform::terminal::read_secret_block(&format!(
+        "Colle le bloc de `{project}` puis Ctrl-D (rien ne s'affiche) :\n"
+    ))
+    .map_err(|e| CliError::Io(format!("lecture du bloc : {e}")))?;
+    let parsed =
+        penelope_platform::secrets::import::parse_block(&project, &raw).map_err(CliError::Usage)?;
+    drop(raw);
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let mut stored = Vec::new();
+    for (name, value) in &parsed.entries {
+        store_secret(&dirs.socket_path(), name, value, || {
+            dirs.ensure_all().map_err(|e| CliError::Io(e.to_string()))?;
+            penelope_platform::backend::secret_store(dirs.as_ref())
+                .map_err(|e| CliError::Io(e.to_string()))
+        })
+        .await?;
+        stored.push(name.clone());
+    }
+    output::print(
+        &json!({"project": project, "stored": stored, "unread_lines": parsed.unread}),
+        cli.json,
+    );
+    Ok(())
+}
+
 /// Enregistre un secret par le daemon s'il répond, sinon directement (#252).
 ///
 /// En SSH, le Trousseau de connexion est verrouillé pour la CLI ; le daemon, lancé par

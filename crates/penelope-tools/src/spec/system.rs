@@ -203,6 +203,31 @@ pub(super) fn git() -> Vec<ToolSpec> {
             true,
             false,
         ),
+        spec(
+            "ci_variable_set",
+            RiskClass::External,
+            "Pose une variable CI (GitLab `glab`, GitHub `gh`) depuis un secret du magasin \
+             désigné par son nom (`projet.env.libellé`, rangé par le propriétaire avec \
+             `/secrets`) ; la valeur n'est jamais vue ni rendue. `env` : GITLAB_HOST, \
+             GH_HOST, HTTPS_PROXY ou HTTP_PROXY seulement.",
+            obj(
+                json!({
+                    "secret": {"type":"string"},
+                    "key": {"type":"string"},
+                    "scope": {"type":"string"},
+                    "forge": {"type":"string","enum":["gitlab","github"]},
+                    "repo": {"type":"string"},
+                    "cwd": {"type":"string"},
+                    "masked": {"type":"boolean"},
+                    "protected": {"type":"boolean"},
+                    "env": {"type":"object"}
+                }),
+                &["secret", "key"],
+            ),
+            true,
+            true,
+            false,
+        ),
     ]
 }
 

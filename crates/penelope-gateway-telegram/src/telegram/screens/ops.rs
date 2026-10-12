@@ -419,8 +419,9 @@ impl TelegramGateway {
                 })
                 .collect();
             let mut sc = Screen::new(format!(
-                "🔑 **Secrets** ({})\nUn secret ne se saisit **jamais** dans une conversation : \
-                 en SSH, `penelope secret set <nom>` puis coller la valeur à l'invite.",
+                "🔑 **Secrets** ({})\nUn secret ne se tape **jamais** à Pénélope : `/secrets \
+                 <projet>` puis colle le bloc (aucun modèle ne le voit, le message est effacé), \
+                 ou en SSH `penelope secret import <projet>`.",
                 names.len()
             ));
             for n in &names {

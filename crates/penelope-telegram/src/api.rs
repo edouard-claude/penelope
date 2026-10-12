@@ -484,6 +484,17 @@ impl Bot {
         .await
     }
 
+    /// Supprime un message du chat (#350) : un bloc de secrets collé ne reste pas à
+    /// l'écran. En privé, Telegram ne le permet que dans les 48 h.
+    pub async fn delete_message(&self, chat_id: i64, message_id: i64) -> TgResult<Value> {
+        self.call(
+            method::DELETE_MESSAGE,
+            Some(chat_id),
+            json!({"chat_id": chat_id, "message_id": message_id}),
+        )
+        .await
+    }
+
     pub async fn edit_markup(
         &self,
         chat_id: i64,
