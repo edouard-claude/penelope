@@ -26,7 +26,8 @@ commande. La règle « penser générique » est inscrite dans `CLAUDE.md`.
   - Le daemon lit chaque secret au magasin, l'ajoute au caviardage et le passe en
     variable d'environnement (`ExecOptions.env`). La commande n'écrit que `$VAR`.
   - Toute valeur injectée est remplacée par `[secret masqué]` dans la sortie rendue au
-    modèle, et dans l'artefact.
+    modèle, et dans l'artefact. C'est une protection contre l'affichage accidentel, pas
+    contre une commande délibérée : une valeur encodée (base64…) passe.
 - **Garde-fous** (`penelope_tools::secret_env`) :
   - seuls les secrets collés (préfixe `ci.`) s'injectent ;
   - la variable suit `[A-Z_][A-Z0-9_]*`, hors `PATH`, `HOME`, `SHELL`, `IFS`, `LD_*` et

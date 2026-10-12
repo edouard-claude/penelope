@@ -39,8 +39,11 @@ Le run est resté bloqué, et la règle censée protéger les secrets ne les pro
    pour toute commande (`glab variable set`, `psql`, `docker login`…). Elle remplace
    l'outil `ci_variable_set` de la 1.0.53, propre à GitLab, et sa liste `tools.ci_hosts`.
    Seuls les secrets collés (préfixe `ci.`) s'injectent ; un secret interne jamais. Le prix
-   est assumé : une commande qui a la valeur peut l'envoyer où elle veut, ce que le
-   propriétaire accepte pour les secrets qu'il colle (dev, qa).
+   est assumé : une commande qui a la valeur peut l'envoyer où elle veut, et le masquage de
+   la sortie n'arrête qu'un affichage accidentel, pas une valeur encodée exprès. Le
+   propriétaire l'accepte pour les secrets qu'il colle (dev, qa) ; une liste de commandes
+   ou d'hôtes permis par secret est l'étape suivante si un secret plus sensible doit y
+   passer.
 4. **`/secret`** reste la liste et la suppression ; il renvoie à `/secrets`.
 
 ## Conséquences
