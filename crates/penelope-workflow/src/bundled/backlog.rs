@@ -182,16 +182,31 @@ pub fn task() -> Workflow {
                     vec![Transition::always("tests-locaux")],
                 )
             },
-            agent(
-                "tests-locaux",
-                Phase::Verification,
-                "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. Tout \
-                 vert : `return_value(result=\"passed\")`. Sinon `return_value(result=\
-                 \"failed\", content=<l'échec, la commande et sa sortie utile>)`. Puis \
-                 `step_done()`."
-                    .into(),
-                passed_or("commit", "dev"),
-            ),
+            // Démarrer l'application avant de pousser (#348) : le 12/10, le test
+            // d'acceptation de la story 1.1 ne lisait que le texte des fichiers compose, et
+            // la revue a trouvé l'isolation des hôtes cassée.
+            Step {
+                max_calls: Some(120),
+                ..agent(
+                    "tests-locaux",
+                    Phase::Verification,
+                    "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. \
+                     Puis fais tourner ce que tu as changé, en local, avant tout push. Si le \
+                     changement touche l'exécution ou le déploiement (Dockerfile, `docker \
+                     compose`, CI, routage, configuration, migrations), démarre la pile \
+                     (`docker compose -f <fichier> up -d --build`) et attends qu'elle réponde. \
+                     Interroge chaque service (`curl -fsS`, avec `-H 'Host: …'` pour un routage \
+                     par hôte) : `/version`, ce que chaque hôte doit servir et ce qu'il doit \
+                     refuser. Arrête-la ensuite (`docker compose down`, sans `-v`). Si c'est du \
+                     code applicatif, lance l'application et exerce le parcours touché (requête, \
+                     page, commande). Tout vert : `return_value(result=\"passed\", content=<les \
+                     commandes et ce qu'elles ont rendu>)`. Sinon `return_value(result=\
+                     \"failed\", content=<l'échec, la commande et sa sortie utile>)`. Puis \
+                     `step_done()`."
+                        .into(),
+                    passed_or("commit", "dev"),
+                )
+            },
             Step {
                 context: "fresh".into(),
                 ..agent(
@@ -241,17 +256,23 @@ pub fn task() -> Workflow {
                      config`). Chaque critère prouvé : `session_metadata` op=update key=criteria \
                      entry={\"id\": \"<id>\", \"status\": \"passed\"}, avec la commande et \
                      sa sortie utile. Ne déclare jamais un critère invérifiable sans l'avoir \
-                     essayé. Tout est prouvé : `return_value(result=\"passed\", content=<les \
-                     preuves, une par critère>)`. Un critère échoue : `return_value(result=\
-                     \"failed\", content=<critère, commande, sortie, correction attendue>)`. \
-                     Seul un accès que le propriétaire est le seul à pouvoir donner manque \
-                     (variable CI absente, DNS à créer, droit refusé) : `return_value(result=\
-                     \"owner\", content=<ce qui manque, exactement, et où le poser>)`. Puis \
-                     `step_done()`."
+                     essayé. Ce qui manque à un environnement de développement ou de recette \
+                     (`dev`, `qa`, `staging`) est à toi de le créer : une variable CI absente, \
+                     tu la poses (`glab variable set <CLÉ> --scope <env> --masked`, la valeur \
+                     générée sur la machine, `openssl rand -hex 32` pour un secret, lue sur \
+                     l'entrée standard, jamais affichée, écrite ni rendue), puis tu relances le \
+                     pipeline et tu reprends la vérification. Tout est prouvé : \
+                     `return_value(result=\"passed\", content=<les preuves, une par critère, \
+                     et les variables créées, sans leur valeur>)`. Un critère échoue : \
+                     `return_value(result=\"failed\", content=<critère, commande, sortie, \
+                     correction attendue>)`. Seul ce qui touche la production, un compte ou un \
+                     service externe que tu ne peux pas créer, ou un droit refusé, revient au \
+                     propriétaire : `return_value(result=\"blocked\", content=<ce qui manque, \
+                     exactement, et où le poser>)`. Puis `step_done()`."
                         .into(),
                     vec![
                         Transition::on_result("revue", "passed"),
-                        Transition::on_result(BLOCKED, "owner"),
+                        Transition::on_result(BLOCKED, "blocked"),
                         Transition::always("dev"),
                     ],
                 )
@@ -307,7 +328,7 @@ mod tests {
             next_of(&w, "verifier"),
             [
                 pair("passed", "revue"),
-                pair("owner", BLOCKED),
+                pair("blocked", BLOCKED),
                 pair("*", "dev")
             ]
         );
