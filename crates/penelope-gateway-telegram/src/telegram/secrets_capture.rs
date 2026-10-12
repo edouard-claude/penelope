@@ -194,7 +194,8 @@ impl TelegramGateway {
             ));
         }
         lines.push(
-            "Pénélope les pose en CI par leur nom avec `ci_variable_set`, sans voir les valeurs."
+            "Pénélope s'en sert par leur nom dans ses commandes (GitLab, base, Docker…), sans \
+             voir les valeurs."
                 .into(),
         );
         lines.join("\n")

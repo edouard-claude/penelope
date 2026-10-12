@@ -2,8 +2,7 @@
 
 use super::*;
 
-mod ci;
-mod fs_shell;
+pub(super) mod fs_shell;
 mod git_http;
 mod memory;
 mod misc;
@@ -28,7 +27,6 @@ impl NativeToolExecutor {
                 self.git_tools(name, args, cancel).await
             }
             "http_fetch" => self.http_tools(name, args, cancel).await,
-            "ci_variable_set" => self.ci_tools(args).await,
             "self_status" | "self_docs" | "env_explore" | "config_set" | "time_now" => {
                 self.self_tools(name, args, cancel).await
             }

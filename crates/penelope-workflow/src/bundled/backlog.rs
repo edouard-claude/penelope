@@ -264,8 +264,9 @@ pub fn task() -> Workflow {
                      pipeline et tu reprends la vérification. Un secret que seul le \
                      propriétaire détient (clé d'un service, mot de passe d'une base existante) \
                      est peut-être déjà rangé sous `ci.<projet>.<env>.<libellé>` : `penelope \
-                     secret list` donne les noms, `ci_variable_set` le pose par son nom sans \
-                     que tu voies la valeur. Tout est prouvé : \
+                     secret list` donne les noms ; `shell_exec` avec `secrets={\"VAL\": \"<nom>\"}` \
+                     le met dans la commande sans que tu voies la valeur (`printf %s \"$VAL\" \
+                     | glab variable set <CLÉ> --scope <env> --masked`). Tout est prouvé : \
                      `return_value(result=\"passed\", content=<les preuves, une par critère, \
                      et les variables créées, sans leur valeur>)`. Un critère échoue : \
                      `return_value(result=\"failed\", content=<critère, commande, sortie, \

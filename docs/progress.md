@@ -12,6 +12,35 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.54
+
+**Secrets : `shell_exec` injecte un secret collé en variable d'environnement, règle
+générale qui remplace l'outil propre à GitLab `ci_variable_set` (#352).**
+
+Constat (12/10) : `ci_variable_set` (1.0.53) ne servait qu'à poser une variable GitLab ou
+GitHub. Pénélope est un agent généraliste. Ses secrets collés doivent servir à n'importe
+quelle commande (`psql`, `docker login`, `aws`, un script du projet), sans un outil par
+commande. La règle « penser générique » est inscrite dans `CLAUDE.md`.
+
+- **`shell_exec` reçoit `secrets: {"VAR": "ci.projet.env.libellé"}`.**
+  - Le daemon lit chaque secret au magasin, l'ajoute au caviardage et le passe en
+    variable d'environnement (`ExecOptions.env`). La commande n'écrit que `$VAR`.
+  - Toute valeur injectée est remplacée par `[secret masqué]` dans la sortie rendue au
+    modèle, et dans l'artefact. C'est une protection contre l'affichage accidentel, pas
+    contre une commande délibérée : une valeur encodée (base64…) passe.
+- **Garde-fous** (`penelope_tools::secret_env`) :
+  - seuls les secrets collés (préfixe `ci.`) s'injectent ;
+  - la variable suit `[A-Z_][A-Z0-9_]*`, hors `PATH`, `HOME`, `SHELL`, `IFS`, `LD_*` et
+    `DYLD_*` ;
+  - un secret absent est refusé avant l'exécution.
+  - Le prix est assumé : une commande qui a la valeur peut l'envoyer où elle veut, ce que
+    le propriétaire accepte pour les secrets qu'il colle.
+- **Retirés** : l'outil `ci_variable_set`, son scénario `outils-ci` et `tools.ci_hosts`,
+  devenue clé retirée (lue sans erreur, signalée).
+- **`tache`** : `verifier` pose un secret rangé par
+  `printf %s "$VAL" | glab variable set … ` avec `secrets`.
+- Décision 0022 révisée, `telegram.md`.
+
 ### 1.0.53
 
 **Secrets : `/secrets <projet>` range un bloc de credentials collé tel quel, sans modèle,

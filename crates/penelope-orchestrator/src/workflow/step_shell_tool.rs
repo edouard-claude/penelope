@@ -64,6 +64,7 @@ pub(super) async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                     max_output_bytes: cfg.tools.max_output_bytes,
                     shell: penelope_executor::executor::shell_override(&cfg.tools.shell),
                     cancel: Some(ctx.cancel),
+                    env: Vec::new(),
                 },
             )
             .await

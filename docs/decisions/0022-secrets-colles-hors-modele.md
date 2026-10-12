@@ -32,13 +32,18 @@ Le run est resté bloqué, et la règle censée protéger les secrets ne les pro
    `ci.<projet>.<env>.<libellé>`. Une ligne illisible n'est rendue que par son numéro. Aucun
    modèle, même local : un modèle n'apporterait que du risque à un découpage que des
    règles font sans erreur.
-3. **Usage par référence.** L'outil `ci_variable_set` pose une variable CI depuis un nom
-   du magasin. La valeur passe sur l'entrée standard de `glab` ou `gh`, est ajoutée au
-   caviardage, et n'apparaît ni dans le résultat ni dans les journaux. Pénélope rapproche
-   les libellés des variables attendues en ne voyant que les noms. Le modèle ne choisit
-   ni le secret hors du préfixe `ci.` (un secret interne n'en sort pas), ni l'hôte (il doit
-   figurer, avec tous les remotes du dépôt, dans `tools.ci_hosts`, fixé par le
-   propriétaire), ni un relais distant.
+3. **Usage par référence.** *Révisé en 1.0.54 (#352).* `shell_exec` reçoit
+   `secrets: {"VARIABLE": "ci.projet.env.libellé"}`. Le daemon passe la valeur en
+   variable d'environnement de la commande et l'ajoute au caviardage ; la commande n'écrit
+   que `$VARIABLE`, et le résultat comme les journaux la masquent. C'est la règle générale
+   pour toute commande (`glab variable set`, `psql`, `docker login`…). Elle remplace
+   l'outil `ci_variable_set` de la 1.0.53, propre à GitLab, et sa liste `tools.ci_hosts`.
+   Seuls les secrets collés (préfixe `ci.`) s'injectent ; un secret interne jamais. Le prix
+   est assumé : une commande qui a la valeur peut l'envoyer où elle veut, et le masquage de
+   la sortie n'arrête qu'un affichage accidentel, pas une valeur encodée exprès. Le
+   propriétaire l'accepte pour les secrets qu'il colle (dev, qa) ; une liste de commandes
+   ou d'hôtes permis par secret est l'étape suivante si un secret plus sensible doit y
+   passer.
 4. **`/secret`** reste la liste et la suppression ; il renvoie à `/secrets`.
 
 ## Conséquences

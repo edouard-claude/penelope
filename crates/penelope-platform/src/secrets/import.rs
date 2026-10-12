@@ -10,12 +10,13 @@
 //!
 //! Le nom rangé est `ci.<projet>.<env>.<libellé>` en slug, que `validate_secret_name`
 //! accepte. Le préfixe [`PREFIX`] les sépare des secrets internes (`codex.oauth`,
-//! `openrouter_api_key`…) : seuls ceux-là peuvent partir en CI. Une ligne illisible n'est rendue que par son numéro : aucune erreur, aucun
+//! `openrouter_api_key`…) : seuls ceux-là s'injectent dans une commande. Une ligne illisible n'est rendue que par son numéro : aucune erreur, aucun
 //! journal ne cite une valeur.
 
 use super::validate_secret_name;
 
-/// Préfixe des secrets rangés par un collage : le seul espace que `ci_variable_set` lit.
+/// Préfixe des secrets rangés par un collage : le seul espace qu'une commande reçoit
+/// (`shell_exec` avec `secrets`, #352).
 pub const PREFIX: &str = "ci.";
 use crate::dirs::slugify;
 

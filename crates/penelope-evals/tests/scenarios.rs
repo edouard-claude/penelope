@@ -56,7 +56,6 @@ scenario_cases! {
     message_pendant_un_lot => "message-pendant-un-lot",
     commandes_systeme => "commandes-systeme",
     commande_secrets => "commande-secrets",
-    outils_ci => "outils-ci",
     commandes_sessions => "commandes-sessions",
     commandes_reglages => "commandes-reglages",
     commandes_approbations => "commandes-approbations",

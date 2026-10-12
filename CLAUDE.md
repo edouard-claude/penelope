@@ -112,6 +112,23 @@ mesure et y ajoute la crate nouvelle.
 une 1.x (#212). `penelope upgrade` ignore une version à suffixe (`1.0.0-rc.1`) : une
 pré-release ne s'installe que par `penelope upgrade --tag`.
 
+## Un agent généraliste : penser générique
+
+Pénélope est un agent personnel généraliste, comme Hermes ou OpenClaw : elle devient ce
+que le propriétaire lui demande à travers ses skills, ses serveurs MCP, les CLI qu'elle
+installe et les workflows qu'elle écrit. Ce n'est ni un agent de code ni un outil métier.
+
+- Avant d'ajouter un outil, une commande ou un réglage, chercher la version **générique**
+  qui couvre ce cas et les suivants, et corriger le mécanisme commun plutôt que d'empiler
+  un cas particulier. Exemple : un secret collé s'injecte dans n'importe quelle commande
+  par `shell_exec` (`secrets`, #352), pas par un outil propre à GitLab (`ci_variable_set`,
+  retiré).
+- Un besoin propre à un projet du propriétaire (GitLab APNL, MentalEco, un tracker) va
+  dans une skill, un workflow, un serveur MCP ou la configuration, jamais dans le code
+  natif.
+- Une protection qui empêche l'agent de taper une commande correcte est un défaut à
+  corriger dans le mécanisme commun : on ne la contourne pas par un outil dédié.
+
 ## Conventions
 
 - Commentaires, messages de commit et documentation en français ; noms de code en anglais.

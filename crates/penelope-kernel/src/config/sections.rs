@@ -619,9 +619,6 @@ pub struct Tools {
     pub jobs_per_session: usize,
     /// Jobs d'outils simultanés au plus pour tout le daemon (issue #204).
     pub jobs_total: usize,
-    /// Hôtes de forge où `ci_variable_set` peut poser une variable (#350) : fixés par le
-    /// propriétaire, jamais par le modèle ; tous les remotes du dépôt doivent en être.
-    pub ci_hosts: Vec<String>,
 }
 
 /// Modes d'approbation d'une session (issue #111).
@@ -643,7 +640,6 @@ impl Default for Tools {
             background_after: "120s".into(),
             jobs_per_session: 3,
             jobs_total: 10,
-            ci_hosts: vec!["gitlab.com".into(), "github.com".into()],
         }
     }
 }

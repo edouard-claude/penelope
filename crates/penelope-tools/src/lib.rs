@@ -7,13 +7,13 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
-pub mod ci;
 pub mod error;
 pub mod fs;
 pub mod git;
 pub mod html;
 pub mod http;
 pub mod loops;
+pub mod secret_env;
 pub mod shell;
 pub mod spec;
 pub mod test_output;
