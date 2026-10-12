@@ -81,10 +81,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Wf(WfCmd::Show { id }) => (m::WF_SHOW, json!({"id": id})),
         Command::Wf(WfCmd::Runs) => (m::WF_RUNS, json!({})),
         Command::Wf(WfCmd::Trace { run }) => (m::WF_TRACE, json!({"run": run})),
-        Command::Wf(WfCmd::Run { id, params }) => (
-            m::WF_RUN,
-            json!({"id": id, "params": penelope_gateway_telegram::parse_params(&params.join(" "))}),
-        ),
+        Command::Wf(WfCmd::Run { id, params }) => {
+            (m::WF_RUN, json!({"id": id, "params": wf_params(params)?}))
+        }
         Command::Wf(WfCmd::Control {
             run,
             op,
@@ -161,6 +160,28 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
 
 /// `penelope backup` : l'archive complète, envoyée au fournisseur ; `--local` la garde
 /// ici, `--db` ne prend que la base. Sans `--media`, `backup.include_media` décide (#327).
+/// Les `--param clé=valeur` de `wf run`, chacun pris entier (#344) : le shell a déjà
+/// découpé les arguments, une valeur garde ses espaces (`depot` sous « Application
+/// Support »). Une valeur JSON qui n'est pas une chaîne (`3`, `true`, `[…]`, `{…}`) est
+/// lue comme telle. Le 12/10, ces valeurs recollées puis recoupées à la première espace
+/// ont fait lire une autre liste ClickUp à `backlog`.
+pub(super) fn wf_params(params: &[String]) -> CliResult<Value> {
+    let mut out = serde_json::Map::new();
+    for raw in params {
+        let Some((k, v)) = raw.split_once('=').filter(|(k, _)| !k.trim().is_empty()) else {
+            return Err(CliError::Usage(format!(
+                "`--param {raw}` : attendu `clé=valeur`"
+            )));
+        };
+        let value = serde_json::from_str::<Value>(v)
+            .ok()
+            .filter(|x| !x.is_string())
+            .unwrap_or_else(|| json!(v));
+        out.insert(k.trim().to_string(), value);
+    }
+    Ok(Value::Object(out))
+}
+
 pub(super) fn backup_params(local: bool, db: bool, media: bool) -> Value {
     if db {
         return json!({"snapshot": true});

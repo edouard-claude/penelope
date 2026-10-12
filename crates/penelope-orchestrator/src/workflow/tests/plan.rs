@@ -407,3 +407,145 @@ async fn go_tells_the_origin_conversation_once() {
             .is_empty()
     );
 }
+
+/// #343 : un plan qui choisit un workflow à liste (`foreach`, comme `backlog`) le lance tel
+/// quel au « vas-y », avec ses paramètres : la liste se fige, chaque élément est un
+/// sous-run, aucune porte de phase n'attend le propriétaire, et chaque sous-run lit le
+/// brief de la conversation.
+#[tokio::test]
+async fn a_plan_naming_a_list_workflow_runs_it_as_is() {
+    let e = env().await;
+    let s = &e.d.services;
+    install(
+        &e.d,
+        json!({
+            "metadata": {"id": "tache-essai", "name": "Tâche",
+                         "parameters": [{"id": "item", "type": "object", "required": true}]},
+            "entryStep": "faire",
+            "settings": {"maxIterations": 5, "budget": {"maxUsd": 1.0}},
+            "steps": [{"id": "faire", "type": "shell",
+                       "command": "echo {{item.title}} >> faits.txt",
+                       "transitions": [{"goto": "$done"}]}]
+        }),
+    )
+    .await;
+    let mut list = wf(
+        "liste-plan",
+        "liste",
+        json!([{
+            "id": "liste", "type": "foreach", "workflowId": "tache-essai",
+            "items": [{"title": "a"}, {"title": "b"}, {"title": "c"}],
+            "transitions": [
+                {"goto": "$done", "condition": {"type": "step_result", "result": "success"}},
+                {"goto": "$blocked"}]
+        }]),
+    );
+    list["metadata"]["parameters"] = json!([{"id": "source", "type": "string", "required": true}]);
+    list["settings"]["budget"]["maxWallMs"] = json!(0);
+    install(&e.d, list).await;
+
+    let chat = s.sessions.create(SessionKind::Chat, None).await.unwrap();
+    let draft = PlanDraft {
+        workflow_id: "liste-plan".into(),
+        params: json!({"source": "liste ClickUp 1201260000001868, Lot 1"}),
+        brief: Some("Aucune donnée personnelle dans GA4.".into()),
+        plan: Plan::new("Dérouler le lot 1", steps()).unwrap(),
+    };
+    let plans = PlanStore::new(s.store.clone());
+    plans.create(chat.id.as_str(), &draft).await.unwrap();
+    let launched = go_plan(&e.d, chat.id.as_str(), 1, &draft.fingerprint(), &owner())
+        .await
+        .unwrap();
+    let run = launched.run;
+    assert_eq!(run.workflow_id, "liste-plan");
+    assert!(run.id.starts_with("r_plan_"));
+    assert_eq!(
+        run.params["source"],
+        "liste ClickUp 1201260000001868, Lot 1"
+    );
+
+    for _ in 0..40 {
+        for r in s.runs.list(Some(RunState::Running), 50).await.unwrap() {
+            drive(&e.d, &r.id).await.unwrap();
+        }
+    }
+    let r = current(&e, &run.id).await;
+    assert_eq!(r.state, RunState::Done, "{r:?}");
+    assert!(
+        !r.step_outputs
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.starts_with("ok-")),
+        "aucune porte de phase : {:?}",
+        r.step_outputs
+    );
+    let faits = std::fs::read_to_string(
+        std::path::Path::new(r.workdir.as_deref().unwrap()).join("faits.txt"),
+    )
+    .unwrap();
+    assert_eq!(faits, "a\nb\nc\n");
+    let children: Vec<Run> = s
+        .runs
+        .list(None, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.parent_run.as_deref() == Some(run.id.as_str()))
+        .collect();
+    assert_eq!(children.len(), 3);
+    for c in &children {
+        assert_eq!(
+            brief_of(s, &c.id).await,
+            "Aucune donnée personnelle dans GA4."
+        );
+    }
+
+    // Un clic rejoué retrouve le même run.
+    let again = go_plan(&e.d, chat.id.as_str(), 1, &draft.fingerprint(), &owner())
+        .await
+        .unwrap();
+    assert!(!again.created);
+    assert_eq!(again.run.id, run.id);
+}
+
+/// #343 : un paramètre que le workflow ne connaît pas est refusé au « vas-y », sans run.
+#[tokio::test]
+async fn a_list_workflow_plan_with_an_unknown_parameter_is_refused() {
+    let e = env().await;
+    let s = &e.d.services;
+    install(
+        &e.d,
+        wf(
+            "tache-vide",
+            "rien",
+            json!([{"id": "rien", "type": "shell", "command": "true",
+                    "transitions": [{"goto": "$done"}]}]),
+        ),
+    )
+    .await;
+    let mut list = wf(
+        "liste-plan",
+        "liste",
+        json!([{"id": "liste", "type": "foreach", "workflowId": "tache-vide",
+                "items": [{"title": "a"}], "transitions": [{"goto": "$done"}]}]),
+    );
+    list["metadata"]["parameters"] = json!([{"id": "source", "type": "string", "required": true}]);
+    install(&e.d, list).await;
+    let chat = s.sessions.create(SessionKind::Chat, None).await.unwrap();
+    let draft = PlanDraft {
+        workflow_id: "liste-plan".into(),
+        params: json!({"source": "x", "inconnu": 1}),
+        brief: None,
+        plan: Plan::new("Dérouler", steps()).unwrap(),
+    };
+    PlanStore::new(s.store.clone())
+        .create(chat.id.as_str(), &draft)
+        .await
+        .unwrap();
+    let e2 = go_plan(&e.d, chat.id.as_str(), 1, &draft.fingerprint(), &owner())
+        .await
+        .unwrap_err();
+    assert!(e2.contains("paramètre inconnu `inconnu`"), "{e2}");
+    assert!(s.runs.list(None, 10).await.unwrap().is_empty());
+}

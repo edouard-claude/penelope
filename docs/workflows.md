@@ -644,6 +644,14 @@ les reprend.
 
 ## Plan approuvé exécuté en phases
 
+**Exception : un workflow à liste part tel quel** (1.0.50, #343). Quand le plan choisit un
+workflow qui déroule sa propre liste (une étape `foreach`, comme `backlog`), « vas-y » le
+lance directement avec les paramètres du plan : la liste se fige, chaque élément est un
+sous-run (`tache`), et seuls les arrêts du workflow interrompent la série (fin d'épique,
+élément en échec, crédits épuisés) ; aucune porte de phase n'attend le propriétaire. Un
+paramètre manquant ou inconnu est refusé au clic. Le brief du plan est lu par la première
+étape du run **et** par chaque sous-run, qui en hérite de son parent.
+
 Un plan approuvé (#191, T3 de #185) est compilé en workflow du moteur de runs, puis
 exécuté comme n'importe quel run : durable, repris au redémarrage, piloté par
 `wf control`, arrêté par `/stop`.

@@ -127,7 +127,18 @@ pub async fn start_run_briefed(
     if let Some(id) = schedule {
         let _ = s.kv_set(&scheduled_key(&run.id), &id).await;
     }
-    if let Some(brief) = brief.map(str::trim).filter(|b| !b.is_empty()) {
+    // Un sous-workflow sans brief propre hérite de celui de son parent (#343) : chaque
+    // élément d'un `foreach` (une story de `backlog`) lit les consignes de la conversation
+    // qui a lancé la liste, pas seulement la première étape du parent.
+    let inherited = match (brief, parent) {
+        (None, Some(p)) => Some(brief_of(s, p).await),
+        _ => None,
+    };
+    if let Some(brief) = brief
+        .or(inherited.as_deref())
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+    {
         let brief: String = brief.chars().take(BRIEF_CHARS).collect();
         let _ = s.kv_set(&brief_key(&run.id), &brief).await;
     }
