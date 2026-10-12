@@ -291,12 +291,12 @@ Workflows (4)
 quel dans le message suivant, ou à la suite de la commande. Les sections (`DEV :`,
 `[qa]`, `## PROD`) donnent l'environnement, et les lignes `clé : valeur` ou `CLÉ=valeur`
 deviennent `ci.<projet>.<env>.<libellé>` (`ci.mentaleco.dev.access_key`) : le préfixe `ci.`
-les sépare des secrets internes, que `ci_variable_set` refuse de lire.
+les sépare des secrets internes, qu'aucune commande ne reçoit.
 
 Le message est intercepté avant toute écriture en base, n'est vu par aucun modèle, puis
 est supprimé du chat. La réponse ne donne que les noms et les numéros des lignes
-illisibles. Pénélope pose ensuite une variable CI par son nom avec `ci_variable_set`, sans
-voir la valeur. En SSH : `penelope secret import <projet> < fichier`.
+illisibles. Pénélope s'en sert ensuite par son nom dans n'importe quelle commande
+(`shell_exec` avec `secrets`, 1.0.54, #352), sans voir la valeur. En SSH : `penelope secret import <projet> < fichier`.
 
 ### Rafales et messages pendant un tour
 

@@ -111,7 +111,10 @@ pub(super) fn shell() -> Vec<ToolSpec> {
              `;`, `||`, `$(…)` et redirections empêchent toute règle, donc redemandent à \
              chaque appel. \
              Ne recopie jamais un secret lu (clé, mot de passe) dans la commande : lis-le \
-             dans son fichier ou une variable d'environnement. \
+             dans son fichier ou une variable d'environnement. Un secret collé par le \
+             propriétaire (`/secrets`, noms `ci.projet.env.libellé`, liste : `penelope secret \
+             list`) entre par `secrets: {\"VAR\": \"ci.…\"}` et s'utilise en `$VAR` : la \
+             valeur n'est jamais vue, la sortie la masque. \
              `background: true` (tests, build, installation) : rend la main tout de suite, \
              le résultat revient seul dans la conversation.",
         obj(
@@ -121,7 +124,8 @@ pub(super) fn shell() -> Vec<ToolSpec> {
                 "timeout_ms": {"type":"integer","minimum":1000,"maximum":3600000},
                 "output": {"type":"string","enum":["digest","full"]},
                 "network": {"type":"boolean"},
-                "background": {"type":"boolean"}
+                "background": {"type":"boolean"},
+                "secrets": {"type":"object","additionalProperties":{"type":"string"}}
             }),
             &["command"],
         ),
@@ -200,32 +204,6 @@ pub(super) fn git() -> Vec<ToolSpec> {
                 &["branch"],
             ),
             false,
-            true,
-            false,
-        ),
-        spec(
-            "ci_variable_set",
-            RiskClass::External,
-            "Pose une variable CI (GitLab `glab`, GitHub `gh`) depuis un secret du magasin \
-             désigné par son nom (`projet.env.libellé`, rangé par le propriétaire avec \
-             `/secrets`) ; la valeur n'est jamais vue ni rendue. L'hôte et tous les remotes \
-             du dépôt doivent figurer dans `tools.ci_hosts`. `env` : GITLAB_HOST, GH_HOST, \
-             HTTPS_PROXY ou HTTP_PROXY (local) seulement.",
-            obj(
-                json!({
-                    "secret": {"type":"string"},
-                    "key": {"type":"string"},
-                    "scope": {"type":"string"},
-                    "forge": {"type":"string","enum":["gitlab","github"]},
-                    "repo": {"type":"string"},
-                    "cwd": {"type":"string"},
-                    "masked": {"type":"boolean"},
-                    "protected": {"type":"boolean"},
-                    "env": {"type":"object"}
-                }),
-                &["secret", "key"],
-            ),
-            true,
             true,
             false,
         ),

@@ -157,7 +157,36 @@ impl NativeToolExecutor {
                     &denied_reads(s),
                 );
                 let shell = shell_override(&cfg.tools.shell);
-                let out = penelope_tools::shell::exec(
+                // Secrets collés demandés par l'appel (#352) : lus au magasin, caviardés,
+                // passés en variables ; la commande n'en écrit que le nom.
+                let wanted = penelope_tools::secret_env::requested(args)?;
+                let env = if wanted.is_empty() {
+                    Vec::new()
+                } else {
+                    let platform = s.platform.clone();
+                    tokio::task::spawn_blocking(move || {
+                        wanted
+                            .into_iter()
+                            .map(|(var, name)| match platform.secrets.get(&name) {
+                                Ok(Some(v)) if !v.is_empty() => {
+                                    penelope_observe::register_secret(&v);
+                                    Ok((var, v))
+                                }
+                                Ok(_) => Err(ToolError::Invalid(format!(
+                                    "secret `{name}` absent du magasin : le propriétaire le \
+                                     range avec `/secrets <projet>`"
+                                ))),
+                                Err(e) => {
+                                    Err(ToolError::Other(format!("magasin de secrets : {e}")))
+                                }
+                            })
+                            .collect::<ToolResult<Vec<_>>>()
+                    })
+                    .await
+                    .map_err(|e| ToolError::Other(e.to_string()))??
+                };
+                let masked: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
+                let mut out = penelope_tools::shell::exec(
                     &s.platform.processes,
                     &command,
                     penelope_tools::shell::ExecOptions {
@@ -167,9 +196,16 @@ impl NativeToolExecutor {
                         max_output_bytes: cfg.tools.max_output_bytes,
                         shell,
                         cancel: Some(cancel),
+                        env,
                     },
                 )
                 .await?;
+                // Une valeur injectée ne revient jamais au modèle, même affichée par la
+                // commande (#352).
+                for v in &masked {
+                    out.stdout = out.stdout.replace(v.as_str(), "[secret masqué]");
+                    out.stderr = out.stderr.replace(v.as_str(), "[secret masqué]");
+                }
                 let offline = !network
                     && cfg.sandbox.default_profile != "full"
                     && penelope_tools::shell::looks_like_network_failure(

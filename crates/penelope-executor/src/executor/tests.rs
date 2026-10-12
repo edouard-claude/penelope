@@ -865,3 +865,49 @@ async fn a_channel_start_is_refused_before_any_card_with_the_plan_state() {
     e.env.in_workflow = true;
     assert!(e.precheck("workflow_start", &args).await.is_ok());
 }
+
+/// #352 : un secret collé entre dans une commande par `secrets`, en variable ; sa valeur
+/// est masquée dans ce que voit le modèle. Un secret interne, une variable réservée ou un
+/// secret absent sont refusés avant l'exécution.
+#[tokio::test]
+async fn a_pasted_secret_reaches_a_command_as_a_variable_and_stays_masked() {
+    let (_dir, e) = executor().await;
+    let value = "pg-valeur-tres-secrete-42";
+    e.services
+        .platform
+        .secrets
+        .set("ci.app.dev.postgres_password", value)
+        .unwrap();
+    let out = e
+        .execute(
+            "shell_exec",
+            &json!({
+                "command": "printf %s \"$PGPASSWORD\" | wc -c; echo \"$PGPASSWORD\"",
+                "secrets": {"PGPASSWORD": "ci.app.dev.postgres_password"}
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(out.text.contains(&value.len().to_string()), "{}", out.text);
+    assert!(!out.text.contains(value), "{}", out.text);
+    e.services
+        .platform
+        .secrets
+        .set("openrouter_api_key", "cle-interne")
+        .unwrap();
+    for (secrets, why) in [
+        (json!({"K": "openrouter_api_key"}), "collés"),
+        (json!({"PATH": "ci.app.dev.postgres_password"}), "PATH"),
+        (json!({"K": "ci.app.dev.absent"}), "absent"),
+    ] {
+        let err = e
+            .execute(
+                "shell_exec",
+                &json!({"command": "true", "secrets": secrets}),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(why), "{why} : {err}");
+    }
+}

@@ -241,6 +241,9 @@ pub struct ExecOptions<'a> {
     pub max_output_bytes: usize,
     pub shell: Option<(String, Vec<String>)>,
     pub cancel: Option<&'a penelope_llm::CancelToken>,
+    /// Variables ajoutées à l'environnement de la commande : les secrets collés que
+    /// l'appel demande (#352), jamais écrits dans la commande elle-même.
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for ExecOptions<'_> {
@@ -252,6 +255,7 @@ impl Default for ExecOptions<'_> {
             max_output_bytes: 256 * 1024,
             shell: None,
             cancel: None,
+            env: Vec::new(),
         }
     }
 }
@@ -268,6 +272,7 @@ pub async fn exec(
         max_output_bytes,
         shell,
         cancel,
+        env,
     } = opts;
     use penelope_platform::ProcessHost;
 
@@ -279,6 +284,9 @@ pub async fn exec(
     spec.inherit_env
         .extend(SHELL_EXTRA_ENV.iter().map(|k| k.to_string()));
     spec.stdin = false;
+    for (k, v) in env {
+        spec = spec.env(k, v);
+    }
     if let Some(d) = cwd {
         spec = spec.cwd(d);
     }

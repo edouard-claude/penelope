@@ -42,6 +42,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             max_output_bytes: 4096,
             shell: Some(("/bin/sh".into(), vec!["-c".into()])),
             cancel: None,
+            env: Vec::new(),
         },
     )
     .await
@@ -65,6 +66,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             max_output_bytes: 4096,
             shell: Some(("/bin/sh".into(), vec!["-c".into()])),
             cancel: None,
+            env: Vec::new(),
         },
     )
     .await
@@ -385,6 +387,7 @@ async fn a_cancelled_command_is_terminated_quickly() {
             max_output_bytes: 4096,
             shell: Some(("/bin/sh".into(), vec!["-c".into()])),
             cancel: Some(&cancel),
+            env: Vec::new(),
             ..Default::default()
         },
     )

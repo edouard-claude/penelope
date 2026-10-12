@@ -21,6 +21,12 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[
         "`backup.max_push_bytes` est retirée en 1.0.46 (#327) : la limite était celle des \
          fichiers de GitHub, qui ne reçoit plus de sauvegarde ; la ligne peut être effacée",
     ),
+    (
+        "tools.ci_hosts",
+        "`tools.ci_hosts` est retirée en 1.0.54 (#352) : l'outil `ci_variable_set` est remplacé \
+         par `shell_exec` avec `secrets`, qui injecte un secret collé dans n'importe quelle \
+         commande ; la ligne peut être effacée",
+    ),
 ];
 
 /// La raison du retrait d'une clé (ou de la section qui la contient), si elle l'est.
