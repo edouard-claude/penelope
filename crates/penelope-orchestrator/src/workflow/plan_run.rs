@@ -147,6 +147,11 @@ async fn launch(
     origin: &Origin,
 ) -> Result<(Run, bool), String> {
     let s = &d.services;
+    // Aucun run sans approbation, quel que soit le chemin : `compile` le vérifiait seul,
+    // le lancement direct d'un workflow à liste (#343) ne passe plus par lui.
+    if !draft.plan.can_execute() {
+        return Err(penelope_workflow::plan::PlanError::NotApproved.to_string());
+    }
     let fingerprint = draft.fingerprint();
     let id = plan_run_id(session, &fingerprint);
     if let Some(run) = s.runs.get(&id).await.map_err(|e| e.to_string())? {
