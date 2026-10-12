@@ -12,6 +12,18 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.56
+
+**Runs autonomes : un appel coupé par un redémarrage est relancé d'office (#356).**
+
+Constat (12/10, 15:25 UTC) : un redémarrage du daemon a coupé un `sub_agent_spawn` d'une
+story MentalEco. La demande « effet incertain » qui en est née a immobilisé ce run
+autonome 30 minutes, et chaque `penelope upgrade` l'aurait refait.
+
+- Au démarrage, un effet incertain d'un run autonome est tranché « relancer »
+  (`decided_via: autonomie`). Ailleurs, la demande reste : jamais de relance silencieuse
+  dans une conversation.
+
 ### 1.0.55
 
 **Workflows : un run ne s'annule ni ne se met en pause lui-même (#354).**

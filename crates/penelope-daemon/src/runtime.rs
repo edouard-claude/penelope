@@ -284,7 +284,7 @@ impl Daemon {
             {
                 continue;
             }
-            let _ = s
+            let created = s
                 .approvals
                 .create(
                     penelope_hitl::ApprovalKind::EffectUnknown,
@@ -310,6 +310,15 @@ impl Daemon {
                     false,
                 )
                 .await;
+            // Run autonome (#346, #356) : l'appel coupé par le redémarrage est relancé
+            // sans demande ; le 12/10, une mise à jour a laissé une story 30 min en attente.
+            if let (Ok(a), Some(run)) = (&created, e.run_id.as_deref())
+                && penelope_app::autonomy::is_autonomous(s, run).await
+            {
+                let mut d = penelope_hitl::Decision::approve_once("autonomie");
+                d.choice = penelope_agent::EFFECT_RETRY.into();
+                let _ = crate::agent::decide_approval(s, a.id.as_str(), &d).await;
+            }
         }
         Ok(report)
     }
@@ -545,6 +554,45 @@ mod tests {
 
         // Le tour est de nouveau réclamable.
         assert!(s.turns.claim("runner-neuf").await.unwrap().is_some());
+    }
+
+    /// #356 : dans un run autonome, l'effet coupé par un redémarrage est relancé d'office ;
+    /// aucune demande ne reste en attente.
+    #[tokio::test]
+    async fn an_autonomous_run_retries_an_interrupted_call_without_asking() {
+        let (_d, s) = services().await;
+        let wf = penelope_workflow::Workflow::from_json(
+            &serde_json::json!({
+                "metadata": {"id": "serie", "name": "Série", "parameters": []},
+                "entryStep": "faire",
+                "steps": [{"id": "faire", "type": "shell", "command": "true",
+                           "transitions": [{"goto": "$done"}]}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let run = s
+            .runs
+            .create(&wf, "s_run", serde_json::json!({}), None, None, 0)
+            .await
+            .unwrap();
+        penelope_app::autonomy::set(&s, &run.id, true)
+            .await
+            .unwrap();
+        let spec = penelope_kernel::effects::EffectSpec::new(
+            penelope_kernel::effects::EffectKind::Mcp,
+            "sub_agent_spawn",
+            serde_json::json!({"prompt":"x"}),
+        )
+        .run(run.id.as_str());
+        let id = match s.effects.plan(spec).await.unwrap() {
+            penelope_kernel::effects::Planned::Fresh(id) => id,
+            other => panic!("{other:?}"),
+        };
+        s.effects.dispatching(&id).await.unwrap();
+        let r = Daemon::from_services(s.clone()).recover().await.unwrap();
+        assert_eq!(r.effects_unknown, 1);
+        assert!(s.approvals.pending(10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
