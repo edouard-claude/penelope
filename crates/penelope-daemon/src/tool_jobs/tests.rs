@@ -788,3 +788,63 @@ async fn tool_results(d: &Daemon, sid: &str) -> Vec<String> {
         .map(|e| e.message.text())
         .collect()
 }
+
+/// #360 : dans un run, `background` est refusé tout de suite, avec la façon de lancer un
+/// serveur détaché ; la commande ne tourne pas au premier plan jusqu'à son délai.
+#[tokio::test]
+async fn a_background_shell_in_a_run_is_refused_with_guidance() {
+    let (_dir, d, _p) = daemon().await;
+    let s = d.services.clone();
+    let run_session = s
+        .sessions
+        .create(penelope_kernel::session::SessionKind::WorkflowRun, None)
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    let effect = match s
+        .effects
+        .plan(
+            penelope_kernel::effects::EffectSpec::new(
+                penelope_kernel::effects::EffectKind::Tool,
+                "shell_exec",
+                json!({"command": "python3 relais.py"}),
+            )
+            .session(&run_session),
+        )
+        .await
+        .unwrap()
+    {
+        penelope_kernel::effects::Planned::Fresh(id) => id,
+        o => panic!("{o:?}"),
+    };
+    let call = ToolCall {
+        id: "c1".into(),
+        name: "shell_exec".into(),
+        arguments: json!({"command": "python3 relais.py", "background": true}),
+    };
+    let out = maybe_spawn(
+        &s,
+        &Paniquant,
+        JobRequest {
+            session_id: &run_session,
+            run_id: Some("r_essai"),
+            turn_id: None,
+            call: &call,
+            tool: "shell_exec",
+            effect: &effect,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("un refus");
+    assert!(out.is_error);
+    assert!(out.text.contains("nohup"), "{}", out.text);
+    assert!(
+        store(&s)
+            .of_session(&run_session, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

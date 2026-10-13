@@ -82,6 +82,22 @@ pub async fn maybe_spawn(
     // l'appel suit le chemin ordinaire — c'est le comportement d'avant #204, qui rend son
     // vrai résultat.
     if !delivers_to_a_conversation(&s, req.session_id).await {
+        // Dans un run, `background` n'est pas suivi : la commande tournerait au premier
+        // plan jusqu'à son délai. Le 13/10, un relais lancé ainsi a figé une story 30 min.
+        // L'appel est refusé tout de suite, avec la bonne façon de faire (#360).
+        if req.run_id.is_some() && req.tool == "shell_exec" {
+            let reason = "dans un run, `background` n'est pas suivi : un serveur ou un relais \
+                          qui ne rend pas la main se lance détaché (`nohup <commande> > \
+                          <fichier.log> 2>&1 &`, puis vérifie qu'il répond) ; une commande \
+                          longue qui finit se lance sans `background`";
+            s.effects.fail(req.effect, reason).await?;
+            return Ok(Some(ToolOutcome {
+                value: json!({"state": "refused", "reason": reason}),
+                is_error: true,
+                text: format!("Refusé : {reason}."),
+                eager: false,
+            }));
+        }
         return Ok(None);
     }
     let cfg = s.config.config();

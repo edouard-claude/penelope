@@ -12,6 +12,19 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.58
+
+**Runs : `shell_exec` en arrière-plan est refusé tout de suite, avec la consigne pour un
+serveur détaché (#360).**
+
+Constat (12/10, 23:43 UTC, story 1.3 MentalEco) : l'étape `commit` a lancé un relais
+GitLab avec `background: true`. Dans un run, ce drapeau est ignoré : le serveur a tourné
+au premier plan, et le tour a attendu sans événement jusqu'au délai de 30 minutes.
+
+- Dans un run, `shell_exec` avec `background: true` rend un refus immédiat. Il dit de
+  lancer un serveur détaché (`nohup … &`) et une commande longue sans `background`.
+- Sans run (sous-agent), rien ne change.
+
 ### 1.0.57
 
 **Runs autonomes : un sous-agent lancé depuis une étape hérite du run et de son autonomie
