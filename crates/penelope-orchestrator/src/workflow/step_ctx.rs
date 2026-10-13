@@ -52,12 +52,7 @@ impl StepCtx<'_> {
             .get("__last")
             .cloned()
             .unwrap_or(Value::Null);
-        let reason = last
-            .get("input")
-            .or_else(|| last.get("error"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
+        let reason = reason_of(&last);
         let brief = brief_of(self.s(), &self.run.id).await;
         let vars = TemplateVars {
             workdir: &workdir,
@@ -245,5 +240,29 @@ pub(super) async fn execute_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcom
             }
         }
         _ => fut.await,
+    }
+}
+
+/// Ce que la dernière étape a refusé, pour `{{reason}}` : la saisie du propriétaire,
+/// l'erreur, sinon le contenu d'un résultat en échec (#362). Le 13/10, les corrections
+/// d'une revue (`result: failed`, `content: […]`) n'arrivaient pas à l'étape `dev`, qui
+/// rendait « aucun changement » huit fois de suite.
+pub(super) fn reason_of(last: &Value) -> String {
+    if let Some(s) = last
+        .get("input")
+        .or_else(|| last.get("error"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        return s.to_string();
+    }
+    let failed = matches!(
+        last.get("result").and_then(|r| r.as_str()),
+        Some("failed" | "failure" | "error" | "blocked")
+    );
+    match last.get("content") {
+        Some(Value::String(s)) if failed => s.clone(),
+        Some(c) if failed && !c.is_null() => c.to_string(),
+        _ => String::new(),
     }
 }

@@ -12,6 +12,19 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.59
+
+**Workflows : `{{reason}}` reprend le contenu d'un résultat en échec, et `dev` reçoit les
+corrections de la revue (#362).**
+
+Constat (13/10, story 1.4 MentalEco) : huit refus de revue de suite, sans un commit
+depuis le troisième. `{{reason}}` ne lisait que la saisie ou l'erreur de l'étape
+précédente. Les corrections listées par la revue (`content`, dans une session à part)
+n'arrivaient donc jamais à `dev`, qui rendait « aucun changement ».
+
+- `{{reason}}` donne, dans cet ordre de priorité, la saisie, l'erreur, puis le contenu
+  d'un résultat en échec (texte ou JSON).
+
 ### 1.0.58
 
 **Runs : `shell_exec` en arrière-plan est refusé tout de suite, avec la consigne pour un
