@@ -133,6 +133,12 @@ pub fn all_suites() -> Vec<Suite> {
             "30 tâches rejouées sur Hermes et Pénélope",
             "§20.2",
         ),
+        s(
+            "mission-bench",
+            true,
+            "Trois stories de code rejouées sur le dépôt témoin, rapport Markdown",
+            "#369",
+        ),
     ]
 }
 
@@ -239,6 +245,7 @@ pub fn cargo_filter(suite: &str) -> Option<(&'static str, Vec<String>)> {
         }
         "live-telegram" => live("live_telegram"),
         "ab-hermes" => live("ab_hermes"),
+        "mission-bench" => live("mission_bench"),
         _ => return None,
     })
 }
@@ -264,9 +271,8 @@ fn live(test: &str) -> (&'static str, Vec<String>) {
 /// Variables d'environnement qu'une suite réseau exige.
 pub fn required_env(suite: &str) -> &'static [&'static str] {
     match suite {
-        "ctx-recall" | "mem-longitudinal" | "mem-bench-live" | "live-openrouter" => {
-            &["OPENROUTER_API_KEY"]
-        }
+        "ctx-recall" | "mem-longitudinal" | "mem-bench-live" | "live-openrouter"
+        | "mission-bench" => &["OPENROUTER_API_KEY"],
         "live-local" => &["PENELOPE_LIVE_LOCAL_MODEL"],
         "live-telegram" => &[
             "PENELOPE_LIVE_TELEGRAM_TOKEN",
@@ -307,7 +313,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "suite manquante : {expected}");
         }
-        assert_eq!(all_suites().len(), 19);
+        assert_eq!(all_suites().len(), 20);
     }
 
     #[test]

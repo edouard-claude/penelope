@@ -1,0 +1,9 @@
+# Dépôt témoin du banc d'essai `mission-bench` (#369) : hors du workspace de Pénélope.
+[package]
+name = "atelier"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]

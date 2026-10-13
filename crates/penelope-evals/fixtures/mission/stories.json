@@ -1,0 +1,20 @@
+[
+  {
+    "id": "rapport",
+    "title": "Commande rapport : afficher le stock depuis un fichier",
+    "acceptance": "rapport.rs",
+    "prompt": "Story « Commande rapport ».\n\nAjouter la sous-commande `atelier rapport <fichier>`. Le fichier a une ligne par article : `nom;quantité;prix` (le prix comme le comprend `parse_price`). La commande imprime une ligne par article (nom, quantité, prix unitaire formaté) puis une dernière ligne `Total : <valeur du stock formatée>` avec `format_cents`.\n\nCritères d'acceptation :\n- `vis;10;0.05` et `marteau;2;12.50` donnent `Total : 25,50 €` ;\n- une ligne malformée arrête la commande avec le code de sortie 2 et un message sur stderr qui cite `ligne N` ;\n- un fichier introuvable donne le code 2 et un message qui cite le chemin ;\n- `cargo test` vert, avec des tests pour ces cas ; `cargo fmt` ; un commit."
+  },
+  {
+    "id": "roles",
+    "title": "Rôles : promouvoir et rétrograder, réservé aux administrateurs",
+    "acceptance": "roles.rs",
+    "prompt": "Story « Rôles ».\n\nAjouter dans la bibliothèque deux fonctions publiques `promote(by: &User, target: &mut User) -> Result<(), String>` et `demote(by: &User, target: &mut User) -> Result<(), String>`.\n\nRègles :\n- seul un `Role::Admin` peut promouvoir ou rétrograder ; sinon la fonction rend une erreur dont le message contient « refusé » et ne touche pas à la cible ;\n- un administrateur ne peut pas se rétrograder lui-même (même nom) ;\n- promouvoir un administrateur ou rétrograder un utilisateur est sans effet et réussit.\n\nCritères : `cargo test` vert avec des tests pour chaque règle ; `cargo fmt` ; un commit."
+  },
+  {
+    "id": "prix",
+    "title": "Correction de revue : parse_price",
+    "acceptance": "prix.rs",
+    "prompt": "Story « Correction de revue sur parse_price ».\n\nLa revue a refusé la saisie des prix pour ces motifs :\n1. `12,50` (virgule) est refusé alors que les utilisateurs français la tapent ; la virgule et le point doivent être acceptés comme séparateur décimal ;\n2. `12.5` donne 1205 centimes au lieu de 1250 : un seul chiffre après le séparateur vaut des dizaines de centimes ;\n3. plus de deux chiffres après le séparateur doit être refusé ;\n4. les espaces autour de la saisie doivent être tolérés ;\n5. le message d'erreur doit toujours citer la saisie telle quelle ; les valeurs négatives et la chaîne vide sont des erreurs.\n\nLe comportement existant (`3` → 300, `abc` → erreur) reste. Critères : `cargo test` vert avec un test par motif ; `cargo fmt` ; un commit."
+  }
+]
