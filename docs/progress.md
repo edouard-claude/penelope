@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.60
+
+**Évals : suite `mission-bench`, trois stories de code rejouées sur un dépôt témoin
+(#369, épopée #370).**
+
+Constat (12 et 13/10) : dix versions livrées pour faire tourner une story MentalEco, sans
+une mesure qui dise si la suivante faisait mieux. La suite rejoue trois stories réelles
+(une commande, des rôles réservés aux administrateurs, une correction de revue sur
+`parse_price`) sur le témoin `crates/penelope-evals/fixtures/mission/atelier`, avec le
+vrai modèle ; la recette est un test caché copié après coup.
+
+- `OPENROUTER_API_KEY=… penelope eval mission-bench` : par story, réussite, tours,
+  itérations, appels d'outils, interventions (relances « Continue » après un tour arrêté
+  par son plafond), compactions, tokens, coût, durée ; rapport `target/mission-bench.md`,
+  `UPDATE_DOCS=1` le range dans `docs/evals/mission-<version>.md`.
+- `PENELOPE_MISSION_STORIES`, `PENELOPE_MISSION_TIMEOUT_S`, `PENELOPE_MISSION_REQUIRE=1`
+  (trois réussites sans intervention : la définition de fini de l'épopée).
+
 ### 1.0.59
 
 **Workflows : `{{reason}}` reprend le contenu d'un résultat en échec, et `dev` reçoit les
