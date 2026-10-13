@@ -334,3 +334,20 @@ async fn build_verify_reports_an_unavailable_test_tool_without_a_verdict() {
     let recovered = session_metadata(&reopened, &run.session_id).await;
     assert_eq!(recovered["verification"], stored["verification"]);
 }
+
+/// #362 : le contenu d'un résultat en échec (une revue qui liste ses corrections) arrive
+/// dans `{{reason}}` ; une saisie ou une erreur restent prioritaires ; un succès n'en
+/// donne pas.
+#[test]
+fn a_failed_result_s_content_becomes_the_reason() {
+    use super::super::step_ctx::reason_of;
+    let corrections =
+        json!({"result": "failed", "content": [{"fichier": "a.go", "raison": "rôle forcé"}]});
+    assert!(reason_of(&corrections).contains("rôle forcé"));
+    assert_eq!(
+        reason_of(&json!({"result": "failed", "content": "lint rouge"})),
+        "lint rouge"
+    );
+    assert_eq!(reason_of(&json!({"error": "boum", "content": "x"})), "boum");
+    assert_eq!(reason_of(&json!({"result": "passed", "content": "ok"})), "");
+}
