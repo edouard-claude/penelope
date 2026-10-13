@@ -49,6 +49,9 @@ Les suites réseau ne tournent pas en CI et se lancent à la main, avec leurs va
 `PENELOPE_LIVE_LOCAL_MODEL=local:<modèle> penelope eval live-local` contre un
 `mlx_lm.server` lancé (`crates/penelope-evals/tests/live_local.rs` en donne la commande) ;
 `live_openrouter`, `ctx_recall`, `live_telegram` et `ab_hermes` sont dans le même dossier.
+`OPENROUTER_API_KEY=… penelope eval mission-bench` rejoue trois stories de code sur le dépôt
+témoin (#369) : à lancer avant de fusionner un lot de l'épopée #370, rapport dans
+`target/mission-bench.md` (`UPDATE_DOCS=1` le range dans `docs/evals/`).
 
 Le code macOS (`crates/penelope-platform/src/backend/macos.rs`) n'est pas compilé sous
 Linux : `cargo check -p penelope-platform --target aarch64-apple-darwin` le relit.

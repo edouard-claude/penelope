@@ -363,7 +363,7 @@ La matrice des critères d'acceptation, [docs/ca-matrix.md](docs/ca-matrix.md), 
 automatiquement.
 
 Les suites qui parlent à de vrais services (`live-openrouter`, `live-telegram`,
-`live-local`, `ctx-recall`, `mem-longitudinal`, `ab-hermes`) sont ignorées par la CI et se
+`live-local`, `ctx-recall`, `mem-longitudinal`, `ab-hermes`, `mission-bench`) sont ignorées par la CI et se
 lancent depuis le dépôt avec leurs variables d'environnement.
 
 La chaîne d'outils est épinglée dans `rust-toolchain.toml` : le lint local rend
