@@ -192,9 +192,11 @@ async fn a_sub_agent_spawned_by_an_autonomous_run_asks_nothing() {
     penelope_executor::executor::Orchestrator::spawn_sub_agent(
         &o,
         run.session_id.as_str(),
-        "crée le fichier d'essai",
-        None,
-        vec!["shell_exec".into()],
+        penelope_app::ports::SubAgentRequest {
+            prompt: "crée le fichier d'essai".into(),
+            tools: vec!["shell_exec".into()],
+            ..Default::default()
+        },
         &owner(),
         &penelope_llm::CancelToken::new(),
     )
@@ -216,9 +218,11 @@ async fn a_sub_agent_spawned_by_an_autonomous_run_asks_nothing() {
     let _ = penelope_executor::executor::Orchestrator::spawn_sub_agent(
         &o,
         chat.id.as_str(),
-        "crée le fichier d'essai",
-        None,
-        vec!["shell_exec".into()],
+        penelope_app::ports::SubAgentRequest {
+            prompt: "crée le fichier d'essai".into(),
+            tools: vec!["shell_exec".into()],
+            ..Default::default()
+        },
         &owner(),
         &penelope_llm::CancelToken::new(),
     )

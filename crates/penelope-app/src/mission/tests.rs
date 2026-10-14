@@ -262,3 +262,17 @@ fn the_repository_preamble_brings_its_rules_and_commands() {
         "{p}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_linked_rules_file_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = tempfile::tempdir().unwrap();
+    std::fs::write(secret.path().join("id_ed25519"), "CLÉ PRIVÉE").unwrap();
+    std::os::unix::fs::symlink(
+        secret.path().join("id_ed25519"),
+        dir.path().join("CLAUDE.md"),
+    )
+    .unwrap();
+    assert!(repo_preamble(dir.path()).is_none_or(|p| !p.contains("CLÉ PRIVÉE")));
+}

@@ -1,0 +1,11 @@
+{
+  "method": "mission.status",
+  "params": {},
+  "response": {
+    "result": {
+      "session": "string",
+      "mission": "null",
+      "text": "string"
+    }
+  }
+}

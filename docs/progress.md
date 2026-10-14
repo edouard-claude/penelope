@@ -12,6 +12,33 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.63
+
+**Missions : outils de code (#366), sous-agents explore et review (#367), autonomie et
+garde-fous vérifiés (#368). Épopée #370.**
+
+- `--hook <commande>` (`/mission`, `penelope mission start`) : relancée après chaque
+  `fs_write` ou `fs_edit` dans le dépôt de la mission, sous le bac à sable du shell ; son
+  résultat revient sous `hook` dans le résultat de l'édition. La commande vient du
+  propriétaire, jamais d'un fichier du dépôt (l'agent pourrait l'écrire et passer outre la
+  politique du shell) ; `{file}` n'est remplacé que par un chemin sans caractère
+  spécial du shell.
+- Préambule du dépôt au premier tour d'une mission : ses conventions (CLAUDE.md ou
+  AGENTS.md, fichier ordinaire du dépôt seulement, encadré comme contenu du dépôt et non
+  consigne du propriétaire) et sa chaîne détectée (cargo, go, npm, make, compose).
+- La vérification de fin (`--check`) tourne sous le bac à sable du shell, réseau ouvert,
+  lectures refusées tenues ; sa sortie revient au modèle comme une donnée.
+- `/mission` montre le plan tenu dans `session_notes` : il survit aux compactions, pas
+  d'outil `todo` de plus.
+- `sub_agent_spawn` transmet enfin `kind` et `budget` : `explore` (lecture seule, résumé
+  d'un dépôt) et `review` (relit le diff, rend `VERDICT : accepté` ou la liste des
+  corrections) ont leur consigne et 40 appels ; un sous-agent ne lance pas de
+  sous-agent. La consigne de mission demande une relecture `review` avant d'annoncer la
+  fin.
+- Autonomie (#368) : une mission rend sa session `unattended` le temps de la mission
+  seulement (test) ; les refus du propriétaire et le plancher des réglages sensibles
+  tiennent, comme pour un run autonome ; motif « autonome (run ou mission) ».
+
 ### 1.0.62
 
 **Missions : une session travaille d'une traite jusqu'à son critère de fin, sans

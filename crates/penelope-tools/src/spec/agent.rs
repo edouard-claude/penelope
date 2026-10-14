@@ -195,8 +195,10 @@ pub(super) fn agent() -> Vec<ToolSpec> {
         spec(
             "sub_agent_spawn",
             RiskClass::Write,
-            "Lance un sub-agent à contexte neuf, outils restreints, retour structuré. \
-             `background: true` : rend la main tout de suite, la conclusion revient seule.",
+            "Lance un sub-agent à contexte neuf, outils restreints, retour dans ce tour. \
+             `kind` : `explore` (lecture seule, résumé d'un dépôt), `review` (relit un diff, \
+             rend `VERDICT : accepté` ou la liste des corrections), `verifier`, ou libre. \
+             `budget` : appels au modèle. `background: true` : la conclusion revient seule.",
             obj(
                 json!({
                     "kind": {"type":"string"},
