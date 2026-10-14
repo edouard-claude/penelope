@@ -17,6 +17,10 @@ La charte et les spécifications sont dans `design/v1/`.
 **Missions : outils de code (#366), sous-agents explore et review (#367), autonomie et
 garde-fous vérifiés (#368). Épopée #370.**
 
+La 1.0.62 n'a pas été publiée : la CI de `main` a échoué après sa fusion (attendus RPC
+des méthodes `mission.*` absents, test du socket de chat trop serré sur la CI chargée).
+Ses missions (#364, #365) partent avec cette version.
+
 - `--hook <commande>` (`/mission`, `penelope mission start`) : relancée après chaque
   `fs_write` ou `fs_edit` dans le dépôt de la mission, sous le bac à sable du shell ; son
   résultat revient sous `hook` dans le résultat de l'édition. La commande vient du
