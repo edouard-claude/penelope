@@ -1952,7 +1952,7 @@ et `/stop` interrompt tout le lot.
 | `skill_propose` | write | Propose une nouvelle skill. (à la demande) |
 | `skill_search` | read | Cherche une skill par mots-clés. (à la demande) |
 | `step_done` | read | Déclare l'étape de workflow terminée. (dans un workflow) |
-| `sub_agent_spawn` | write | Lance un sub-agent à contexte neuf, outils restreints, retour dans ce tour. |
+| `sub_agent_spawn` | write | Sub-agent à contexte neuf, retour dans ce tour. |
 | `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
 | `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). (à la demande) |
 | `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape ; `autonomous` (plus aucune approbation pour ce run et ses sous-runs) ou `supervised`, à la demande du propriétaire seulement. (à la demande) |
