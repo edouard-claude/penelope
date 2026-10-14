@@ -101,6 +101,9 @@ pub enum Command {
     /// Sessions.
     #[command(subcommand)]
     Session(SessionCmd),
+    /// Missions : une session qui travaille d'une traite jusqu'à son critère de fin (#364).
+    #[command(subcommand)]
+    Mission(MissionCmd),
     /// Configuration.
     #[command(subcommand)]
     Config(ConfigCmd),
@@ -342,6 +345,40 @@ pub enum HistoryCmd {
 pub enum StoreCmd {
     /// Reconstruit l'index plein texte et l'index mémoire, vérifie l'audit.
     Rebuild,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MissionCmd {
+    /// Lance une mission dans la session (la courante par défaut) : premier tour mis en
+    /// file, relances sans « Continuer », aucune carte d'approbation.
+    Start {
+        #[arg(required = true, num_args = 1..)]
+        goal: Vec<String>,
+        /// Commande qui prouve la fin (`cargo test`…), relancée quand la mission l'annonce.
+        #[arg(long)]
+        check: Option<String>,
+        /// Dossier de travail (et de la vérification).
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Budget en dollars (20 par défaut).
+        #[arg(long)]
+        budget: Option<f64>,
+        /// Durée maximale en heures (8 par défaut).
+        #[arg(long)]
+        hours: Option<f64>,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// État de la mission : tours, dépense, dernière note.
+    Status {
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Arrête la mission, son tour en cours et sa relance.
+    Stop {
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

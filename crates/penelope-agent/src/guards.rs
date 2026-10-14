@@ -141,7 +141,12 @@ impl TurnGuard for BudgetGuard {
             .budget
             .status(&cfg.budget, Some(&spec.session_id), spec.run_id.as_deref())
             .await?;
-        let Some(exceeded) = statuses.iter().find(|b| b.exceeded) else {
+        // Une mission porte son propre budget (#364) : celui de la session ne l'arrête pas,
+        // le plafond du jour si.
+        let mission = in_mission(cx).await;
+        let Some(exceeded) = statuses.iter().find(|b| {
+            b.exceeded && !(mission && b.scope == penelope_kernel::budget::BudgetScope::Session)
+        }) else {
             return Ok(GuardVerdict::Proceed);
         };
         let stop = TurnOutcome::BudgetExceeded {
@@ -234,6 +239,19 @@ impl TurnGuard for CallCapGuard {
 
 /// Point de contrôle de coût d'un tour déjà long (issue #19) : une carte « je continue ? »
 /// par palier franchi, reprises comprises.
+/// Tour d'une mission (#364) : une conversation sans run, que la mission rend autonome
+/// (`SessionModes::of_turn`).
+async fn in_mission(cx: &TurnContext<'_>) -> bool {
+    cx.spec.run_id.is_none()
+        && cx
+            .agent
+            .services
+            .modes
+            .of_turn(&cx.spec.session_id, None)
+            .await
+            == ApprovalMode::Unattended
+}
+
 pub(crate) struct CostCheckpointGuard;
 
 #[async_trait::async_trait]
@@ -250,8 +268,9 @@ impl TurnGuard for CostCheckpointGuard {
             return Ok(GuardVerdict::Proceed);
         };
         let step = cfg.budget.turn_checkpoint_usd;
-        // Un run de workflow a son propre plafond (`budget.run_usd`).
-        if step <= 0.0 || spec.run_id.is_some() {
+        // Un run de workflow a son propre plafond (`budget.run_usd`), une mission le sien
+        // (#364).
+        if step <= 0.0 || spec.run_id.is_some() || in_mission(cx).await {
             return Ok(GuardVerdict::Proceed);
         }
         let (calls, turn_cost) = s.budget.turn_totals(turn_id).await?;

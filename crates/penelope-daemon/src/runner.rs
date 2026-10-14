@@ -273,12 +273,23 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
             )
             .await;
     }
-    if !repeated && !burst_card_sent {
+    // Un tour de mission arrêté par son plafond ne se livre pas : la mission relance (#364).
+    let absorbed =
+        penelope_app::mission::absorbs(&daemon.services, &turn.session_id, &outcome).await;
+    if !repeated && !burst_card_sent && !absorbed {
         daemon.deliver(&turn, &origin, &outcome).await;
     }
     daemon
         .bus
         .finish(turn.id.as_str(), &turn.session_id, &origin, outcome.clone());
+    // La suite d'une mission, dans ce runner : le tour suivant de la session ne pourrait
+    // pas partir avant, vérification comprise.
+    let ports = penelope_conversation::compaction::MissionPorts {
+        context: crate::compaction::context_of(&daemon.core),
+        intake: daemon.core.clone(),
+        messenger: daemon.hooks.messenger(),
+    };
+    penelope_app::mission::after_turn(&daemon.services, &ports, &turn.session_id, &outcome).await;
     outcome
 }
 

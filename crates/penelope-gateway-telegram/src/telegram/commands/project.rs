@@ -173,6 +173,58 @@ impl TelegramGateway {
 
     /// Mode d'approbation de la session (issue #111) : sans argument, l'état et un
     /// bouton par mode.
+    /// `/mission <objectif> [--check …]`, `/mission` (état), `/mission stop` (#364).
+    pub(super) async fn cmd_mission(
+        self: &Arc<Self>,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        message_id: i64,
+        _command: &str,
+        args: &str,
+    ) -> anyhow::Result<()> {
+        let d = &self.daemon;
+        let origin = Origin::Telegram {
+            chat_id,
+            topic_id,
+            message_id: Some(message_id),
+        };
+        let rpc = penelope_daemon::rpc::Rpc::new(d.clone());
+        let session = d.chat_session_for(&origin).await?;
+        let wanted = args.trim();
+        let call = match wanted {
+            "" | "status" | "état" => rpc.call(m::MISSION_STATUS, json!({"session": session})),
+            "stop" | "arrête" | "arreter" => {
+                rpc.call(m::MISSION_STOP, json!({"session": session}))
+            }
+            _ => match penelope_app::mission::parse_request(wanted) {
+                Err(e) => {
+                    let text = format!("❌ {e}");
+                    return self.reply(chat_id, topic_id, Some(message_id), &text).await;
+                }
+                Ok(req) => {
+                    let mut params = serde_json::to_value(&req)?;
+                    params["session"] = json!(session);
+                    params["origin"] = origin.to_value();
+                    rpc.call(m::MISSION_START, params)
+                }
+            },
+        };
+        let text = match call.await {
+            Ok(v) if wanted.is_empty() || matches!(wanted, "status" | "état") => {
+                v["text"].as_str().unwrap_or_default().to_string()
+            }
+            Ok(v) if matches!(wanted, "stop" | "arrête" | "arreter") => {
+                format!("⏹️ {}", v["text"].as_str().unwrap_or_default())
+            }
+            Ok(v) => format!(
+                "🚀 Mission lancée, je travaille d'une traite et je rends compte ici.\n{}",
+                v["text"].as_str().unwrap_or_default()
+            ),
+            Err(e) => format!("❌ {e}"),
+        };
+        self.reply(chat_id, topic_id, Some(message_id), &text).await
+    }
+
     pub(super) async fn cmd_mode(
         self: &Arc<Self>,
         chat_id: i64,

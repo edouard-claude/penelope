@@ -1,0 +1,47 @@
+name = "commande-mission"
+description = """Une mission (#364) par Telegram puis par la socket locale. `/mission` avec un
+objectif lance le premier tour : une réponse sans mot de fin relance d'elle-même (sans
+« Continuer »), la réponse « MISSION TERMINÉE » la clôt et le compte rendu part dans le
+sujet. `/mission` sans argument rend l'état. Par la socket, `mission.start` avec une
+vérification (`true`) : la fin annoncée est vérifiée, verte, la mission est terminée ;
+`mission.status` la montre, `mission.stop` sur une mission finie la rend telle quelle, et
+`/mission stop` aussi.
+Le monde après : l'état des missions dans `kv` et leurs événements."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "missions"
+sql = "SELECT k, json_extract(v, '$.state'), json_extract(v, '$.turns'), json_extract(v, '$.goal') FROM kv WHERE k LIKE 'mission.%' ORDER BY k"
+
+[[observe]]
+name = "evenements"
+sql = "SELECT kind, json_extract(payload, '$.state'), json_extract(payload, '$.turns') FROM events WHERE kind LIKE 'mission.%' ORDER BY seq"
+
+[[steps]]
+kind = "telegram"
+text = "/mission ajouter un fichier NOTES.md qui résume le projet"
+
+[[steps]]
+kind = "telegram"
+text = "/mission"
+
+[[steps]]
+kind = "rpc"
+method = "mission.start"
+params = { goal = "faire passer les tests", check = "true", budget_usd = 3.0, hours = 1.0 }
+
+[[steps]]
+kind = "rpc"
+method = "mission.status"
+params = {}
+
+[[steps]]
+kind = "rpc"
+method = "mission.stop"
+params = {}
+
+[[steps]]
+kind = "telegram"
+text = "/mission stop"

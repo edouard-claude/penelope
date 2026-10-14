@@ -7,6 +7,22 @@ use super::*;
 pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
     Ok(match cmd {
         Command::Session(c) => session_route(c),
+        Command::Mission(c) => match c {
+            MissionCmd::Start {
+                goal,
+                check,
+                cwd,
+                budget,
+                hours,
+                session,
+            } => (
+                m::MISSION_START,
+                json!({"goal": goal.join(" "), "check": check, "cwd": cwd,
+                    "budget_usd": budget, "hours": hours, "session": session}),
+            ),
+            MissionCmd::Status { session } => (m::MISSION_STATUS, json!({"session": session})),
+            MissionCmd::Stop { session } => (m::MISSION_STOP, json!({"session": session})),
+        },
         Command::Mcp(c) => mcp_route(c)?,
         Command::Schedule(c) => schedule_route(c)?,
         Command::Mem(c) => mem_route(c),

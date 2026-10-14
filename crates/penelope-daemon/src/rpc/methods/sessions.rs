@@ -231,4 +231,11 @@ impl Rpc {
             other => Err(anyhow::anyhow!("méthode inconnue : {other}")),
         }
     }
+
+    /// Missions (#364) : lancer, suivre, arrêter (`penelope_app::mission::rpc`).
+    pub(super) async fn missions(&self, method: &str, p: &Value) -> anyhow::Result<Value> {
+        let sid = self.session_param(p).await?;
+        let core = self.daemon.clone();
+        penelope_app::mission::rpc(self.services(), &*core, &core.bus, method, p, &sid).await
+    }
 }

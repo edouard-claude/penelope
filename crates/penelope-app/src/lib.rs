@@ -26,6 +26,7 @@ pub mod journal;
 pub mod judge;
 pub mod machine;
 pub mod media;
+pub mod mission;
 pub mod model_judge;
 pub mod model_route;
 pub mod model_watch;

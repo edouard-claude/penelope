@@ -116,6 +116,10 @@ pub mod method {
     pub const CHAT_STREAM: &str = "chat.stream";
     pub const CHAT_STOP: &str = "chat.stop";
 
+    pub const MISSION_START: &str = "mission.start";
+    pub const MISSION_STATUS: &str = "mission.status";
+    pub const MISSION_STOP: &str = "mission.stop";
+
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_NEW: &str = "session.new";
     pub const SESSION_SWITCH: &str = "session.switch";
@@ -286,6 +290,9 @@ pub mod method {
         SESSION_PURGE_PREVIEW,
         SESSION_MODEL,
         SESSION_MODE,
+        MISSION_START,
+        MISSION_STATUS,
+        MISSION_STOP,
         SESSION_PROJECT,
         SESSION_BUDGET,
         CONFIG_GET,
