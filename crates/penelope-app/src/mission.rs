@@ -181,6 +181,21 @@ pub async fn start(
     {
         anyhow::bail!("une mission est déjà en cours dans cette session : `mission stop` d'abord");
     }
+    // Le dépôt d'une mission est dans un workspace autorisé (revue de sécurité du 14/10) :
+    // ailleurs, les outils de fichiers le refuseraient, et la vérification, le hook et le
+    // préambule y liraient ou lanceraient ce qu'aucun outil n'atteint.
+    if let Some(cwd) = req.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+        let dir = crate::helpers::canonical_workspace(&expand(cwd));
+        let allowed = crate::helpers::default_workspaces(s)
+            .iter()
+            .map(|w| crate::helpers::canonical_workspace(w))
+            .any(|w| dir.starts_with(&w));
+        anyhow::ensure!(
+            allowed,
+            "`{cwd}` n'est dans aucun workspace autorisé (`sandbox.workspaces`) : la mission \
+             n'y aurait pas accès"
+        );
+    }
     let now = s.clock.now_ms();
     let hours = req.hours.filter(|h| *h > 0.0).unwrap_or(DEFAULT_HOURS);
     let m = Mission {

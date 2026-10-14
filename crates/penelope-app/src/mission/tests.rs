@@ -276,3 +276,31 @@ fn a_linked_rules_file_is_not_read() {
     .unwrap();
     assert!(repo_preamble(dir.path()).is_none_or(|p| !p.contains("CLÉ PRIVÉE")));
 }
+
+#[tokio::test]
+async fn a_mission_outside_the_workspaces_is_refused() {
+    let (_d, s) = services().await;
+    let outside = tempfile::tempdir().unwrap();
+    let req = |cwd: String| Request {
+        goal: "objectif".into(),
+        cwd: Some(cwd),
+        ..Default::default()
+    };
+    let e = start(
+        &s,
+        "s1",
+        req(outside.path().to_string_lossy().into()),
+        &Origin::Cli,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().contains("aucun workspace"), "{e}");
+    let ws = crate::helpers::default_workspaces(&s).remove(0);
+    let inside = ws.join("projet").join("..").join("projet");
+    std::fs::create_dir_all(&inside).unwrap();
+    assert!(
+        start(&s, "s1", req(inside.to_string_lossy().into()), &Origin::Cli)
+            .await
+            .is_ok()
+    );
+}
