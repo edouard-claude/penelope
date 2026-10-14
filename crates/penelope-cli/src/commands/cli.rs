@@ -20,8 +20,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Attente maximale d'une réponse du daemon, en secondes (15 par défaut, sauf pour
-    /// les commandes longues ; 0 : sans limite).
+    /// Attente maximale d'une réponse du daemon, en secondes (15 par défaut, 60 pour
+    /// `doctor`, sans limite pour les commandes longues ; 0 : sans limite).
     #[arg(long, global = true)]
     pub timeout: Option<u64>,
 

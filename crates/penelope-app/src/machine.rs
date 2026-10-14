@@ -271,19 +271,37 @@ pub fn detect(cfg: &Config, host: &HostStatus, path: &std::ffi::OsStr) -> Invent
     extra.dedup();
     wanted.extend(extra);
 
+    // Une sonde par binaire, toutes à la fois (#372) : `gh auth status` puis `glab auth
+    // status` coûtaient 3,3 s l'un après l'autre dans chaque `doctor`. L'ordre rendu reste
+    // celui de `wanted` : la ligne T1 en dépend.
+    let probed: Vec<(String, Option<Tool>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = wanted
+            .iter()
+            .map(|name| {
+                scope.spawn(move || {
+                    let tool = penelope_platform::process::which_in(name, path).map(|bin| Tool {
+                        name: name.clone(),
+                        version: penelope_platform::process::probe_version(&bin, PROBE_TIMEOUT)
+                            .map(|v| penelope_observe::redact::redact(&v)),
+                        account: account_of(name, &bin),
+                    });
+                    (name.clone(), tool)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .zip(&wanted)
+            .map(|(h, name)| h.join().unwrap_or_else(|_| (name.clone(), None)))
+            .collect()
+    });
     let mut present = Vec::new();
     let mut missing = Vec::new();
-    for name in &wanted {
-        let Some(path) = penelope_platform::process::which_in(name, path) else {
-            missing.push(name.clone());
-            continue;
-        };
-        present.push(Tool {
-            name: name.clone(),
-            version: penelope_platform::process::probe_version(&path, PROBE_TIMEOUT)
-                .map(|v| penelope_observe::redact::redact(&v)),
-            account: account_of(name, &path),
-        });
+    for (name, tool) in probed {
+        match tool {
+            Some(t) => present.push(t),
+            None => missing.push(name),
+        }
     }
 
     Inventory {

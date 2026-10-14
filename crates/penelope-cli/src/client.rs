@@ -114,6 +114,12 @@ const LONG: &[&str] = &[
     "vault.sync",
 ];
 
+/// Délai de `doctor` sans `--timeout` (#372) : une centaine de contrôles, dont des sondes
+/// réseau bornées à 3 ou 5 s, prenaient 14 s sur l'instance réelle et dépassaient les
+/// 15 s d'une méthode courte une fois sur trois. Une limite reste : `doctor` doit pouvoir
+/// dire qu'un daemon est muet.
+pub const DOCTOR_TIMEOUT_SECS: u64 = 60;
+
 /// Pose `--timeout` (secondes ; 0 : aucune limite).
 pub fn set_timeout(secs: Option<u64>) {
     if let Ok(mut g) = TIMEOUT.lock() {
@@ -131,6 +137,7 @@ fn limit_of(explicit: Option<u64>, method: &str) -> Option<std::time::Duration> 
         Some(0) => return None,
         Some(s) => s,
         None if LONG.contains(&method) => return None,
+        None if method == penelope_kernel::api::method::DOCTOR => DOCTOR_TIMEOUT_SECS,
         None => DEFAULT_TIMEOUT_SECS,
     };
     Some(std::time::Duration::from_secs(secs))
@@ -302,6 +309,9 @@ mod tests {
         assert_eq!(limit_of(None, "status"), Some(Duration::from_secs(15)));
         assert_eq!(limit_of(None, "chat.send"), None);
         assert_eq!(limit_of(None, "session.compact"), None);
+        // #372 : `doctor` a sa propre limite, plus large, mais une limite.
+        assert_eq!(limit_of(None, "doctor"), Some(Duration::from_secs(60)));
+        assert_eq!(limit_of(Some(5), "doctor"), Some(Duration::from_secs(5)));
         assert_eq!(limit_of(Some(0), "status"), None);
         assert_eq!(
             limit_of(Some(60), "chat.send"),

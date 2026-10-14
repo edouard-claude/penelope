@@ -234,16 +234,14 @@ pub fn probe_command(program: &Path, args: &[&str], timeout: std::time::Duration
         .spawn()
         .ok()?;
     let deadline = std::time::Instant::now() + timeout;
-    loop {
+    // Les flux sont lus pendant l'attente (#372) : sans lecteur, un programme qui écrit
+    // plus que le tampon du tuyau (64 Ko) reste bloqué en écriture jusqu'au délai.
+    // `plutil` sur l'`Info.plist` de Xcode (157 Ko) mourait ainsi à chaque `doctor`.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = child.wait_with_output().ok()?;
-                return Some(Probe {
-                    ok: status.success(),
-                    stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-                });
-            }
+            Ok(Some(status)) => break status,
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
@@ -253,7 +251,36 @@ pub fn probe_command(program: &Path, args: &[&str], timeout: std::time::Duration
                 return None;
             }
         }
+    };
+    // Un petit-enfant peut garder le tuyau ouvert après la sortie du programme : la
+    // lecture ne dépasse pas le délai, ce qui est déjà lu est rendu.
+    Some(Probe {
+        ok: status.success(),
+        stdout: collect(stdout, deadline),
+        stderr: collect(stderr, deadline),
+    })
+}
+
+/// Lit un flux jusqu'à sa fin dans un fil à part ; le texte arrive par le canal.
+fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Some(mut pipe) = pipe {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            let _ = tx.send(buf);
+        });
     }
+    rx
+}
+
+/// Le texte d'un flux, attendu au plus jusqu'à l'échéance de la sonde.
+fn collect(rx: std::sync::mpsc::Receiver<Vec<u8>>, deadline: std::time::Instant) -> String {
+    let wait = deadline.saturating_duration_since(std::time::Instant::now());
+    let bytes = rx
+        .recv_timeout(wait.max(std::time::Duration::from_millis(50)))
+        .unwrap_or_default();
+    String::from_utf8_lossy(&bytes).to_string()
 }
 
 /// Lance `<programme> --version` et renvoie la première ligne, ou `None` s'il ne répond

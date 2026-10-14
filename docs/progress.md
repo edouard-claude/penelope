@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.61
+
+**`doctor` ne dépasse plus le délai de la CLI ; une sonde ne bloque plus sur une sortie
+de plus de 64 Ko (#372).**
+
+Constat (14/10, MBP) : `penelope doctor` prenait 14 s pour 102 contrôles, juste sous les
+15 s de la CLI, et une passe sur trois finissait en « daemon muet » alors que le daemon
+allait bien. Relevé des sous-processus : `plutil` sur l'`Info.plist` de Xcode bloqué 3 s
+puis tué (157 Ko de XML, plus que le tampon du tuyau, jamais lu), `gh auth status` puis
+`glab auth status` l'un après l'autre (3,3 s).
+
+- `probe_command` lit stdout et stderr pendant l'attente ; un petit-enfant qui garde le
+  tuyau ouvert ne retient pas la sonde au-delà de son délai. La version de Xcode est lue.
+- L'inventaire de la machine sonde ses binaires (versions et comptes) en parallèle, dans
+  le même ordre.
+- La CLI accorde 60 s à `doctor` sans `--timeout` (15 s pour les autres méthodes
+  courtes).
+
 ### 1.0.60
 
 **Évals : suite `mission-bench`, trois stories de code rejouées sur un dépôt témoin
