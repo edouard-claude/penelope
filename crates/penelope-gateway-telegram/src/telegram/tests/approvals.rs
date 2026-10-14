@@ -646,3 +646,54 @@ async fn the_approval_mode_is_set_from_telegram() {
         penelope_agent::ApprovalMode::Auto
     );
 }
+
+/// 14/10 : un script Python de 7 400 caractères en `shell_exec` dépassait les 4 096 d'un
+/// message ; la carte n'est jamais partie et le tour a attendu sans fin. La carte montre
+/// le début et la fin de la commande, dit ce qui manque et où le lire.
+#[tokio::test]
+async fn a_very_long_command_still_reaches_its_approval_card() {
+    let (_d, g, t, _p) = gateway().await;
+    let s = g.daemon.services.clone();
+    let command = format!(
+        "python3 -c 'DEBUT = 1\n{}\nprint(\"FIN\")'",
+        "x = \"une ligne de script assez longue pour remplir\"\n".repeat(150)
+    );
+    assert!(command.chars().count() > 7_000);
+    let a = s
+        .approvals
+        .create(
+            penelope_hitl::ApprovalKind::ToolCall,
+            "shell_exec",
+            penelope_kernel::risk::RiskClass::Write,
+            json!({"tool": "shell_exec", "arguments": {"command": command},
+                   "why": "Consigner la vidéo dans le vault. ".repeat(40)}),
+            vec!["Autoriser".into(), "Refuser".into()],
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    g.send_approval_card(OWNER, None, &a).await.unwrap();
+    g.flush_outbox().await.unwrap();
+    let card = t
+        .calls_to(tg::SEND_MESSAGE)
+        .await
+        .pop()
+        .expect("carte envoyée");
+    let text = card["text"].as_str().unwrap().to_string();
+    assert!(
+        text.chars().count() < 4_096,
+        "{} caractères",
+        text.chars().count()
+    );
+    assert!(text.contains("DEBUT") && text.contains("FIN"), "{text}");
+    assert!(
+        text.contains("caractères non affichés") && text.contains("pièce jointe"),
+        "{text}"
+    );
+    assert!(text.contains(a.id.as_str()), "{text}");
+    // La commande entière est partie avant la carte : rien n'est approuvé à l'aveugle.
+    let docs = t.calls_to(tg::SEND_DOCUMENT).await;
+    assert_eq!(docs.len(), 1, "{docs:?}");
+}

@@ -77,6 +77,16 @@ impl TelegramGateway {
         };
         let server = penelope_agent::server_of(&a.subject).unwrap_or_else(|| "natif".into());
         let double = a.payload["double"].as_bool().unwrap_or(false);
+        // Une commande que la carte coupe part d'abord en entier, en pièce jointe (#376).
+        if let Some(command) = super::cards::hidden_command(a) {
+            self.send_long_as_document(
+                chat_id,
+                topic_id,
+                &format!("```sh\n{command}\n```"),
+                &format!("Commande entière de la demande {}", a.id.as_str()),
+            )
+            .await?;
+        }
         let card = approval_card(a);
         let mut vars = BTreeMap::new();
         vars.insert("intention".into(), card.intention);

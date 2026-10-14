@@ -17,12 +17,55 @@ pub(crate) struct ApprovalCard {
 }
 
 /// Compose la carte d'une demande d'approbation.
+/// Commande montrée en entier jusqu'à cette taille, en caractères : au-delà, son début
+/// et sa fin. Le 14/10, un script Python de 7 400 caractères a dépassé les 4 096 d'un
+/// message Telegram ; la carte n'est jamais partie et le tour a attendu sans fin.
+const COMMAND_MAX: usize = 2_400;
+const COMMAND_HEAD: usize = 1_700;
+const COMMAND_TAIL: usize = 500;
+/// Intention donnée par le modèle, en caractères.
+const INTENTION_MAX: usize = 500;
+
+/// La commande telle que la carte la montre : entière, ou son début et sa fin avec ce qui
+/// manque et où le lire.
+fn shown_command(command: &str, approval_id: &str) -> String {
+    let chars: Vec<char> = command.chars().collect();
+    if chars.len() <= COMMAND_MAX {
+        return command.to_string();
+    }
+    let head: String = chars[..COMMAND_HEAD].iter().collect();
+    let tail: String = chars[chars.len() - COMMAND_TAIL..].iter().collect();
+    format!(
+        "{head}\n… [{} caractères non affichés : la commande entière est en pièce jointe \
+         juste au-dessus, et dans `penelope approvals` ({approval_id})] …\n{tail}",
+        chars.len() - COMMAND_HEAD - COMMAND_TAIL
+    )
+}
+
+/// La commande entière d'une demande que la carte ne montre qu'en partie (revue de
+/// sécurité du 14/10) : elle part en pièce jointe avant la carte, pour qu'aucune
+/// approbation ne porte sur un milieu caché.
+pub(crate) fn hidden_command(a: &ApprovalRequest) -> Option<String> {
+    let args = penelope_agent::without_intention(&a.payload["arguments"]);
+    let command = args["command"]
+        .as_str()
+        .filter(|_| a.subject == "shell_exec")?;
+    (command.chars().count() > COMMAND_MAX).then(|| command.to_string())
+}
+
+fn bounded(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}…", text.chars().take(max - 1).collect::<String>())
+}
+
 pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     let args = penelope_agent::without_intention(&a.payload["arguments"]);
     let intention = a.payload["why"]
         .as_str()
         .filter(|w| !w.trim().is_empty())
-        .map(String::from)
+        .map(|w| bounded(w, INTENTION_MAX))
         .unwrap_or_else(|| format!("Pénélope veut utiliser `{}`.", a.subject));
     let (server, tool) = match penelope_agent::server_of(&a.subject) {
         Some(srv) => {
@@ -50,7 +93,10 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             if let Some(ms) = args["timeout_ms"].as_u64() {
                 quals.push(format!("délai {} s", ms / 1_000));
             }
-            format!("```\n{}\n```", command.replace("```", "ʼʼʼ"))
+            format!(
+                "```\n{}\n```",
+                shown_command(command, a.id.as_str()).replace("```", "ʼʼʼ")
+            )
         }
         _ => {
             let fields: Vec<String> = args
