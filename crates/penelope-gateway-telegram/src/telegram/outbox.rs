@@ -146,7 +146,7 @@ impl TelegramGateway {
     }
     /// Texte trop long pour une bulle : un fichier joint, et une ligne qui dit ce que
     /// c'est (issue #145). Le fichier vit dans le répertoire de données, pas dans `/tmp`.
-    async fn send_long_as_document(
+    pub(super) async fn send_long_as_document(
         &self,
         chat_id: i64,
         topic_id: Option<i64>,
