@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.64
+
+**Carte d'approbation : une commande très longue part en entier en pièce jointe, la carte
+en montre le début et la fin (#376).**
+
+Constat (14/10, MBP) : « message is too long ». Un script `python3 -c` de 7 400
+caractères en `shell_exec` donnait une carte de 7 426 octets, au-delà des 4 096 d'un
+message Telegram : la carte n'est jamais arrivée, et le tour a attendu une approbation
+invisible.
+
+- Au-delà de 2 400 caractères, la commande part d'abord en entier en pièce jointe, puis
+  la carte montre son début et sa fin, le nombre de caractères non affichés et
+  l'identifiant de la demande (`penelope approvals`). Aucune approbation ne porte sur un
+  milieu caché.
+- L'intention donnée par le modèle est bornée à 500 caractères.
+
 ### 1.0.63
 
 **Missions : outils de code (#366), sous-agents explore et review (#367), autonomie et
