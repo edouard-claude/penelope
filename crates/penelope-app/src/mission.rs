@@ -181,28 +181,29 @@ pub async fn start(
     {
         anyhow::bail!("une mission est déjà en cours dans cette session : `mission stop` d'abord");
     }
-    // Le dépôt d'une mission est dans un workspace autorisé (revue de sécurité du 14/10) :
-    // ailleurs, les outils de fichiers le refuseraient, et la vérification, le hook et le
-    // préambule y liraient ou lanceraient ce qu'aucun outil n'atteint.
-    if let Some(cwd) = req.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
-        let dir = crate::helpers::canonical_workspace(&expand(cwd));
-        let allowed = crate::helpers::default_workspaces(s)
-            .iter()
-            .map(|w| crate::helpers::canonical_workspace(w))
-            .any(|w| dir.starts_with(&w));
-        anyhow::ensure!(
-            allowed,
-            "`{cwd}` n'est dans aucun workspace autorisé (`sandbox.workspaces`) : la mission \
-             n'y aurait pas accès"
-        );
-    }
+    // Le dépôt d'une mission est dans un workspace autorisé (revue de sécurité du 14/10),
+    // gardé sous sa forme canonique ; chaque usage le revérifie (`dir_of`).
+    let cwd = match req.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+        None => None,
+        Some(c) => Some(
+            dir_of(s, c)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`{c}` n'est dans aucun workspace autorisé (`sandbox.workspaces`) : \
+                         la mission n'y aurait pas accès"
+                    )
+                })?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    };
     let now = s.clock.now_ms();
     let hours = req.hours.filter(|h| *h > 0.0).unwrap_or(DEFAULT_HOURS);
     let m = Mission {
         session_id: session_id.to_string(),
         goal,
         check: req.check.filter(|c| !c.trim().is_empty()),
-        cwd: req.cwd.filter(|c| !c.trim().is_empty()),
+        cwd,
         hook: req.hook.filter(|c| !c.trim().is_empty()),
         budget_usd: req
             .budget_usd
@@ -220,7 +221,12 @@ pub async fn start(
     save(s, &m).await?;
     event(s, &m, "mission.started").await;
     let mut text = brief(&m, None);
-    if let Some(p) = m.cwd.as_deref().and_then(|c| repo_preamble(&expand(c))) {
+    if let Some(p) = m
+        .cwd
+        .as_deref()
+        .and_then(|c| dir_of(s, c))
+        .and_then(|d| repo_preamble(&d))
+    {
         text.push_str("\n\n");
         text.push_str(&p);
     }
@@ -450,7 +456,14 @@ fn stopped(m: &Mission, why: &str) -> String {
 /// Lance la vérification, sans bac à sable (la commande est celle du propriétaire) ;
 /// `Err` porte la fin de sa sortie.
 pub async fn run_check(s: &Services, check: &str, cwd: Option<&str>) -> Result<(), String> {
-    let cwd = cwd.map(expand);
+    // Revérifié à chaque lancement : un lien posé depuis le départ ne le sort pas des
+    // workspaces (TOCTOU, revue de sécurité du 14/10).
+    let cwd = match cwd {
+        None => None,
+        Some(c) => Some(dir_of(s, c).ok_or_else(|| {
+            format!("`{c}` n'est plus dans un workspace autorisé : vérification refusée")
+        })?),
+    };
     // Le bac à sable du shell (#366, revue de sécurité) : la commande est celle du
     // propriétaire, mais elle tourne dans un dépôt que l'agent a modifié. Le réseau est
     // ouvert (dépendances d'un `cargo test`), les lectures refusées restent refusées.
@@ -484,6 +497,16 @@ pub async fn run_check(s: &Services, check: &str, cwd: Option<&str>) -> Result<(
         .iter()
         .collect();
     Err(format!("code {}\n{tail}", out.exit_code))
+}
+
+/// Le dossier d'une mission, canonique, s'il est dans un workspace autorisé.
+pub fn dir_of(s: &Services, cwd: &str) -> Option<std::path::PathBuf> {
+    let dir = std::fs::canonicalize(expand(cwd)).ok()?;
+    crate::helpers::default_workspaces(s)
+        .iter()
+        .map(|w| crate::helpers::canonical_workspace(w))
+        .any(|w| dir.starts_with(&w))
+        .then_some(dir)
 }
 
 /// `~/…` développé ; un chemin absolu ou relatif est rendu tel quel.

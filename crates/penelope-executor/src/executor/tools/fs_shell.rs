@@ -121,7 +121,10 @@ impl NativeToolExecutor {
         if mission.state != penelope_app::mission::State::Running {
             return;
         }
-        let dir = canonical_workspace(&penelope_app::mission::expand(cwd));
+        // Revérifié à chaque édition : le dossier reste dans un workspace (TOCTOU).
+        let Some(dir) = penelope_app::mission::dir_of(s, cwd) else {
+            return;
+        };
         let Ok(relative) = path.strip_prefix(&dir) else {
             return;
         };

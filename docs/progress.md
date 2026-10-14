@@ -35,6 +35,10 @@ garde-fous vérifiés (#368). Épopée #370.**
   corrections) ont leur consigne et 40 appels ; un sous-agent ne lance pas de
   sous-agent. La consigne de mission demande une relecture `review` avant d'annoncer la
   fin.
+- Le dépôt d'une mission (`--cwd`) doit être dans un workspace autorisé : ailleurs, les
+  outils de fichiers le refuseraient, et la vérification, le hook et le préambule n'y
+  ont rien à faire ; le chemin canonique est revérifié à chaque usage (revue de
+  sécurité du 14/10).
 - Autonomie (#368) : une mission rend sa session `unattended` le temps de la mission
   seulement (test) ; les refus du propriétaire et le plancher des réglages sensibles
   tiennent, comme pour un run autonome ; motif « autonome (run ou mission) ».
