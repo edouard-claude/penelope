@@ -2,6 +2,7 @@ use super::*;
 use penelope_kernel::clock::TestClock;
 
 mod config;
+mod hooks;
 mod mcp;
 
 #[tokio::test]

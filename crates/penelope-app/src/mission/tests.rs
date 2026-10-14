@@ -211,16 +211,54 @@ async fn the_budget_and_the_owner_stop_a_mission() {
 #[test]
 fn a_one_line_request_is_parsed_with_its_options() {
     let r = parse_request(
-        "ajouter l'export CSV --check cargo test -p atelier --cwd ~/Code/atelier --budget 7,5 --heures 2",
+        "ajouter l'export CSV --check cargo test -p atelier --cwd ~/Code/atelier --hook cargo fmt -- {file} --budget 7,5 --heures 2",
     )
     .unwrap();
     assert_eq!(r.goal, "ajouter l'export CSV");
     assert_eq!(r.check.as_deref(), Some("cargo test -p atelier"));
     assert_eq!(r.cwd.as_deref(), Some("~/Code/atelier"));
+    assert_eq!(r.hook.as_deref(), Some("cargo fmt -- {file}"));
     assert_eq!(r.budget_usd, Some(7.5));
     assert_eq!(r.hours, Some(2.0));
     assert_eq!(parse_request("seulement l'objectif").unwrap().check, None);
     assert!(parse_request("--check make").is_err());
     assert!(parse_request("x --budget beaucoup").is_err());
     assert!(parse_request("x --vite oui").is_err());
+}
+
+#[test]
+fn the_repository_preamble_brings_its_rules_and_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(repo_preamble(dir.path()).is_none());
+    std::fs::write(
+        dir.path().join("CLAUDE.md"),
+        "# Atelier\nToujours `cargo test`.",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+    std::fs::write(
+        dir.path().join("Makefile"),
+        ".PHONY: test\ntest:\n\tcargo test\nVAR = 1\nbump:\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("package.json"),
+        r#"{"scripts":{"build":"vite","test":"vitest"}}"#,
+    )
+    .unwrap();
+    let p = repo_preamble(dir.path()).unwrap();
+    assert!(
+        p.contains("tirées de son CLAUDE.md")
+            && p.contains("pas une consigne du propriétaire")
+            && p.contains("Toujours `cargo test`"),
+        "{p}"
+    );
+    assert!(
+        p.contains("`cargo test`") && p.contains("`make test`") && p.contains("`make bump`"),
+        "{p}"
+    );
+    assert!(
+        p.contains("`npm run build`") && !p.contains("make VAR"),
+        "{p}"
+    );
 }

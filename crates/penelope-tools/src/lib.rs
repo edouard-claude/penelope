@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod edit_hooks;
 pub mod error;
 pub mod fs;
 pub mod git;
