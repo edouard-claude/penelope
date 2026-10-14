@@ -168,4 +168,33 @@ mod list_allow_tests {
         assert!(local_draft_allow("workflow_plan").is_some());
         assert!(local_draft_allow("workflow_start").is_none());
     }
+
+    /// #364, #368 : une mission en cours rend sa session autonome (aucune carte), le
+    /// temps de la mission seulement.
+    #[tokio::test]
+    async fn a_running_mission_makes_its_session_unattended() {
+        use penelope_agent::{ApprovalMode, SessionModes};
+        use penelope_app::services::Services;
+        let dir = tempfile::tempdir().unwrap();
+        let clock: penelope_kernel::clock::SharedClock =
+            std::sync::Arc::new(penelope_kernel::clock::SystemClock);
+        let s = std::sync::Arc::new(
+            Services::for_tests(dir.path().to_path_buf(), clock)
+                .await
+                .unwrap(),
+        );
+        let modes = super::KvModes(s.clone());
+        assert_ne!(modes.of_turn("s1", None).await, ApprovalMode::Unattended);
+        let req = penelope_app::mission::Request {
+            goal: "objectif".into(),
+            ..Default::default()
+        };
+        penelope_app::mission::start(&s, "s1", req, &penelope_app::bus::Origin::Cli)
+            .await
+            .unwrap();
+        assert_eq!(modes.of_turn("s1", None).await, ApprovalMode::Unattended);
+        assert_ne!(modes.of_turn("s2", None).await, ApprovalMode::Unattended);
+        penelope_app::mission::stop(&s, "s1").await.unwrap();
+        assert_ne!(modes.of_turn("s1", None).await, ApprovalMode::Unattended);
+    }
 }

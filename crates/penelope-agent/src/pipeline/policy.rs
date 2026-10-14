@@ -117,7 +117,7 @@ impl PolicyStage {
             {
                 verdict.decision = PolicyDecision::Auto;
                 verdict.layer = VerdictLayer::SessionMode;
-                verdict.reason = "run autonome : aucune approbation demandée".into();
+                verdict.reason = "autonome (run ou mission) : aucune approbation demandée".into();
             }
             ApprovalMode::Ask
                 if verdict.decision == PolicyDecision::Auto

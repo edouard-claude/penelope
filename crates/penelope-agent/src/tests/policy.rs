@@ -261,7 +261,10 @@ async fn an_autonomous_run_asks_nothing_but_keeps_denials_and_sensitive_settings
     ] {
         let v = eval(info(tool, risk, None), args.clone()).await;
         assert_eq!(v.decision, PolicyDecision::Auto, "{tool} {args}");
-        assert_eq!(v.reason, "run autonome : aucune approbation demandée");
+        assert_eq!(
+            v.reason,
+            "autonome (run ou mission) : aucune approbation demandée"
+        );
         assert_eq!(v.layer, VerdictLayer::SessionMode);
     }
     // Ce qu'un serveur MCP impose de demander passe aussi ; ce qu'il refuse, non.

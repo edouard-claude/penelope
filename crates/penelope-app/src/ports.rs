@@ -370,6 +370,20 @@ pub trait McpGateway: Send + Sync {
     }
 }
 
+/// Ce qu'un tour demande à un sous-agent (`sub_agent_spawn`, #367).
+#[derive(Debug, Clone, Default)]
+pub struct SubAgentRequest {
+    /// Rôle : `explore` (lecture seule, rend un résumé), `review` (relit un diff, rend un
+    /// verdict), `verifier`, ou libre (`general`).
+    pub kind: String,
+    pub prompt: String,
+    pub model: Option<String>,
+    /// Liste blanche d'outils ; vide : ceux du rôle.
+    pub tools: Vec<String>,
+    /// Plafond d'appels au modèle ; `None` : celui du rôle.
+    pub max_calls: Option<u32>,
+}
+
 /// Capacités qui dépendent du moteur de workflows et des sous-agents.
 #[async_trait::async_trait]
 pub trait Orchestrator: Send + Sync {
@@ -388,9 +402,7 @@ pub trait Orchestrator: Send + Sync {
     async fn spawn_sub_agent(
         &self,
         session_id: &str,
-        prompt: &str,
-        model: Option<&str>,
-        tools: Vec<String>,
+        request: SubAgentRequest,
         origin: &Origin,
         cancel: &penelope_llm::CancelToken,
     ) -> Result<Value, String>;

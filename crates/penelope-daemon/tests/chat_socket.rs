@@ -217,19 +217,30 @@ async fn a_stream_client_that_leaves_cancels_its_turn() {
     let mut body = serde_json::to_string(&req).unwrap();
     body.push('\n');
     write.write_all(body.as_bytes()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let turn_id: String = d
-        .services
-        .store
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT id FROM turn_queue ORDER BY enqueued_at DESC, rowid DESC LIMIT 1",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
+    // Le tour apparaît dans la file quand le daemon a lu la requête : attendu jusqu'à 5 s,
+    // 150 ms fixes ne suffisaient pas sur la CI chargée (main, 14/10).
+    let mut turn_id = None;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        turn_id = d
+            .services
+            .store
+            .read(|c| {
+                use penelope_store::rusqlite::OptionalExtension;
+                Ok(c.query_row(
+                    "SELECT id FROM turn_queue ORDER BY enqueued_at DESC, rowid DESC LIMIT 1",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?)
+            })
+            .await
+            .unwrap();
+        if turn_id.is_some() {
+            break;
+        }
+    }
+    let turn_id = turn_id.expect("tour mis en file");
     let outcome = d.bus.wait_for(&turn_id);
     let left = std::time::Instant::now();
     drop(write);

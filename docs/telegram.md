@@ -270,7 +270,7 @@ Workflows (4)
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
 | `/projet` | sujet de travail de la session : un bouton par projet connu du vault (fiches `projets/` comprises), et « Aucun » ; la mémoire d'office s'y limite ; dans un sujet Telegram, le projet est celui du sujet, le changer ne vaut que pour la session |
 | `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
-| `/mission` | sans argument, l'état de la mission de la session (tours, dépense, dernière note) ; `/mission <objectif> --check <commande> --cwd <dossier> --budget <$> --heures <h>` la lance : la session travaille d'une traite, relance d'elle-même après chaque tour, sans carte d'approbation, jusqu'à « MISSION TERMINÉE » (vérification verte), « MISSION BLOQUÉE », ou son budget ; `/mission stop` l'arrête (#364) |
+| `/mission` | sans argument, l'état de la mission de la session (tours, dépense, dernière note) ; `/mission <objectif> --check <commande> --cwd <dossier> --hook <commande après édition, {file}> --budget <$> --heures <h>` la lance : la session travaille d'une traite, relance d'elle-même après chaque tour, sans carte d'approbation, jusqu'à « MISSION TERMINÉE » (vérification verte), « MISSION BLOQUÉE », ou son budget ; `/mission stop` l'arrête (#364) |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
 | `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
 | `/appris`, `/pratique` | voir, ✅ valider, 🚫 rejeter |

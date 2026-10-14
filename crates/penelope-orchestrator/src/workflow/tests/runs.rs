@@ -598,9 +598,10 @@ async fn a_cancelled_turn_stops_its_sub_agent() {
     let _ = orchestrator
         .spawn_sub_agent(
             &sid,
-            "cherche la cause",
-            None,
-            vec![],
+            penelope_app::ports::SubAgentRequest {
+                prompt: "cherche la cause".into(),
+                ..Default::default()
+            },
             &Origin::Cli,
             &parent,
         )

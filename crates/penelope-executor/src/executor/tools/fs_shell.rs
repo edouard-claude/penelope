@@ -81,6 +81,7 @@ impl NativeToolExecutor {
                 if let Some(w) = self.outside_vault_warning(&p, &content) {
                     v["avertissement"] = json!(w);
                 }
+                self.after_edit_hook(&p, &mut v).await;
                 v
             }
             "fs_edit" => {
@@ -89,17 +90,82 @@ impl NativeToolExecutor {
                 vault_write_filter(args, &new)?;
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
-                penelope_tools::fs::edit(
+                let mut v = penelope_tools::fs::edit(
                     &p,
                     &str_arg(args, "old")?,
                     &new,
                     b_arg(args, "replace_all").unwrap_or(false),
-                )?
+                )?;
+                self.after_edit_hook(&p, &mut v).await;
+                v
             }
 
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// Hook après édition (#366) : la commande `--hook` de la mission en cours, jointe au
+    /// résultat sous `hook`. Elle vient du propriétaire, jamais du dépôt (#366, revue de
+    /// sécurité) ; elle tourne dans le dépôt de la mission, sous le bac à sable du shell,
+    /// et seulement pour un fichier de ce dépôt dont le chemin ne porte aucun caractère
+    /// que le shell interprète.
+    async fn after_edit_hook(&self, path: &Path, v: &mut Value) {
+        let s = &self.services;
+        let Some(mission) = penelope_app::mission::load(s, &self.env.session_id).await else {
+            return;
+        };
+        let (Some(command), Some(cwd)) = (&mission.hook, &mission.cwd) else {
+            return;
+        };
+        if mission.state != penelope_app::mission::State::Running {
+            return;
+        }
+        // Revérifié à chaque édition : le dossier reste dans un workspace (TOCTOU).
+        let Some(dir) = penelope_app::mission::dir_of(s, cwd) else {
+            return;
+        };
+        let Ok(relative) = path.strip_prefix(&dir) else {
+            return;
+        };
+        let Some(command) =
+            penelope_tools::edit_hooks::render(command, &relative.to_string_lossy())
+        else {
+            v["hook"] =
+                json!({"skipped": "chemin avec un caractère spécial du shell : hook non lancé"});
+            return;
+        };
+        let cfg = s.config.config();
+        let profile = penelope_tools::shell::profile_with_denied_reads(
+            &cfg.sandbox.default_profile,
+            &dir,
+            false,
+            &denied_reads(s),
+        );
+        let out = penelope_tools::shell::exec(
+            &s.platform.processes,
+            &command,
+            penelope_tools::shell::ExecOptions {
+                profile: Some(&profile),
+                cwd: Some(&dir),
+                timeout: std::time::Duration::from_secs(120),
+                max_output_bytes: 64 * 1024,
+                shell: shell_override(&cfg.tools.shell),
+                ..Default::default()
+            },
+        )
+        .await;
+        v["hook"] = match out {
+            Ok(o) if o.exit_code == 0 => json!({"command": command, "exitCode": 0}),
+            Ok(o) => {
+                let text = format!("{}{}", o.stdout, o.stderr);
+                let chars: Vec<char> = text.chars().collect();
+                let tail: String = chars[chars.len().saturating_sub(4_000)..].iter().collect();
+                json!({"command": command, "exitCode": o.exit_code, "output": tail,
+                    "note": "le hook échoue après cette édition : corrige avant de continuer"})
+            }
+            Err(e) => json!({"command": command, "error": e.to_string()}),
+        };
     }
 
     /// Note de forme vault écrite dans un workspace hors du vault (issue #256) : elle ne

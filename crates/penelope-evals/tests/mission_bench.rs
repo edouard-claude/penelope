@@ -221,6 +221,7 @@ async fn run_story(story: &Story, timeout: Duration) -> Measure {
         goal: consigne(story),
         check: Some("cargo test -q".into()),
         cwd: Some(ws.to_string_lossy().into_owned()),
+        hook: Some("cargo fmt -- {file}".into()),
         budget_usd: Some(10.0),
         hours: Some(timeout.as_secs_f64() / 3600.0),
     };

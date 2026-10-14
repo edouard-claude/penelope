@@ -303,9 +303,18 @@ pub(super) async fn send_approval_once(ctx: &StepCtx<'_>, approval_id: &str) {
 /// Consigne des sous-agents, par type.
 fn sub_agent_system(kind: &str) -> String {
     let role = match kind {
-        "code_reviewer" => {
+        "code_reviewer" | "review" => {
             "Tu relis du code comme un relecteur exigeant : bugs, régressions, sécurité, \
-             tests manquants. Pas de remarque de style sans conséquence."
+             tests manquants. Pas de remarque de style sans conséquence. Lis le diff \
+             (`git_diff` dans le dépôt indiqué, `fs_read` pour le contexte) et seulement lui. \
+             Termine par une ligne `VERDICT : accepté` ou `VERDICT : corrections`, suivie \
+             dans ce cas de la liste numérotée des corrections, chacune avec son fichier."
+        }
+        "explore" => {
+            "Tu explores un dépôt ou un dossier pour l'agent qui t'envoie, en lecture seule : \
+             structure, fichiers clés, où vit ce qu'on te demande, commandes de build et de \
+             test, conventions (CLAUDE.md, AGENTS.md). Rends un résumé court et factuel, \
+             chemins à l'appui, sans recopier les fichiers."
         }
         "verifier" => {
             "Tu vérifies qu'un travail remplit ses critères, preuves à l'appui (sorties de \
@@ -327,7 +336,13 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
         .any(|t| matches!(t.as_str(), "tool_search" | "tool_describe" | "tool_call"));
     let defs = penelope_executor::executor::tool_defs(false, with_mcp);
     if !step_tools.is_empty() {
-        return (defs, step_tools.to_vec());
+        // Un sous-agent ne lance pas de sous-agent (#367) : la profondeur reste à un.
+        let allowed = step_tools
+            .iter()
+            .filter(|t| t.as_str() != "sub_agent_spawn")
+            .cloned()
+            .collect();
+        return (defs, allowed);
     }
     let readonly: Vec<String> = penelope_tools::all_tools()
         .into_iter()
@@ -335,6 +350,21 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
         .map(|t| t.name.to_string())
         .collect();
     (defs, readonly)
+}
+
+/// Plafond d'un sous-agent lancé par un tour (#367) : `max_calls` s'il est donné, sinon
+/// 40 appels et un tour de reprise pour un rôle de lecture (explorer, relire, vérifier),
+/// le plafond de la conversation pour un rôle libre.
+pub fn role_limits(kind: &str, max_calls: Option<u32>) -> Option<CallLimits> {
+    let reading = matches!(kind, "explore" | "review" | "code_reviewer" | "verifier");
+    match (max_calls, reading) {
+        (Some(calls), _) => Some(CallLimits { calls, turns: 1 }),
+        (None, true) => Some(CallLimits {
+            calls: 40,
+            turns: 1,
+        }),
+        (None, false) => None,
+    }
 }
 
 /// Lance un sous-agent en contexte neuf ; renvoie son texte final.
@@ -548,4 +578,31 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
         StepResult::Error,
         json!({"error": "sortie non conforme au schéma", "details": last_errors}),
     ))
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    /// #367 : explorer et relire ont un plafond de lecture et leur consigne ; un sous-agent
+    /// ne lance pas de sous-agent, même si on le lui donne.
+    #[test]
+    fn reading_roles_have_their_limits_prompts_and_no_grandchildren() {
+        assert_eq!(role_limits("explore", None).map(|l| l.calls), Some(40));
+        assert_eq!(role_limits("review", None).map(|l| l.calls), Some(40));
+        assert_eq!(role_limits("review", Some(12)).map(|l| l.calls), Some(12));
+        assert!(role_limits("general", None).is_none());
+        assert!(sub_agent_system("review").contains("VERDICT : accepté"));
+        assert!(sub_agent_system("explore").contains("lecture seule"));
+
+        let (_, allowed) = sub_agent_tools(&["fs_read".into(), "sub_agent_spawn".into()]);
+        assert_eq!(allowed, vec!["fs_read".to_string()]);
+        let (_, readonly) = sub_agent_tools(&[]);
+        assert!(readonly.iter().any(|t| t == "fs_read"));
+        assert!(
+            !readonly
+                .iter()
+                .any(|t| t == "fs_edit" || t == "sub_agent_spawn")
+        );
+    }
 }

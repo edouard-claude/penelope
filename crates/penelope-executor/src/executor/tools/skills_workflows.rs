@@ -390,11 +390,16 @@ impl NativeToolExecutor {
                         .orchestrator
                         .as_ref()
                         .ok_or_else(|| ToolError::Other("sous-agents indisponibles".into()))?;
-                    o.spawn_sub_agent(
-                        &self.env.session_id,
-                        &str_arg(args, "prompt")?,
-                        args.get("model").and_then(|v| v.as_str()),
-                        args.get("tools")
+                    let request = penelope_app::ports::SubAgentRequest {
+                        kind: args
+                            .get("kind")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("general")
+                            .to_string(),
+                        prompt: str_arg(args, "prompt")?,
+                        model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+                        tools: args
+                            .get("tools")
                             .and_then(|v| v.as_array())
                             .map(|a| {
                                 a.iter()
@@ -402,11 +407,14 @@ impl NativeToolExecutor {
                                     .collect()
                             })
                             .unwrap_or_default(),
-                        &self.env.origin,
-                        cancel,
-                    )
-                    .await
-                    .map_err(ToolError::Other)?
+                        max_calls: args
+                            .get("budget")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n.clamp(1, 200) as u32),
+                    };
+                    o.spawn_sub_agent(&self.env.session_id, request, &self.env.origin, cancel)
+                        .await
+                        .map_err(ToolError::Other)?
                 }
                 other => return Err(ToolError::Unknown(other.to_string())),
             };

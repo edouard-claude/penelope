@@ -133,9 +133,11 @@ fn a_probe_reads_a_large_output_without_waiting_for_the_timeout() {
     // rend ce qu'elle a lu à l'échéance, sans attendre le petit-enfant.
     let keeper = script("garde", "echo vu; sleep 5 &");
     let t = std::time::Instant::now();
-    let p = probe_command(&keeper, &[], std::time::Duration::from_millis(300)).expect("sonde");
+    // 2 s : sous la charge de la suite complète, 300 ms ne laissaient pas au script le temps
+    // de sortir. Le petit-enfant dort 5 s : rendre avant 4 s prouve qu'il n'est pas attendu.
+    let p = probe_command(&keeper, &[], std::time::Duration::from_secs(2)).expect("sonde");
     assert!(
-        t.elapsed() < std::time::Duration::from_secs(2),
+        t.elapsed() < std::time::Duration::from_secs(4),
         "{:?}",
         t.elapsed()
     );

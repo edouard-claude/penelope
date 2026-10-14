@@ -176,15 +176,14 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
     async fn spawn_sub_agent(
         &self,
         session_id: &str,
-        prompt: &str,
-        model: Option<&str>,
-        tools: Vec<String>,
+        request: penelope_app::ports::SubAgentRequest,
         origin: &Origin,
         cancel: &CancelToken,
     ) -> Result<Value, String> {
         let cfg = self.context.services.config.config();
-        let alias = model
-            .map(String::from)
+        let alias = request
+            .model
+            .clone()
             .unwrap_or_else(|| cfg.role_alias("chat_default"));
         let model_id = cfg
             .alias_model(&alias)
@@ -214,19 +213,20 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
             SubAgentTask {
                 session_id,
                 run_id: run_id.as_deref(),
-                kind: "general",
-                prompt,
+                kind: &request.kind,
+                prompt: &request.prompt,
                 model_id: &model_id,
-                tools: &tools,
+                tools: &request.tools,
                 workspaces: penelope_executor::executor::default_workspaces(&self.context.services),
-                limits: None,
+                // Un rôle de lecture a de quoi parcourir un dépôt (#367) ; `budget` l'emporte.
+                limits: crate::workflow::step_agent::role_limits(&request.kind, request.max_calls),
             },
             // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
             // sous-agent qui s'arrête ne touche pas au parent (issue #57).
             &cancel.child(),
         )
         .await?;
-        Ok(json!({"text": text, "model": model_id}))
+        Ok(json!({"text": text, "model": model_id, "kind": request.kind}))
     }
 
     async fn generate_image(&self, prompt: &str, size: Option<&str>) -> Result<Value, String> {

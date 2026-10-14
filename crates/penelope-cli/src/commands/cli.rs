@@ -360,6 +360,9 @@ pub enum MissionCmd {
         /// Dossier de travail (et de la vérification).
         #[arg(long)]
         cwd: Option<String>,
+        /// Commande relancée après chaque édition de fichier, `{file}` pour le fichier.
+        #[arg(long)]
+        hook: Option<String>,
         /// Budget en dollars (20 par défaut).
         #[arg(long)]
         budget: Option<f64>,

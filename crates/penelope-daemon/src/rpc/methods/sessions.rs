@@ -236,6 +236,20 @@ impl Rpc {
     pub(super) async fn missions(&self, method: &str, p: &Value) -> anyhow::Result<Value> {
         let sid = self.session_param(p).await?;
         let core = self.daemon.clone();
-        penelope_app::mission::rpc(self.services(), &*core, &core.bus, method, p, &sid).await
+        let mut v =
+            penelope_app::mission::rpc(self.services(), &*core, &core.bus, method, p, &sid).await?;
+        // Le plan que le modèle tient dans ses notes de session (#366), avec l'état.
+        if method == method::MISSION_STATUS
+            && let Ok(Some(notes)) =
+                penelope_vault::session_notes::read(self.services(), &sid).await
+        {
+            let notes: String = notes.chars().take(2_000).collect();
+            v["text"] = json!(format!(
+                "{}\n\n{}",
+                v["text"].as_str().unwrap_or(""),
+                notes.trim()
+            ));
+        }
+        Ok(v)
     }
 }

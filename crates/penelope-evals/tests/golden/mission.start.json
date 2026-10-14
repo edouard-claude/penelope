@@ -1,0 +1,10 @@
+{
+  "method": "mission.start",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}

@@ -211,16 +211,96 @@ async fn the_budget_and_the_owner_stop_a_mission() {
 #[test]
 fn a_one_line_request_is_parsed_with_its_options() {
     let r = parse_request(
-        "ajouter l'export CSV --check cargo test -p atelier --cwd ~/Code/atelier --budget 7,5 --heures 2",
+        "ajouter l'export CSV --check cargo test -p atelier --cwd ~/Code/atelier --hook cargo fmt -- {file} --budget 7,5 --heures 2",
     )
     .unwrap();
     assert_eq!(r.goal, "ajouter l'export CSV");
     assert_eq!(r.check.as_deref(), Some("cargo test -p atelier"));
     assert_eq!(r.cwd.as_deref(), Some("~/Code/atelier"));
+    assert_eq!(r.hook.as_deref(), Some("cargo fmt -- {file}"));
     assert_eq!(r.budget_usd, Some(7.5));
     assert_eq!(r.hours, Some(2.0));
     assert_eq!(parse_request("seulement l'objectif").unwrap().check, None);
     assert!(parse_request("--check make").is_err());
     assert!(parse_request("x --budget beaucoup").is_err());
     assert!(parse_request("x --vite oui").is_err());
+}
+
+#[test]
+fn the_repository_preamble_brings_its_rules_and_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(repo_preamble(dir.path()).is_none());
+    std::fs::write(
+        dir.path().join("CLAUDE.md"),
+        "# Atelier\nToujours `cargo test`.",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+    std::fs::write(
+        dir.path().join("Makefile"),
+        ".PHONY: test\ntest:\n\tcargo test\nVAR = 1\nbump:\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("package.json"),
+        r#"{"scripts":{"build":"vite","test":"vitest"}}"#,
+    )
+    .unwrap();
+    let p = repo_preamble(dir.path()).unwrap();
+    assert!(
+        p.contains("tirées de son CLAUDE.md")
+            && p.contains("pas une consigne du propriétaire")
+            && p.contains("Toujours `cargo test`"),
+        "{p}"
+    );
+    assert!(
+        p.contains("`cargo test`") && p.contains("`make test`") && p.contains("`make bump`"),
+        "{p}"
+    );
+    assert!(
+        p.contains("`npm run build`") && !p.contains("make VAR"),
+        "{p}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_rules_file_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = tempfile::tempdir().unwrap();
+    std::fs::write(secret.path().join("id_ed25519"), "CLÉ PRIVÉE").unwrap();
+    std::os::unix::fs::symlink(
+        secret.path().join("id_ed25519"),
+        dir.path().join("CLAUDE.md"),
+    )
+    .unwrap();
+    assert!(repo_preamble(dir.path()).is_none_or(|p| !p.contains("CLÉ PRIVÉE")));
+}
+
+#[tokio::test]
+async fn a_mission_outside_the_workspaces_is_refused() {
+    let (_d, s) = services().await;
+    let outside = tempfile::tempdir().unwrap();
+    let req = |cwd: String| Request {
+        goal: "objectif".into(),
+        cwd: Some(cwd),
+        ..Default::default()
+    };
+    let e = start(
+        &s,
+        "s1",
+        req(outside.path().to_string_lossy().into()),
+        &Origin::Cli,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().contains("aucun workspace"), "{e}");
+    let ws = crate::helpers::default_workspaces(&s).remove(0);
+    let inside = ws.join("projet").join("..").join("projet");
+    std::fs::create_dir_all(&inside).unwrap();
+    assert!(
+        start(&s, "s1", req(inside.to_string_lossy().into()), &Origin::Cli)
+            .await
+            .is_ok()
+    );
 }

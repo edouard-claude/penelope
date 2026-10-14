@@ -1,0 +1,10 @@
+{
+  "method": "mission.stop",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "string"
+    }
+  }
+}
