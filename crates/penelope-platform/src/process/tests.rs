@@ -102,6 +102,47 @@ fn versions_are_probed_with_a_timeout() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_probe_reads_a_large_output_without_waiting_for_the_timeout() {
+    // #372 : `plutil` sur l'`Info.plist` de Xcode écrit 157 Ko ; sans lecteur, le tuyau
+    // (64 Ko) se remplissait et la sonde mourait au délai, sans la version.
+    let dir = tempfile::tempdir().unwrap();
+    let script = |name: &str, body: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.path().join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    };
+    let big = script(
+        "bavard",
+        "head -c 1048576 /dev/zero | tr '\\0' x; echo; echo fin >&2",
+    );
+    let t = std::time::Instant::now();
+    let p = probe_command(&big, &[], std::time::Duration::from_secs(5)).expect("sonde");
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        t.elapsed()
+    );
+    assert!(p.ok);
+    assert_eq!(p.stdout.trim().len(), 1_048_576);
+    assert_eq!(p.stderr.trim(), "fin");
+
+    // Un petit-enfant qui garde le tuyau ouvert après la sortie du programme : la sonde
+    // rend ce qu'elle a lu à l'échéance, sans attendre le petit-enfant.
+    let keeper = script("garde", "echo vu; sleep 5 &");
+    let t = std::time::Instant::now();
+    let p = probe_command(&keeper, &[], std::time::Duration::from_millis(300)).expect("sonde");
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        t.elapsed()
+    );
+    assert!(p.ok);
+}
+
+#[test]
 fn the_newest_nvm_node_is_found() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join(".nvm/versions/node");
