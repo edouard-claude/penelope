@@ -15,6 +15,7 @@ pub mod budget_alert;
 pub mod compaction;
 pub mod context_report;
 pub mod prefix;
+pub mod prompt_snapshot;
 pub mod titles;
 
 use penelope_app::bus::{ChannelDelivery, Origin};

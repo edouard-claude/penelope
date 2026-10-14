@@ -116,6 +116,10 @@ pub mod method {
     pub const CHAT_STREAM: &str = "chat.stream";
     pub const CHAT_STOP: &str = "chat.stop";
 
+    pub const MISSION_START: &str = "mission.start";
+    pub const MISSION_STATUS: &str = "mission.status";
+    pub const MISSION_STOP: &str = "mission.stop";
+
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_NEW: &str = "session.new";
     pub const SESSION_SWITCH: &str = "session.switch";

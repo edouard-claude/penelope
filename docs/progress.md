@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.62
+
+**Missions : une session travaille d'une traite jusqu'à son critère de fin, sans
+« Continuer » ni carte d'approbation (#364), avec une compaction entre deux tours (#365).
+Épopée #370.**
+
+Constat (12 et 13/10, MentalEco) : le workflow `tache` découpait une story en étapes dans
+des sessions fraîches, et on recollait le contexte entre elles ; une session de
+conversation, elle, s'arrêtait tous les 24 appels sur « Continuer ». OpenCode et Claude
+Code tiennent une seule boucle jusqu'à la fin.
+
+- `/mission <objectif> --check <commande> --cwd <dossier> --budget <$> --heures <h>`,
+  `penelope mission start|status|stop`, RPC `mission.*`. La session reçoit une consigne
+  (objectif, critère, règles de fin) et se relance d'elle-même après chaque tour : plafond
+  d'appels atteint (non livré, pas de bouton « Continuer »), réponse sans mot de fin (au
+  plus trois de suite), tour en échec (au plus trois). « MISSION TERMINÉE » lance la
+  vérification : verte, la mission est finie ; rouge, sa sortie repart au modèle.
+  « MISSION BLOQUÉE », le budget (20 $ par défaut, à la place de celui de la session) ou
+  l'échéance (8 h) l'arrêtent, avec un compte rendu dans le sujet.
+- Autonomie : une session en mission est `unattended`, comme un run autonome (#346) ; les
+  points de contrôle de coût par tour ne l'arrêtent pas, le plafond du jour si.
+- Compaction (#365) : entre deux tours, la compaction de fond est lancée au seuil, et le
+  résumé est publié au tour suivant ; la consigne revient en tête de chaque relance et
+  survit donc au résumé, comme le plan tenu dans `session_notes`.
+- L'état vit dans `kv` (`mission.<session>`) et le tour suivant est déjà en file : un
+  redémarrage du daemon reprend la mission.
+- Le banc d'essai `mission-bench` (#369) tourne désormais en mission.
+- `prompt_snapshot` sort du daemon vers `penelope-conversation` (le daemon garde le port
+  de la boucle) : le daemon reste sous son plafond (R4).
+
 ### 1.0.61
 
 **`doctor` ne dépasse plus le délai de la CLI ; une sonde ne bloque plus sur une sortie

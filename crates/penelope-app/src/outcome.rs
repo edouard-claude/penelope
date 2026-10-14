@@ -4,6 +4,11 @@ use penelope_kernel::risk::RiskClass;
 use serde_json::Value;
 use std::sync::Mutex;
 
+/// Début du message d'un tour arrêté par son plafond d'appels (pas une erreur) : Telegram
+/// le reconnaît pour proposer « Continuer » plutôt que « Réessayer » (issue #139), une
+/// mission (#364) pour relancer d'elle-même.
+pub const CALLS_EXHAUSTED: &str = "le tour n'a pas convergé";
+
 /// Issue d'un tour.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnOutcome {

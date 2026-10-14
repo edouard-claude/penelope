@@ -55,6 +55,7 @@ scenario_cases! {
     outils_niveau_1_et_compaction => "outils-niveau-1-et-compaction",
     message_pendant_un_lot => "message-pendant-un-lot",
     commandes_systeme => "commandes-systeme",
+    commande_mission => "commande-mission",
     commande_secrets => "commande-secrets",
     commandes_sessions => "commandes-sessions",
     commandes_reglages => "commandes-reglages",

@@ -52,3 +52,49 @@ impl penelope_app::conversation::Compactor for OverflowCompactor {
         Ok(r.published > 0)
     }
 }
+
+/// Les ports d'une mission (#364) : le tour suivant en file, la compaction entre deux tours
+/// (#365), le compte rendu sur le canal de la mission.
+pub struct MissionPorts {
+    pub context: Context,
+    pub intake: Arc<dyn penelope_app::engine::TurnIntake>,
+    pub messenger: Option<Arc<dyn penelope_app::ports::Messenger>>,
+}
+
+#[async_trait::async_trait]
+impl penelope_app::mission::MissionPorts for MissionPorts {
+    async fn enqueue(
+        &self,
+        session_id: &str,
+        text: &str,
+        origin: &penelope_app::bus::Origin,
+        dedup: String,
+    ) {
+        if let Err(e) = self
+            .intake
+            .enqueue_message(session_id, text, origin, Some(dedup))
+            .await
+        {
+            tracing::error!(error = %e, session = session_id, "relance de mission non mise en file");
+        }
+    }
+
+    async fn compact(&self, session_id: &str) {
+        // Le seuil de la compaction de fond décide : sous le seuil, rien n'est résumé. Le
+        // résumé est publié au début du tour suivant (`publish_pending`).
+        if let Err(e) = compact(&self.context, session_id, Trigger::Background, None).await {
+            tracing::warn!(error = %e, session = session_id, "compaction de mission");
+        }
+    }
+
+    async fn notify(&self, origin: &penelope_app::bus::Origin, text: &str) {
+        if !origin.is_channel() {
+            return;
+        }
+        if let Some(m) = &self.messenger
+            && let Err(e) = m.send_text(origin, text).await
+        {
+            tracing::warn!(error = %e, "compte rendu de mission non envoyé");
+        }
+    }
+}

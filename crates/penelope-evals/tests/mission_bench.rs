@@ -6,11 +6,10 @@
 //! OPENROUTER_API_KEY=… penelope eval mission-bench
 //! ```
 //!
-//! Chaque story part d'une copie fraîche du témoin (dépôt git initialisé), reçoit sa
-//! consigne dans une session CLI, et tourne jusqu'à ce que la réponse dise `TERMINÉ`. Un
-//! tour arrêté par son plafond d'appels (`CALLS_EXHAUSTED`) est relancé par « Continue » :
-//! chaque relance compte comme une **intervention**, ce que le mode mission (#364) doit
-//! ramener à zéro. La recette est un fichier de tests caché (`fixtures/mission/acceptance`)
+//! Chaque story part d'une copie fraîche du témoin (dépôt git initialisé) et tourne en
+//! **mission** (#364) : relances d'elles-mêmes, fin annoncée vérifiée par `cargo test -q`.
+//! Une mission qui rend la main (en attente, bloquée) compte une **intervention** : la
+//! définition de fini de l'épopée #370 en veut zéro. La recette est un fichier de tests caché (`fixtures/mission/acceptance`)
 //! copié dans le témoin après coup : la story réussit si `cargo test` le passe.
 //!
 //! Mesures par story : réussite, tours, itérations, appels d'outils, interventions,
@@ -24,7 +23,10 @@
 //! `PENELOPE_MISSION_REQUIRE=1` exige trois réussites sans intervention (définition de
 //! fini de l'épopée).
 
-use penelope_agent::{CALLS_EXHAUSTED, TurnOutcome};
+use penelope_agent::TurnOutcome;
+use penelope_app::bus::Origin;
+use penelope_app::engine::TurnIntake;
+use penelope_app::mission;
 use penelope_evals::live;
 use penelope_kernel::clock::{SharedClock, SystemClock};
 use serde::Deserialize;
@@ -58,9 +60,6 @@ struct Measure {
     seconds: u64,
     evidence: Option<PathBuf>,
 }
-
-/// Relances au plus par story : au-delà, la story est comptée perdue.
-const MAX_CONTINUES: u32 = 40;
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/mission")
@@ -134,15 +133,11 @@ async fn acceptance(ws: &Path, file: &str) -> (bool, String) {
     }
 }
 
-fn consigne(ws: &Path, story: &Story) -> String {
+fn consigne(story: &Story) -> String {
     format!(
-        "Tu travailles dans le dépôt `{}` (Rust, voir son CLAUDE.md). Fais la story \
-         ci-dessous de bout en bout, sans me poser de question : lis le code, modifie-le, \
-         ajoute les tests, lance `cargo test` et `cargo fmt` dans ce dépôt (donne toujours \
-         `cwd`), corrige jusqu'au vert, puis commite. Quand tout est fait et vérifié, réponds \
-         par un court compte rendu qui se termine par le mot TERMINÉ. Si tu es bloqué pour de \
-         bon, dis-le et termine par BLOQUÉ.\n\n{}",
-        ws.display(),
+        "Fais la story ci-dessous de bout en bout : lis le code, modifie-le, ajoute les \
+         tests, lance `cargo test` et `cargo fmt` (toujours avec `cwd`), corrige jusqu'au \
+         vert, puis commite.\n\n{}",
         story.prompt
     )
 }
@@ -221,65 +216,57 @@ async fn run_story(story: &Story, timeout: Duration) -> Measure {
     };
     let started = Instant::now();
     let mut answers = Vec::new();
-    let mut text = consigne(&ws, story);
+    // Le mode mission (#364) : relances sans « Continuer », fin vérifiée par `cargo test`.
+    let request = mission::Request {
+        goal: consigne(story),
+        check: Some("cargo test -q".into()),
+        cwd: Some(ws.to_string_lossy().into_owned()),
+        budget_usd: Some(10.0),
+        hours: Some(timeout.as_secs_f64() / 3600.0),
+    };
+    let (_, text) = mission::start(&s, &session, request, &Origin::Cli)
+        .await
+        .expect("mission");
+    d.enqueue_message(&session, &text, &Origin::Cli, None)
+        .await
+        .expect("mise en file");
     loop {
         if started.elapsed() > timeout {
+            let _ = mission::stop(&s, &session).await;
             m.end = "délai dépassé".into();
             break;
         }
-        let outcome = live::turn_outcome(&d, &session, &text).await;
-        m.turns += 1;
-        match outcome {
-            TurnOutcome::Answered {
-                text: answer,
-                iterations,
-                ..
-            } => {
-                m.iterations += iterations;
-                let exhausted = answer.starts_with(CALLS_EXHAUSTED);
-                answers.push(answer.clone());
-                if answer.contains("TERMINÉ") {
-                    m.end = "terminé".into();
+        match s.turns.claim("live").await.expect("réclamation") {
+            Some(turn) => {
+                let outcome =
+                    penelope_daemon::runner::process(&d, turn, Duration::from_secs(30)).await;
+                m.turns += 1;
+                match outcome {
+                    TurnOutcome::Answered {
+                        text, iterations, ..
+                    } => {
+                        m.iterations += iterations;
+                        answers.push(text);
+                    }
+                    TurnOutcome::Failed { error } => answers.push(error),
+                    TurnOutcome::LoopAborted { report, .. } => answers.push(report),
+                    _ => {}
+                }
+            }
+            None => match mission::load(&s, &session).await {
+                Some(done) if done.state != mission::State::Running => {
+                    m.end = done.state.as_str().into();
+                    // Une mission qui rend la main a besoin du propriétaire.
+                    if matches!(
+                        done.state,
+                        mission::State::Waiting | mission::State::Blocked
+                    ) {
+                        m.interventions = 1;
+                    }
                     break;
                 }
-                if answer.contains("BLOQUÉ") {
-                    m.end = "bloqué".into();
-                    break;
-                }
-                if m.interventions >= MAX_CONTINUES {
-                    m.end = "relances épuisées".into();
-                    break;
-                }
-                m.interventions += 1;
-                text = if exhausted {
-                    "Continue.".into()
-                } else {
-                    "Continue jusqu'au bout de la story ; termine par TERMINÉ quand tout est \
-                     vérifié et commité."
-                        .into()
-                };
-            }
-            TurnOutcome::AwaitingApproval { approval_id } => {
-                m.end = format!("approbation demandée ({approval_id})");
-                break;
-            }
-            TurnOutcome::LoopAborted { report, .. } => {
-                answers.push(report);
-                m.end = "boucle détectée".into();
-                break;
-            }
-            TurnOutcome::Cancelled => {
-                m.end = "annulé".into();
-                break;
-            }
-            TurnOutcome::BudgetExceeded { scope, .. } => {
-                m.end = format!("budget {scope} épuisé");
-                break;
-            }
-            TurnOutcome::Failed { error } => {
-                m.end = format!("échec : {error}");
-                break;
-            }
+                _ => tokio::time::sleep(Duration::from_millis(200)).await,
+            },
         }
     }
     m.seconds = started.elapsed().as_secs();

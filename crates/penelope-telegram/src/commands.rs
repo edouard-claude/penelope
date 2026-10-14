@@ -154,6 +154,13 @@ fn model_commands() -> Vec<Command> {
             m::SESSION_PROJECT,
         ),
         c(
+            "mission",
+            "Session",
+            "Travail d'une traite jusqu'au critère de fin : objectif, puis `--check` ; sans argument, l'état ; `stop` l'arrête",
+            "/mission ajouter l'export CSV --check cargo test",
+            m::MISSION_START,
+        ),
+        c(
             "mode",
             "Session",
             "Ce qui part sans demande : tout demander, lectures libres, tout sauf le destructif",

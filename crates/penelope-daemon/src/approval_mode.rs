@@ -42,6 +42,10 @@ impl penelope_agent::SessionModes for KvModes {
             Some(run) if penelope_app::autonomy::is_autonomous(&self.0, run).await => {
                 ApprovalMode::Unattended
             }
+            // Une mission tourne sans personne pour répondre aux cartes (#364).
+            _ if penelope_app::mission::is_running(&self.0, session_id).await => {
+                ApprovalMode::Unattended
+            }
             _ => of_session(&self.0, session_id).await,
         }
     }

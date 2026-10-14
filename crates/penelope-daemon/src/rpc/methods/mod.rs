@@ -24,6 +24,7 @@ impl Rpc {
         match method.split_once('.').map_or(method, |(domain, _)| domain) {
             "chat" | "tail" => self.chat(method, p).await,
             "session" | "export" => self.sessions(method, p).await,
+            "mission" => self.missions(method, p).await,
             "config" | "secret" => self.config(method, p).await,
             "model" if method == method::MODEL_AUTH => self.codex(method, p).await,
             "model" => self.models(method, p).await,

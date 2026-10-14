@@ -237,7 +237,7 @@ un test vérifie que **toutes** le sont : une commande sans méthode serait une 
 
 ```
 /new /sessions /switch /close /purge /title /fork /rewind /compact /export /stop /home
-/model /models /mode /projet /budget /usage /context
+/model /models /mode /mission /projet /budget /usage /context
 /note /retiens /oublie /recall /appris /pratique /dream /intentions /mien /forget /accueil /audit
 /mcp /mcp auth /p
 /skills /skill
@@ -270,6 +270,7 @@ Workflows (4)
 | `/models` | un modèle, puis l'alias auquel l'affecter ; 🔎 chercher |
 | `/projet` | sujet de travail de la session : un bouton par projet connu du vault (fiches `projets/` comprises), et « Aucun » ; la mémoire d'office s'y limite ; dans un sujet Telegram, le projet est celui du sujet, le changer ne vaut que pour la session |
 | `/mode` | ce qui part sans demande dans cette session : demander tout, lectures sans demande (défaut), tout sauf le destructif ; le mode actuel coché |
+| `/mission` | sans argument, l'état de la mission de la session (tours, dépense, dernière note) ; `/mission <objectif> --check <commande> --cwd <dossier> --budget <$> --heures <h>` la lance : la session travaille d'une traite, relance d'elle-même après chaque tour, sans carte d'approbation, jusqu'à « MISSION TERMINÉE » (vérification verte), « MISSION BLOQUÉE », ou son budget ; `/mission stop` l'arrête (#364) |
 | `/skills`, `/skill` | 📖 voir, ⏪ version précédente (confirmé) |
 | `/oublie`, `/forget` | une entrée (ou une session) par bouton, puis confirmation |
 | `/appris`, `/pratique` | voir, ✅ valider, 🚫 rejeter |

@@ -98,6 +98,10 @@ impl TelegramGateway {
                 self.cmd_mode(chat_id, topic_id, message_id, command, args)
                     .await
             }
+            "mission" => {
+                self.cmd_mission(chat_id, topic_id, message_id, command, args)
+                    .await
+            }
             "schedules" => {
                 self.cmd_schedules(chat_id, topic_id, message_id, command, args)
                     .await

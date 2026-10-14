@@ -734,7 +734,7 @@ mod on_prefix;
 mod publish;
 mod summarise;
 mod view;
-pub use context::{Context, OverflowCompactor};
+pub use context::{Context, MissionPorts, OverflowCompactor};
 use fidelity::*;
 pub use health::struggling_sessions;
 use health::{cost_per_turn, tell_mechanical};

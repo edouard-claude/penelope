@@ -33,9 +33,9 @@ pub struct AgentLoop {
 /// autant sur le même transcript.
 pub const TURN_CALLS: u32 = 24;
 
-/// Début du message d'un tour arrêté par son plafond d'appels (pas une erreur) : Telegram
-/// le reconnaît pour proposer « Continuer » plutôt que « Réessayer » (issue #139).
-pub const CALLS_EXHAUSTED: &str = "le tour n'a pas convergé";
+/// Début du message d'un tour arrêté par son plafond d'appels : défini avec les issues de
+/// tour, la mission (#364) le reconnaît aussi.
+pub use penelope_app::outcome::CALLS_EXHAUSTED;
 
 impl AgentLoop {
     pub fn new(services: Arc<AgentServices>, provider: Arc<dyn Provider>) -> Self {
