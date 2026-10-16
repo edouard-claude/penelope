@@ -35,4 +35,5 @@ release.
   (délai, 8 par événement, 2 minutes par appel) et tranché par `on_failure`.
 - `pre_tool` et `turn_end` sont servis depuis #384 : la couche `hook` de la politique ne
   peut que resserrer (`ca_9_7_hook_cannot_loosen`). `session_start` et `prompt_submit`
-  arrivent avec #385 et sont refusés au chargement d'ici là.
+  (#385) déposent leurs notes au contexte volatil (T4), jamais au préfixe ; seul
+  `prompt_submit` peut retenir un message, jamais `session_start`.

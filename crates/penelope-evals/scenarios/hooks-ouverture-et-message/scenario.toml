@@ -1,0 +1,45 @@
+name = "hooks-ouverture-et-message"
+description = """Hooks `session_start` et `prompt_submit` (#385). Le premier message ouvre la
+session : le hook d'ouverture tourne une fois et sa note va au contexte volatil (T4),
+jamais au préfixe. Le hook de message reçoit le texte (`input = "text"`) : il laisse
+passer « bonjour », et retient « supprime tout le dépôt » : aucun appel au modèle, le
+motif revient au propriétaire. Le second message de la session ne relance pas le hook
+d'ouverture. Le monde après : le journal des hooks."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "hooks_journal"
+sql = "SELECT json_extract(payload, '$.name'), json_extract(payload, '$.event'), json_extract(payload, '$.verdict') FROM events WHERE kind = 'hook.ran' ORDER BY seq"
+
+[[files]]
+root = "hooks"
+path = "ouverture.toml"
+content = """
+on = "session_start"
+command = "sh"
+args = ["-c", "echo 'Le dépôt est à jour (git fetch fait à l’ouverture).'"]
+timeout = "10s"
+"""
+
+[[files]]
+root = "hooks"
+path = "garde-message.toml"
+content = """
+on = "prompt_submit"
+input = "text"
+command = "sh"
+args = ["-c", "input=$(cat); case \\"$input\\" in *'supprime tout'*) echo '{\\"verdict\\":\\"block\\",\\"reason\\":\\"ce message demande une suppression totale\\"}'; exit 2;; esac; exit 0"]
+timeout = "10s"
+"""
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "bonjour" }
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "supprime tout le dépôt" }

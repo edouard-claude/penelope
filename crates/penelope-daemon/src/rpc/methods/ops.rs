@@ -149,6 +149,11 @@ impl Rpc {
             }
             method::USAGE => {
                 let by = p.get("by").and_then(|b| b.as_str()).unwrap_or("session");
+                if by == "hook" {
+                    let (sess, since) = (p["session"].as_str(), p["since"].as_str());
+                    let limit = p["limit"].as_i64().unwrap_or(20).clamp(1, 500);
+                    return penelope_ops::hook_usage::report(s, sess, since, limit).await;
+                }
                 if !penelope_kernel::budget::USAGE_AXES.contains(&by) {
                     anyhow::bail!(
                         "axe inconnu `{by}` : {}",

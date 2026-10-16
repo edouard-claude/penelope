@@ -131,15 +131,8 @@ pub fn parse(name: &str, raw: &str) -> Result<Hook, String> {
 /// Les règles d'une déclaration : un événement servi, une commande, aucun secret hors de
 /// `env`.
 pub fn validate(hook: &Hook) -> Result<(), String> {
-    if !matches!(hook.on, Event::PostTool | Event::PreTool | Event::TurnEnd) {
-        return Err(format!(
-            "événement `{}` pas encore servi (lot 4 de l'épopée #386) : `pre_tool`, \
-             `post_tool` et `turn_end` le sont",
-            serde_json::to_value(hook.on)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default()
-        ));
+    if hook.input == super::Input::Text && hook.on != Event::PromptSubmit {
+        return Err("`input = \"text\"` n'a de sens que pour `prompt_submit`".into());
     }
     if hook.command.trim().is_empty() {
         return Err("`command` est vide".into());

@@ -116,10 +116,11 @@ fn a_declaration_is_read_from_its_file_and_its_rules_hold() {
     assert_eq!(h.name, "fmt");
     assert_eq!(h.timeout, Duration::from_secs(90));
     assert_eq!(h.args, vec!["fmt", "--check", "--", "{file}"]);
+    assert!(parse("fmt", &FMT.replace("post_tool", "session_start")).is_ok());
     assert!(
-        parse("fmt", &FMT.replace("post_tool", "session_start"))
+        parse("fmt", &format!("{FMT}\ninput = \"text\""))
             .unwrap_err()
-            .contains("pas encore servi")
+            .contains("prompt_submit")
     );
     assert!(parse("fmt", &FMT.replace("post_tool", "pre_tool")).is_ok());
     assert!(
@@ -161,7 +162,7 @@ fn a_field_is_edited_only_into_a_valid_declaration() {
     assert_eq!(h.args, vec!["--check"]);
     let h = edit(dir.path(), "fmt", "timeout", serde_json::json!("30s")).unwrap();
     assert_eq!(h.timeout, Duration::from_secs(30));
-    assert!(edit(dir.path(), "fmt", "on", serde_json::json!("prompt_submit")).is_err());
+    assert!(edit(dir.path(), "fmt", "on", serde_json::json!("ailleurs")).is_err());
     // Refusé : le fichier n'a pas bougé.
     assert_eq!(
         parse(

@@ -111,6 +111,7 @@ impl NativeToolExecutor {
             args: Some(args),
             result: Some(&outcome.text),
             answer: None,
+            prompt: None,
             workspaces: &workspaces,
             workspace,
             file,

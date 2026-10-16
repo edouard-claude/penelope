@@ -341,7 +341,7 @@ mod args;
 mod defs;
 mod hook_exec;
 mod hook_gate;
-pub use hook_gate::ExecHookGate;
+pub use hook_gate::{BeforeTurn, ExecHookGate};
 mod meta;
 mod post_hooks;
 mod precheck;
