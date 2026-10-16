@@ -189,7 +189,7 @@ impl Rpc {
             }
             method::SCHEDULE_RUN_NOW => {
                 let id = required_str(p, "id")?;
-                let ports = self.daemon.hooks.scheduler();
+                let ports = self.daemon.slots.scheduler();
                 penelope_orchestrator::scheduler::run_now(&context_of(&self.daemon), &ports, &id)
                     .await
             }

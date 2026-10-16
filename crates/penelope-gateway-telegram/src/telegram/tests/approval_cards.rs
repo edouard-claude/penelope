@@ -130,7 +130,7 @@ async fn an_impossible_oauth_authorization_is_explained() {
     .unwrap();
     let _ = declare;
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     g.send_oauth_card(OWNER, None, "absent").await.unwrap();
     g.send_oauth_card(OWNER, None, "clair").await.unwrap();
     g.flush_outbox().await.unwrap();

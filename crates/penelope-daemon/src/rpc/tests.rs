@@ -239,7 +239,7 @@ async fn mcp_servers_are_administered_over_rpc() {
         )]))),
     );
     let sup = penelope_mcp_host::testing::supervisor(r.daemon.services.clone(), fake.clone());
-    r.daemon.hooks.set_mcp(sup.clone());
+    r.daemon.slots.set_mcp(sup.clone());
 
     let toml = "command = \"/opt/mcp/forge\"\ntimeout = \"20s\"\n";
     let tested = call(&r, method::MCP_TEST, json!({"toml": toml, "name": "forge"})).await;

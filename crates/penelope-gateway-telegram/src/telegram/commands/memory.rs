@@ -42,11 +42,11 @@ impl TelegramGateway {
         };
         // Une passe peut prendre une minute : le bilan arrive quand il est prêt.
         self.react(chat_id, message_id, reaction::RECEIVED);
-        let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+        let (daemon, messenger) = (d.clone(), d.slots.messenger());
         let dry_run = args.contains("dry");
         tokio::spawn(async move {
             let text =
-                match penelope_dream::dream::run(&daemon.dream(), &daemon.hooks.messenger, dry_run)
+                match penelope_dream::dream::run(&daemon.dream(), &daemon.slots.messenger, dry_run)
                     .await
                 {
                     Ok(o) => format!(

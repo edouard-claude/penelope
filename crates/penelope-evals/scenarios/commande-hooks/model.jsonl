@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_write", "arguments": {"path": "src/b.rs", "content": "// TODO : fonction b\nfn b() {}\n"}}]}}
+{"text": "Le hook `todo` a bloqué l'écriture : il reste un TODO dans src/b.rs."}

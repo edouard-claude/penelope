@@ -404,7 +404,7 @@ impl TelegramGateway {
         let d = &self.daemon;
         let here = back_of(name, args);
         let screen: Screen = {
-            let Some(sup) = d.hooks.mcp_supervisor() else {
+            let Some(sup) = d.slots.mcp_supervisor() else {
                 return Ok(Screen::new("Aucun serveur MCP chargé."));
             };
             match args["server"].as_str() {

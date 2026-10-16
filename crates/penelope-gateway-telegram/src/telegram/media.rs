@@ -179,7 +179,7 @@ impl TelegramGateway {
         let daemon = self.daemon.clone();
         tokio::spawn(async move {
             let dedup = Some(format!("tg:{update_id}"));
-            let messenger = daemon.hooks.messenger();
+            let messenger = daemon.slots.messenger();
             let say = |text: String| {
                 let (m, o) = (messenger.clone(), origin.clone());
                 async move {

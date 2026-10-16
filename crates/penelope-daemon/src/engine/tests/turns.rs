@@ -574,7 +574,7 @@ async fn the_plan_gauge_alerts_once_per_window() {
         .await
         .unwrap();
     assert!(
-        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.slots.messenger())
             .await
             .unwrap()
             .is_none()
@@ -584,7 +584,7 @@ async fn the_plan_gauge_alerts_once_per_window() {
     penelope_ops::codex_quota::store(s, &quota(81.0, 1_790_000_000))
         .await
         .unwrap();
-    let first = penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
+    let first = penelope_ops::codex_quota::check_alert(&d.services, d.slots.messenger())
         .await
         .unwrap()
         .expect("alerte");
@@ -594,7 +594,7 @@ async fn the_plan_gauge_alerts_once_per_window() {
         .await
         .unwrap();
     assert!(
-        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.slots.messenger())
             .await
             .unwrap()
             .is_none(),
@@ -606,7 +606,7 @@ async fn the_plan_gauge_alerts_once_per_window() {
         .await
         .unwrap();
     assert!(
-        penelope_ops::codex_quota::check_alert(&d.services, d.hooks.messenger())
+        penelope_ops::codex_quota::check_alert(&d.services, d.slots.messenger())
             .await
             .unwrap()
             .is_some()

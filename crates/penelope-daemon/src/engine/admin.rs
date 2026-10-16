@@ -43,7 +43,7 @@ impl penelope_executor::selfknow::Admin for Core {
         args: &Value,
     ) -> Result<Value, String> {
         let (s, p) = (&self.services, self.providers.as_ref());
-        penelope_executor::voice::tool(s, p, self.hooks.messenger(), session_id, origin, args).await
+        penelope_executor::voice::tool(s, p, self.slots.messenger(), session_id, origin, args).await
     }
 
     async fn memory_search(&self) -> Value {
@@ -53,7 +53,7 @@ impl penelope_executor::selfknow::Admin for Core {
     }
 
     async fn mcp_servers(&self) -> Value {
-        let Some(sup) = self.hooks.mcp_supervisor() else {
+        let Some(sup) = self.slots.mcp_supervisor() else {
             return json!("superviseur MCP non démarré");
         };
         json!({

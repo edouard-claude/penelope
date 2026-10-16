@@ -274,16 +274,106 @@ pub async fn exec(
         cancel,
         env,
     } = opts;
-    use penelope_platform::ProcessHost;
 
     check_command(command)?;
     let (program, mut args) = shell.unwrap_or_else(penelope_platform::process::default_shell);
     args.push(command.to_string());
+    spawn_and_wait(
+        host,
+        &program,
+        &args,
+        Run {
+            profile,
+            cwd,
+            timeout,
+            max_output_bytes,
+            cancel,
+            env,
+            input: None,
+        },
+    )
+    .await
+}
 
-    let mut spec = penelope_platform::ProcessSpec::new(program).args(args);
+/// Lance `program` avec `args` **sans shell** (#382) : chaque argument arrive tel quel,
+/// aucun analyseur n'interprète `$`, `;` ou des guillemets. Même bac à sable, mêmes
+/// bornes et même ramassage des processus que [`exec`] ; `opts.shell` est ignoré.
+pub async fn exec_argv(
+    host: &penelope_platform::UnixProcessHost,
+    program: &str,
+    args: &[String],
+    opts: ExecOptions<'_>,
+) -> ToolResult<ShellOutput> {
+    exec_argv_with_input(host, program, args, opts, None).await
+}
+
+/// [`exec_argv`] avec `input` écrit sur l'entrée standard puis fermée (#383 : le contexte
+/// d'un hook, en JSON).
+pub async fn exec_argv_with_input(
+    host: &penelope_platform::UnixProcessHost,
+    program: &str,
+    args: &[String],
+    opts: ExecOptions<'_>,
+    input: Option<Vec<u8>>,
+) -> ToolResult<ShellOutput> {
+    let ExecOptions {
+        profile,
+        cwd,
+        timeout,
+        max_output_bytes,
+        cancel,
+        env,
+        ..
+    } = opts;
+    spawn_and_wait(
+        host,
+        program,
+        args,
+        Run {
+            profile,
+            cwd,
+            timeout,
+            max_output_bytes,
+            cancel,
+            env,
+            input,
+        },
+    )
+    .await
+}
+
+/// Ce que [`exec`] et [`exec_argv`] partagent, une fois le programme choisi.
+struct Run<'a> {
+    profile: Option<&'a penelope_platform::Profile>,
+    cwd: Option<&'a Path>,
+    timeout: std::time::Duration,
+    max_output_bytes: usize,
+    cancel: Option<&'a penelope_llm::CancelToken>,
+    env: Vec<(String, String)>,
+    /// Écrit sur l'entrée standard, puis fermée ; `None` : pas d'entrée.
+    input: Option<Vec<u8>>,
+}
+
+async fn spawn_and_wait(
+    host: &penelope_platform::UnixProcessHost,
+    program: &str,
+    args: &[String],
+    run: Run<'_>,
+) -> ToolResult<ShellOutput> {
+    use penelope_platform::ProcessHost;
+    let Run {
+        profile,
+        cwd,
+        timeout,
+        max_output_bytes,
+        cancel,
+        env,
+        input,
+    } = run;
+    let mut spec = penelope_platform::ProcessSpec::new(program).args(args.iter().cloned());
     spec.inherit_env
         .extend(SHELL_EXTRA_ENV.iter().map(|k| k.to_string()));
-    spec.stdin = false;
+    spec.stdin = input.is_some();
     for (k, v) in env {
         spec = spec.env(k, v);
     }
@@ -300,6 +390,16 @@ pub async fn exec(
         .spawn(spec, profile)
         .await
         .map_err(|e| ToolError::Io(e.to_string()))?;
+
+    // L'entrée part dans une tâche à part : un programme qui écrit avant de tout lire ne
+    // bloque pas l'écriture.
+    if let (Some(bytes), Some(mut stdin)) = (input, child.inner.stdin.take()) {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(&bytes).await;
+            let _ = stdin.shutdown().await;
+        });
+    }
 
     // Sorties lues en continu sous plafond : une commande bavarde ne fait plus monter la
     // mémoire du daemon de la taille de sa sortie (issue #65).

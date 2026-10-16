@@ -84,7 +84,7 @@ async fn an_owner_fact_noted_without_citation_is_kept() {
                 {{"op": "add_entry", "candidat": {guess}, "file": "memoire.md",
                  "text": "Le propriétaire est indisponible avant midi", "importance": 5}}]}}"#
     ));
-    let o = penelope_dream::dream::run(&d.dream(), &d.hooks.messenger, false)
+    let o = penelope_dream::dream::run(&d.dream(), &d.slots.messenger, false)
         .await
         .unwrap();
 

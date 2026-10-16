@@ -1,0 +1,10 @@
+{
+  "method": "hooks.show",
+  "params": {},
+  "response": {
+    "error": {
+      "code": -32602,
+      "message": "string"
+    }
+  }
+}

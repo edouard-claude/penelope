@@ -104,6 +104,9 @@ pub enum Command {
     /// Missions : une session qui travaille d'une traite jusqu'à son critère de fin (#364).
     #[command(subcommand)]
     Mission(MissionCmd),
+    /// Hooks de cycle de vie du propriétaire, `hooks.d/` (#383).
+    #[command(subcommand)]
+    Hooks(HooksCmd),
     /// Configuration.
     #[command(subcommand)]
     Config(ConfigCmd),
@@ -345,6 +348,33 @@ pub enum HistoryCmd {
 pub enum StoreCmd {
     /// Reconstruit l'index plein texte et l'index mémoire, vérifie l'audit.
     Rebuild,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HooksCmd {
+    /// Les hooks chargés et les fichiers invalides.
+    List,
+    /// Une déclaration et son fichier.
+    Show { name: String },
+    /// Lance un hook sur une entrée synthétique, sans rien journaliser.
+    Test {
+        name: String,
+        /// Outil simulé (`fs_edit` par défaut).
+        #[arg(long)]
+        tool: Option<String>,
+        /// Fichier simulé, relatif au workspace.
+        #[arg(long)]
+        file: Option<String>,
+        /// Fichier dont le contenu tient lieu de résultat de l'outil.
+        #[arg(long)]
+        result: Option<std::path::PathBuf>,
+    },
+    /// Modifie un champ (une valeur seule, ou du JSON pour une liste).
+    Edit {
+        name: String,
+        field: String,
+        value: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

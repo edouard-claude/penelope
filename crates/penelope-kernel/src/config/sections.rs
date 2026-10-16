@@ -494,6 +494,7 @@ pub fn default_deny_read() -> Vec<String> {
         "{data}/penelope.db",
         "{data}/secrets.enc",
         "{data}/mcp.d",
+        "{data}/hooks.d",
         "{config}",
         "{state}",
     ]

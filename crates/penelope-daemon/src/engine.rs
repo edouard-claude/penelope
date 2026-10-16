@@ -115,7 +115,7 @@ impl Daemon {
                 penelope_conversation::titles::spawn(
                     self.services.clone(),
                     self.providers.clone(),
-                    self.hooks.delivery(),
+                    self.slots.delivery(),
                     turn.session_id.clone(),
                     said.to_string(),
                     answer.clone(),
@@ -220,7 +220,7 @@ impl Daemon {
         };
 
         // 4. Prompt et transcript.
-        let mcp_lines = match self.hooks.mcp() {
+        let mcp_lines = match self.slots.mcp() {
             Some(m) => m.server_lines().await,
             None => Vec::new(),
         };
@@ -272,7 +272,7 @@ impl Daemon {
                 context: crate::compaction::context_of(self),
                 turn_id: Some(origin_turn.clone()),
             }));
-        let inbox = TurnInbox::for_turn(&s, turn, self.hooks.delivery(), &cancel);
+        let inbox = TurnInbox::for_turn(&s, turn, self.slots.delivery(), &cancel);
 
         // 5. Outils.
         let exec = self
@@ -288,7 +288,7 @@ impl Daemon {
             tools: tools_on_demand::turn_tools(
                 &s,
                 &turn.session_id,
-                self.hooks.mcp().as_deref(),
+                self.slots.mcp().as_deref(),
                 boundary,
             )
             .await,
@@ -422,9 +422,9 @@ impl Core {
             },
         );
         exec.admin = Some(self.clone() as Arc<dyn penelope_executor::selfknow::Admin>);
-        exec.messenger = self.hooks.messenger();
-        exec.mcp = self.hooks.mcp();
-        exec.orchestrator = self.hooks.orchestrator();
+        exec.messenger = self.slots.messenger();
+        exec.mcp = self.slots.mcp();
+        exec.orchestrator = self.slots.orchestrator();
         exec
     }
 }

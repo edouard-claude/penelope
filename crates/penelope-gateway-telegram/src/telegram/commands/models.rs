@@ -350,7 +350,7 @@ impl TelegramGateway {
         // L'audit relit toute la mémoire : détaché (issue #69).
         let (me, d2) = (self.clone(), d.clone());
         tokio::spawn(async move {
-            let note = match penelope_vault::mem_audit::run(&d2.services, d2.hooks.mcp_supervisor())
+            let note = match penelope_vault::mem_audit::run(&d2.services, d2.slots.mcp_supervisor())
                 .await
             {
                 Ok(a) => penelope_vault::mem_audit::summary(&a),

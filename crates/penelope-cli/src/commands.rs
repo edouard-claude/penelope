@@ -10,9 +10,9 @@ use approval_stats::ApprovalsCmd;
 #[cfg(test)]
 use clap::Parser;
 pub use cli::{
-    AuditCmd, BackupCmd, Cli, Command, ConfigCmd, HistoryCmd, ImportCmd, LocalCmd, McpCmd, MemCmd,
-    MissionCmd, ModelCmd, ProfileCmd, ScheduleCmd, SecretCmd, SessionCmd, SkillCmd, StoreCmd,
-    VaultCmd, WfCmd,
+    AuditCmd, BackupCmd, Cli, Command, ConfigCmd, HistoryCmd, HooksCmd, ImportCmd, LocalCmd,
+    McpCmd, MemCmd, MissionCmd, ModelCmd, ProfileCmd, ScheduleCmd, SecretCmd, SessionCmd, SkillCmd,
+    StoreCmd, VaultCmd, WfCmd,
 };
 use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
@@ -164,6 +164,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         }
         Command::Session(SessionCmd::Compact { .. })
         | Command::Mission(_)
+        | Command::Hooks(_)
         | Command::Mem(MemCmd::Dream { .. })
         | Command::Mem(MemCmd::Diff { .. })
         | Command::Mem(MemCmd::Reclaim { .. })

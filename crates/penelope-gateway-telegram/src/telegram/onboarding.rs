@@ -100,7 +100,7 @@ impl TelegramGateway {
         let (i, total) = sitting.position(q.n);
         let mut hint = q.hint.to_string();
         if q.n == 4
-            && let Some(sup) = d.hooks.mcp_supervisor()
+            && let Some(sup) = d.slots.mcp_supervisor()
         {
             let servers: Vec<String> = sup.statuses().await.into_iter().map(|st| st.name).collect();
             if !servers.is_empty() {

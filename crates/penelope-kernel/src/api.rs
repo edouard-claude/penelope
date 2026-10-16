@@ -116,6 +116,11 @@ pub mod method {
     pub const CHAT_STREAM: &str = "chat.stream";
     pub const CHAT_STOP: &str = "chat.stop";
 
+    pub const HOOKS_LIST: &str = "hooks.list";
+    pub const HOOKS_SHOW: &str = "hooks.show";
+    pub const HOOKS_TEST: &str = "hooks.test";
+    pub const HOOKS_EDIT: &str = "hooks.edit";
+
     pub const MISSION_START: &str = "mission.start";
     pub const MISSION_STATUS: &str = "mission.status";
     pub const MISSION_STOP: &str = "mission.stop";
@@ -293,6 +298,10 @@ pub mod method {
         MISSION_START,
         MISSION_STATUS,
         MISSION_STOP,
+        HOOKS_LIST,
+        HOOKS_SHOW,
+        HOOKS_TEST,
+        HOOKS_EDIT,
         SESSION_PROJECT,
         SESSION_BUDGET,
         CONFIG_GET,

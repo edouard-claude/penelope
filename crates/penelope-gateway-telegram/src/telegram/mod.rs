@@ -189,7 +189,7 @@ impl TelegramGateway {
 
     /// Branche la passerelle dans le daemon (messages, livraison).
     pub fn register(self: &Arc<Self>) {
-        let hooks = &self.daemon.hooks;
+        let hooks = &self.daemon.slots;
         if let Ok(mut g) = hooks.messenger.write() {
             *g = Some(self.clone());
         }
@@ -606,7 +606,7 @@ impl TelegramGateway {
                 // Le compte rendu part dans le sujet d'où elle vient (issue #320).
                 let note = match penelope_mcp_host::auth::complete(s, &text).await {
                     Ok(server) => {
-                        let mcp = self.daemon.hooks.mcp_supervisor();
+                        let mcp = self.daemon.slots.mcp_supervisor();
                         penelope_mcp_host::auth::reconnect(mcp, &server).await
                     }
                     Err(e) => format!("🔐 Autorisation impossible : {e}"),

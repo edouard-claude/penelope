@@ -271,6 +271,7 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Foyer du propriétaire (#143) : là où arrivent les avis sans session.
     checks.push(home_check(s));
+    checks.extend(hooks_checks(s));
 
     // Fournisseur Codex : connexion, jetons, périmètre, identité empruntée (#142).
     checks.extend(codex_checks(s).await);
@@ -313,3 +314,26 @@ pub fn render(checks: &[DoctorCheck]) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// `hooks.d/` (#383) : les hooks chargés, et un échec par fichier refusé.
+fn hooks_checks(s: &Services) -> Vec<DoctorCheck> {
+    let loaded = s.hooks.current();
+    let mut out = vec![DoctorCheck::ok(
+        "hooks",
+        "Hooks de cycle de vie",
+        format!(
+            "{} hook(s) dans {}",
+            loaded.hooks.len(),
+            s.hooks.dir().display()
+        ),
+    )];
+    for (file, error) in &loaded.invalid {
+        out.push(DoctorCheck::fail(
+            &format!("hooks.invalid.{file}"),
+            &format!("Hook `{file}`"),
+            error,
+            Some(format!("corriger {}/{file}.toml", s.hooks.dir().display())),
+        ));
+    }
+    out
+}

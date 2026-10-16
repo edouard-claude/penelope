@@ -29,7 +29,7 @@ impl Gateway for Probe {
 
     async fn start(self: Arc<Self>) -> Result<Vec<tokio::task::JoinHandle<()>>, String> {
         let owner = self.d.services.elicitations.reachable();
-        let mcp = self.d.hooks.mcp_supervisor().is_some();
+        let mcp = self.d.slots.mcp_supervisor().is_some();
         *self.seen.lock().unwrap() = Some((owner, mcp));
         self.d.handle.shutdown();
         Ok(Vec::new())

@@ -73,6 +73,7 @@ impl NativeToolExecutor {
             }
             "fs_write" => {
                 let p = self.path_arg(args, "path")?;
+                self.refuse_hooks_d(&p)?;
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
                 let content = str_arg(args, "content")?;
@@ -86,6 +87,7 @@ impl NativeToolExecutor {
             }
             "fs_edit" => {
                 let p = self.path_arg(args, "path")?;
+                self.refuse_hooks_d(&p)?;
                 let new = str_arg(args, "new")?;
                 vault_write_filter(args, &new)?;
                 let lock = self.locks.for_path(&p);
@@ -103,6 +105,20 @@ impl NativeToolExecutor {
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// `hooks.d/` est au propriétaire (#383) : un hook écrit par l'agent passerait outre la
+    /// politique du shell, même si un workspace configuré englobe le dossier de données.
+    fn refuse_hooks_d(&self, path: &Path) -> ToolResult<()> {
+        let dir = canonical_workspace(&self.services.platform.dirs.hooks_d());
+        if canonical_workspace(path).starts_with(&dir) || path.starts_with(&dir) {
+            return Err(ToolError::Denied(format!(
+                "`{}` est dans hooks.d/ : les hooks sont déclarés par le propriétaire \
+                 (`penelope hooks edit`), jamais écrits par un outil",
+                path.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Hook après édition (#366) : la commande `--hook` de la mission en cours, jointe au
@@ -135,6 +151,16 @@ impl NativeToolExecutor {
                 json!({"skipped": "chemin avec un caractère spécial du shell : hook non lancé"});
             return;
         };
+        // Le moteur de hooks (#382) : la ligne de `--hook` reste une ligne de shell,
+        // la seule à l'être (`Hook::mission`), le résultat sous `hook` est inchangé.
+        let hook = penelope_tools::hooks::Hook::mission(&command);
+        let rendered = match hook.render(&penelope_tools::hooks::Vars::default()) {
+            Ok(r) => r,
+            Err(e) => {
+                v["hook"] = json!({"skipped": e});
+                return;
+            }
+        };
         let cfg = s.config.config();
         let profile = penelope_tools::shell::profile_with_denied_reads(
             &cfg.sandbox.default_profile,
@@ -142,28 +168,16 @@ impl NativeToolExecutor {
             false,
             &denied_reads(s),
         );
-        let out = penelope_tools::shell::exec(
+        v["hook"] = match penelope_tools::hooks::run(
             &s.platform.processes,
-            &command,
-            penelope_tools::shell::ExecOptions {
-                profile: Some(&profile),
-                cwd: Some(&dir),
-                timeout: std::time::Duration::from_secs(120),
-                max_output_bytes: 64 * 1024,
-                shell: shell_override(&cfg.tools.shell),
-                ..Default::default()
-            },
+            &hook,
+            &rendered,
+            &profile,
+            &dir,
         )
-        .await;
-        v["hook"] = match out {
-            Ok(o) if o.exit_code == 0 => json!({"command": command, "exitCode": 0}),
-            Ok(o) => {
-                let text = format!("{}{}", o.stdout, o.stderr);
-                let chars: Vec<char> = text.chars().collect();
-                let tail: String = chars[chars.len().saturating_sub(4_000)..].iter().collect();
-                json!({"command": command, "exitCode": o.exit_code, "output": tail,
-                    "note": "le hook échoue après cette édition : corrige avant de continuer"})
-            }
+        .await
+        {
+            Ok(o) => penelope_tools::hooks::note_of(&command, &o),
             Err(e) => json!({"command": command, "error": e.to_string()}),
         };
     }

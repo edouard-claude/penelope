@@ -45,7 +45,7 @@ pub type CardsOf = fn(&Path, penelope_store::Store) -> Arc<dyn Cards>;
 #[derive(Default, Clone)]
 pub struct Channel {
     pub cards: Slot<dyn Cards>,
-    /// Livraison des tours et destinations : le même `Slot` que `Hooks::delivery` du
+    /// Livraison des tours et destinations : le même `Slot` que `Slots::delivery` du
     /// daemon, pour que ce qui ne tient que `Services` (planifications) le voie.
     pub delivery: Slot<dyn ChannelDelivery>,
 }

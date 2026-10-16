@@ -125,7 +125,7 @@ impl TelegramGateway {
                     (_, Some(tag)) => json!({"tag": tag}),
                     _ => json!({}),
                 };
-                let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+                let (daemon, messenger) = (d.clone(), d.slots.messenger());
                 tokio::spawn(async move {
                     let rpc = penelope_daemon::rpc::Rpc::new(daemon);
                     let text = match rpc.call(m::UPGRADE, params).await {
@@ -145,7 +145,7 @@ impl TelegramGateway {
             "prompt.run" => {
                 let (server, prompt) = (str_of("server"), str_of("prompt"));
                 let sup = d
-                    .hooks
+                    .slots
                     .mcp_supervisor()
                     .ok_or_else(|| anyhow::anyhow!("aucun serveur MCP chargé"))?;
                 let listed = sup
@@ -354,7 +354,7 @@ impl TelegramGateway {
                                 Ok(i) => i.report(),
                                 Err(e) => format!("📄 Ingestion impossible : {e}"),
                             };
-                            if let Some(m) = daemon.hooks.messenger() {
+                            if let Some(m) = daemon.slots.messenger() {
                                 let _ = m.send_text(&chan, &note).await;
                             }
                         });

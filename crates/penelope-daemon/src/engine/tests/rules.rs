@@ -730,7 +730,7 @@ async fn the_model_reaches_mcp_tools_through_the_supervisor() {
     let sup = penelope_mcp_host::testing::supervisor(d.services.clone(), fake.clone());
     declare(&sup, "redmine", "[tool_policy]\ndelete_issue = \"deny\"\n");
     sup.reload().await;
-    d.hooks.set_mcp(sup.clone());
+    d.slots.set_mcp(sup.clone());
 
     let sid = d.chat_session_for(&Origin::Cli).await.unwrap();
     d.pin_model(&sid, Some("main")).await.unwrap();

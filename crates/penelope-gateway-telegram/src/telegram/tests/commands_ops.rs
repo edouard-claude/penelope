@@ -202,7 +202,7 @@ async fn mcp_subcommands_act_on_a_server() {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake);
     declare(&sup, "redmine", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     for (cmd, expected) in [
         ("/mcp test redmine", "✅ `redmine` répond"),
         ("/mcp disable redmine", "désactivé."),

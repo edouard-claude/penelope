@@ -53,6 +53,9 @@ pub struct Services {
     /// Jobs d'outils qui tournent dans ce processus (issue #204) : leur jeton
     /// d'annulation, pour que `/stop` les traverse comme il traverse un outil.
     pub jobs: Arc<crate::jobs::Running>,
+    /// Hooks de cycle de vie du propriétaire (`hooks.d/`, #383), relus quand le dossier
+    /// change.
+    pub hooks: Arc<penelope_tools::hooks::Registry>,
 }
 
 impl Services {
@@ -142,6 +145,9 @@ impl Services {
         let runs = RunStore::new(store.clone(), clock.clone());
         let schedules = ScheduleStore::new(store.clone(), clock.clone(), &cfg.owner.timezone);
 
+        let hooks = Arc::new(penelope_tools::hooks::Registry::new(
+            platform.dirs.hooks_d(),
+        ));
         Ok(Services {
             platform,
             store,
@@ -168,6 +174,7 @@ impl Services {
             schedules,
             elicitations: Arc::default(),
             jobs: Arc::default(),
+            hooks,
         })
     }
 
@@ -221,6 +228,9 @@ impl Services {
         let channel = crate::channel::Channel::default();
         let known = workflow_known(&cfg, &mcp_tools, &channel).await;
 
+        let hooks = Arc::new(penelope_tools::hooks::Registry::new(
+            platform.dirs.hooks_d(),
+        ));
         Ok(Services {
             events: events.clone(),
             effects: EffectLedger::new(store.clone(), clock.clone()),
@@ -253,6 +263,7 @@ impl Services {
             schedules: ScheduleStore::new(store.clone(), clock.clone(), "Indian/Reunion"),
             elicitations: Arc::default(),
             jobs: Arc::default(),
+            hooks,
             mcp_tools,
             context,
             catalog,

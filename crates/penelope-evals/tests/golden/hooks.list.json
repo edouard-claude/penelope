@@ -1,0 +1,12 @@
+{
+  "method": "hooks.list",
+  "params": {},
+  "response": {
+    "result": {
+      "dir": "string",
+      "hooks": [],
+      "invalid": [],
+      "text": "string"
+    }
+  }
+}

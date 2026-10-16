@@ -61,7 +61,7 @@ async fn a_scheduled_digest_is_delivered_once() {
         ));
         penelope_orchestrator::scheduler::run_now(
             &penelope_daemon::workflow::context_of(&g.daemon),
-            &g.daemon.hooks.scheduler(),
+            &g.daemon.slots.scheduler(),
             &sched.id,
         )
         .await
@@ -310,7 +310,7 @@ async fn mcp_servers_are_visible_and_restartable_from_telegram() {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     std::fs::write(sup.dir().join("casse.toml"), "transport = \"stdio\"\n").unwrap();
     sup.reload().await;
 
@@ -487,7 +487,7 @@ async fn an_mcp_server_is_restarted_from_its_menu() {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     let opened = fake.opened("redmine");
 
     g.process_update(&updates::text_message(320, OWNER, OWNER, "/mcp"))
@@ -553,7 +553,7 @@ async fn the_digest_links_to_screens_once_the_bot_is_known() {
     let digest = penelope_dream::digest_text(
         &d.dream(),
         penelope_orchestrator::scheduler::digest_inputs(&d.services).await,
-        d.hooks.mcp_supervisor(),
+        d.slots.mcp_supervisor(),
     )
     .await
     .unwrap();
@@ -715,7 +715,7 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
     p.reply("Veille du jour : deux annonces à lire.");
     penelope_orchestrator::scheduler::run_now(
         &penelope_daemon::workflow::context_of(&d),
-        &d.hooks.scheduler(),
+        &d.slots.scheduler(),
         &id,
     )
     .await
@@ -738,7 +738,7 @@ async fn a_scheduled_prompt_answers_after_new_and_warns_on_failure() {
     ));
     penelope_orchestrator::scheduler::run_now(
         &penelope_daemon::workflow::context_of(&d),
-        &d.hooks.scheduler(),
+        &d.slots.scheduler(),
         &id,
     )
     .await

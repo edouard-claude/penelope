@@ -72,8 +72,8 @@ async fn inventory_section(
                 .map(|k| json!({"name": k.name, "description": k.description, "scope": k.scope.as_str()}))
                 .collect::<Vec<_>>()
         ),
-        "tools" => json!(
-            penelope_tools::all_tools()
+        "tools" => json!({
+            "native": penelope_tools::all_tools()
                 .iter()
                 .map(|t| json!({
                     "name": t.name,
@@ -81,8 +81,12 @@ async fn inventory_section(
                     "risk": t.risk.as_str(),
                     "workflow_only": t.workflow_only,
                 }))
-                .collect::<Vec<_>>()
-        ),
+                .collect::<Vec<_>>(),
+            // Les hooks du propriétaire et leurs événements (#383).
+            "hooks": s.hooks.current().hooks.iter()
+                .map(|h| json!({"name": h.name, "on": h.on, "match": h.matcher}))
+                .collect::<Vec<_>>(),
+        }),
         "mcp" => match admin {
             Some(a) => a.mcp_servers().await,
             None => Value::Null,
@@ -586,12 +590,14 @@ mod tests {
             assert!(all.get(part).is_some(), "{part}");
         }
         assert!(
-            all["tools"]
+            all["tools"]["native"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|t| t["name"] == "self_docs")
         );
+        // Les hooks du propriétaire ont leur liste à côté (#383), vide ici.
+        assert!(all["tools"]["hooks"].as_array().unwrap().is_empty());
         // Les commandes sont celles du canal branché : aucune ici (la passerelle vérifie
         // sa liste, T36).
         assert_eq!(all["commands"], json!([]));

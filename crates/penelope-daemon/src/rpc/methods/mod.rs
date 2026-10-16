@@ -25,6 +25,7 @@ impl Rpc {
             "chat" | "tail" => self.chat(method, p).await,
             "session" | "export" => self.sessions(method, p).await,
             "mission" => self.missions(method, p).await,
+            "hooks" => penelope_app::hook_admin::rpc(self.services(), method, p).await,
             "config" | "secret" => self.config(method, p).await,
             "model" if method == method::MODEL_AUTH => self.codex(method, p).await,
             "model" => self.models(method, p).await,

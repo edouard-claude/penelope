@@ -13,7 +13,17 @@ impl NativeToolExecutor {
         let started = std::time::Instant::now();
         let result = match self.dispatch(name, args, cancel).await {
             Err(e) => Err(self.explain(name, args, e).await),
-            Ok(o) => {
+            Ok(mut o) => {
+                // Les hooks `post_tool` du propriétaire (#383).
+                let (tool, effective) = if name == "tool_call" {
+                    (
+                        args.get("name").and_then(Value::as_str).unwrap_or(name),
+                        effective_arguments(name, args),
+                    )
+                } else {
+                    (name, args.clone())
+                };
+                self.post_tool_hooks(tool, &effective, &mut o).await;
                 // Un secret lu (fichier, sortie de commande, page) devient une valeur
                 // connue : recopié plus tard dans une commande ou un message, il est
                 // masqué partout où la rédaction passe (issue #134). Rien n'est modifié

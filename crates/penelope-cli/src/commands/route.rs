@@ -7,6 +7,32 @@ use super::*;
 pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
     Ok(match cmd {
         Command::Session(c) => session_route(c),
+        Command::Hooks(c) => match c {
+            HooksCmd::List => (m::HOOKS_LIST, json!({})),
+            HooksCmd::Show { name } => (m::HOOKS_SHOW, json!({"name": name})),
+            HooksCmd::Test {
+                name,
+                tool,
+                file,
+                result,
+            } => {
+                let result = match result {
+                    Some(p) => Some(
+                        std::fs::read_to_string(p)
+                            .map_err(|e| CliError::Usage(format!("{} : {e}", p.display())))?,
+                    ),
+                    None => None,
+                };
+                (
+                    m::HOOKS_TEST,
+                    json!({"name": name, "tool": tool, "file": file, "result": result}),
+                )
+            }
+            HooksCmd::Edit { name, field, value } => (
+                m::HOOKS_EDIT,
+                json!({"name": name, "patch": {field: parse_scalar(value)}}),
+            ),
+        },
         Command::Mission(c) => match c {
             MissionCmd::Start {
                 goal,

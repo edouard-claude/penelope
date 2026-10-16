@@ -133,7 +133,7 @@ pub struct SeedFile {
     #[serde(default = "one")]
     pub repeat: usize,
     /// Où semer : le workspace par défaut, `vault` (le vault de mémoire,
-    /// `memory.vault_path`) ou `skills` (le répertoire des skills).
+    /// `memory.vault_path`), `skills` (le répertoire des skills) ou `hooks` (`hooks.d/`).
     #[serde(default)]
     pub root: SeedRoot,
 }
@@ -168,6 +168,8 @@ pub enum SeedRoot {
     Workspace,
     Vault,
     Skills,
+    /// `hooks.d/` du dossier de données (#383).
+    Hooks,
 }
 
 #[derive(Debug, Clone, Deserialize)]

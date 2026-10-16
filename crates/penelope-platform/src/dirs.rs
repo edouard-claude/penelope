@@ -62,6 +62,7 @@ pub trait Directories: Send + Sync {
             "workflows",
             "templates",
             "mcp.d",
+            "hooks.d",
             "backups",
         ] {
             std::fs::create_dir_all(data.join(sub))?;
@@ -97,6 +98,10 @@ pub trait Directories: Send + Sync {
     }
     fn mcp_d(&self) -> PathBuf {
         self.data().join("mcp.d")
+    }
+    /// Hooks de cycle de vie déclarés par le propriétaire (#383), un fichier par hook.
+    fn hooks_d(&self) -> PathBuf {
+        self.data().join("hooks.d")
     }
     fn artifacts(&self) -> PathBuf {
         self.data().join("artifacts")
@@ -315,6 +320,7 @@ mod tests {
             "data/workflows",
             "data/templates",
             "data/mcp.d",
+            "data/hooks.d",
             "data/artifacts",
             "data/backups",
             "state/runs",
