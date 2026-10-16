@@ -23,6 +23,9 @@ impl AgentLoop {
         let mut cost = 0.0f64;
         // Une réponse vide a droit à une seule relance, puis devient une erreur explicite.
         let mut empty_retry = false;
+        // Un hook `turn_end` qui retient la réponse obtient une seule relance (#384).
+        let mut hook_retried = false;
+        let mut hook_note: Option<String> = None;
         // Les tentatives sans réponse du tour, hors historique (#206).
         let attempts = Attempts::default();
         // Reprises hors boucle : une compaction sur dépassement, une relance sans images.
@@ -198,7 +201,38 @@ impl AgentLoop {
 
             // 4. Pas d'appel d'outil : c'est la réponse finale.
             if response.message.tool_calls.is_empty() {
+                // Hooks `turn_end` (#384) : un `block` relance une fois le modèle avec la
+                // note, encadrée comme donnée ; au second, la réponse part avec la note.
+                if let Some((hook, note)) = s
+                    .hooks
+                    .turn_end(
+                        &spec.session_id,
+                        spec.run_id.as_deref(),
+                        &response.message.text(),
+                    )
+                    .await
+                {
+                    if !hook_retried {
+                        hook_retried = true;
+                        let block = penelope_observe::injection::wrap_untrusted(
+                            &format!("hook {hook}"),
+                            &note,
+                        );
+                        conv.record(
+                            &ChatMessage::user(format!(
+                                "[Le hook `{hook}` retient cette réponse ; une seule relance.]\n{block}"
+                            )),
+                            false,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    hook_note = Some(format!("\n\n_Hook `{hook}` : {note}_"));
+                }
                 let mut text = response.message.text();
+                if let Some(note) = hook_note.take() {
+                    text.push_str(&note);
+                }
                 // L'image que le fournisseur a refusée n'a pas été lue : on le dit, hors
                 // historique.
                 if let Some(motif) = recovery.dropped {

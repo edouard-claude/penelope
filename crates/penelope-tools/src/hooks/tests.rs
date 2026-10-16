@@ -117,10 +117,11 @@ fn a_declaration_is_read_from_its_file_and_its_rules_hold() {
     assert_eq!(h.timeout, Duration::from_secs(90));
     assert_eq!(h.args, vec!["fmt", "--check", "--", "{file}"]);
     assert!(
-        parse("fmt", &FMT.replace("post_tool", "pre_tool"))
+        parse("fmt", &FMT.replace("post_tool", "session_start"))
             .unwrap_err()
             .contains("pas encore servi")
     );
+    assert!(parse("fmt", &FMT.replace("post_tool", "pre_tool")).is_ok());
     assert!(
         parse("fmt", &format!("{FMT}\nname = \"autre\""))
             .unwrap_err()
@@ -160,7 +161,7 @@ fn a_field_is_edited_only_into_a_valid_declaration() {
     assert_eq!(h.args, vec!["--check"]);
     let h = edit(dir.path(), "fmt", "timeout", serde_json::json!("30s")).unwrap();
     assert_eq!(h.timeout, Duration::from_secs(30));
-    assert!(edit(dir.path(), "fmt", "on", serde_json::json!("pre_tool")).is_err());
+    assert!(edit(dir.path(), "fmt", "on", serde_json::json!("prompt_submit")).is_err());
     // Refusé : le fichier n'a pas bougé.
     assert_eq!(
         parse(
@@ -192,4 +193,60 @@ fn a_hook_never_runs_wider_than_the_configuration() {
     } else {
         assert_eq!(Sandbox::WorkspaceWrite.effective("full"), "full");
     }
+}
+
+/// #384 : chaque événement a ses verdicts ; `allow` n'existe nulle part.
+#[test]
+fn decisions_follow_the_event_and_allow_never_exists() {
+    let d = |e, code, out: &str| decide(e, code, out, OnFailure::Continue);
+    assert_eq!(d(Event::PreTool, 0, ""), Decision::Continue(None));
+    assert_eq!(
+        d(
+            Event::PreTool,
+            2,
+            r#"{"verdict":"deny","reason":"pas main"}"#
+        ),
+        Decision::Deny("pas main".into())
+    );
+    assert_eq!(
+        d(Event::PreTool, 2, r#"{"verdict":"ask","reason":"infra"}"#),
+        Decision::Ask("infra".into())
+    );
+    assert!(matches!(
+        d(
+            Event::PreTool,
+            2,
+            r#"{"verdict":"args","args":{"command":"git push --force-with-lease"}}"#
+        ),
+        Decision::Args(_)
+    ));
+    assert!(matches!(
+        d(Event::PreTool, 2, r#"{"verdict":"allow"}"#),
+        Decision::Failed(_)
+    ));
+    assert!(matches!(
+        d(Event::PreTool, 2, r#"{"verdict":"block"}"#),
+        Decision::Failed(_)
+    ));
+    assert!(matches!(
+        d(
+            Event::TurnEnd,
+            2,
+            r#"{"verdict":"block","note":"cite tes sources"}"#
+        ),
+        Decision::Block(Some(_))
+    ));
+    assert!(matches!(
+        d(Event::TurnEnd, 2, r#"{"verdict":"deny"}"#),
+        Decision::Failed(_)
+    ));
+    // Un échec avec `on_failure = block` refuse l'appel avant l'outil.
+    assert!(matches!(
+        decide(Event::PreTool, 1, "boum", OnFailure::Block),
+        Decision::Deny(_)
+    ));
+    assert!(matches!(
+        decide(Event::PostTool, 1, "boum", OnFailure::Block),
+        Decision::Block(_)
+    ));
 }

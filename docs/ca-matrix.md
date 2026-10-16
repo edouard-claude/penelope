@@ -9,7 +9,7 @@ Pour le régénérer après avoir ajouté un test :
 UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 ```
 
-78 tests d'acceptation, 14 sections couvertes.
+79 tests d'acceptation, 14 sections couvertes.
 
 ## §2. Plateformes, portabilité et exploitation headless
 
@@ -100,6 +100,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 9.4 | An approved tool runs once after resume and the ledger shows it | `crates/penelope-daemon/tests/approval_e2e.rs` |
 | CA 9.5 | A denied tool is reported to the model and never runs | `crates/penelope-daemon/tests/approval_e2e.rs` |
 | CA 9.6 | A session window lets the same call pass without a new request | `crates/penelope-daemon/tests/approval_e2e.rs` |
+| CA 9.7 | Hook cannot loosen | `crates/penelope-agent/src/pipeline/policy.rs` |
 
 ## §10. LLM : providers et routage
 

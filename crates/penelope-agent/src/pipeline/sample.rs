@@ -41,6 +41,7 @@ fn layer_name(layer: &VerdictLayer) -> &'static str {
         VerdictLayer::SessionMode => "mode_session",
         VerdictLayer::SensitiveConfig => "reglage_sensible",
         VerdictLayer::Judge => "juge",
+        VerdictLayer::Hook { .. } => "hook",
     }
 }
 

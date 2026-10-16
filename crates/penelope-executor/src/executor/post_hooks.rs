@@ -8,14 +8,12 @@
 //! Bornes : 8 hooks par événement, 2 minutes cumulées par appel d'outil.
 
 use super::*;
-use penelope_tools::hooks::{Deliver, Event, Hook, OnFailure, Vars};
+use penelope_tools::hooks::{Deliver, Event, Hook};
 
 /// Hooks lancés au plus par événement d'un appel.
 const MAX_PER_EVENT: usize = 8;
 /// Temps cumulé des hooks d'un appel.
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
-/// Résultat d'outil passé au hook sur son entrée, en caractères.
-const RESULT_CHARS: usize = 8_000;
 
 /// Ce qu'un hook a rendu.
 struct Ran {
@@ -102,91 +100,34 @@ impl NativeToolExecutor {
         file: Option<&str>,
         left: std::time::Duration,
     ) -> Ran {
-        let s = &self.services;
+        use penelope_tools::hooks::Decision;
         let t0 = std::time::Instant::now();
-        let fail = |why: String| (hook.on_failure, why);
-        let result: Result<(i32, String), (OnFailure, String)> = async {
-            // Une commande prise dans un workspace pourrait être écrite par l'agent : elle
-            // est résolue comme au lancement (PATH, chemin réel) avant d'être jugée.
-            if let Some(why) = command_in_workspace(&hook.command, &self.workspaces()) {
-                return Err(fail(why));
-            }
-            let vars = Vars {
-                file: file.map(String::from),
-                workspace: workspace.map(|w| w.to_string_lossy().to_string()),
-                session: Some(self.env.session_id.clone()),
-                tool: Some(tool.to_string()),
-                data: Some(s.platform.dirs.data().to_string_lossy().to_string()),
-            };
-            let rendered = hook.render(&vars).map_err(fail)?;
-            let cwd = rendered
-                .cwd
-                .as_deref()
-                .map(PathBuf::from)
-                .or_else(|| workspace.map(Path::to_path_buf))
-                .unwrap_or_else(|| s.platform.dirs.data());
-            let mut env = Vec::new();
-            for (k, v) in &hook.env {
-                let value = s
-                    .platform
-                    .secrets
-                    .expand(v)
-                    .map_err(|e| fail(e.to_string()))?;
-                penelope_observe::register_secret(&value);
-                env.push((k.clone(), value));
-            }
-            let secrets: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
-            let profile = penelope_tools::shell::profile_with_denied_reads(
-                hook.sandbox
-                    .effective(&s.config.config().sandbox.default_profile),
-                &cwd,
-                false,
-                &denied_reads(s),
-            );
-            let text: String = outcome.text.chars().take(RESULT_CHARS).collect();
-            let input = json!({
-                "event": "post_tool",
-                "session_id": self.env.session_id,
-                "run_id": self.env.run_id,
-                "cwd": cwd,
-                "tool": {"name": tool, "args": penelope_tools::args::without_intention(args)},
-                "result": {"ok": true, "output": text},
-            });
-            let out = penelope_tools::shell::exec_argv_with_input(
-                &s.platform.processes,
-                &rendered.program,
-                &rendered.args,
-                penelope_tools::shell::ExecOptions {
-                    profile: Some(&profile),
-                    cwd: Some(&cwd),
-                    timeout: hook.timeout.min(left),
-                    max_output_bytes: penelope_tools::hooks::MAX_OUTPUT_BYTES,
-                    env,
-                    ..Default::default()
-                },
-                Some(input.to_string().into_bytes()),
-            )
-            .await
-            .map_err(|e| fail(e.to_string()))?;
-            // Un secret passé par `env` ne ressort ni au modèle ni dans une carte.
-            let mut text = format!("{}{}", out.stdout, out.stderr);
-            for secret in secrets.iter().filter(|v| v.len() >= 4) {
-                text = text.replace(secret.as_str(), "‹secret›");
-            }
-            Ok((out.exit_code, penelope_observe::redact::redact(&text)))
-        }
-        .await;
-        let ms = t0.elapsed().as_millis() as u64;
-        let (verdict, exit_code, note) = match result {
-            Ok((code, out)) => {
-                let (verdict, note) =
-                    penelope_tools::hooks::verdict_of(code, &out, hook.on_failure);
-                (verdict, Some(code), note)
-            }
-            Err((OnFailure::Block, why)) => ("block", None, Some(why)),
-            Err((OnFailure::Continue, why)) => ("échec", None, Some(why)),
+        let workspaces = self.workspaces();
+        let launch = super::hook_exec::Launch {
+            event: Event::PostTool,
+            session_id: &self.env.session_id,
+            run_id: self.env.run_id.as_deref(),
+            tool: Some(tool),
+            args: Some(args),
+            result: Some(&outcome.text),
+            answer: None,
+            workspaces: &workspaces,
+            workspace,
+            file,
+            left,
         };
-        self.record_hook(hook, verdict, exit_code, ms).await;
+        let launched = super::hook_exec::launch(&self.services, hook, &launch).await;
+        let ms = t0.elapsed().as_millis() as u64;
+        let (decision, exit_code) = super::hook_exec::decision_of(Event::PostTool, hook, &launched);
+        let (verdict, note) = match decision {
+            Decision::Continue(n) => ("continue", n),
+            Decision::Block(n) => ("block", n),
+            Decision::Failed(n) => ("échec", n),
+            // Verdicts d'un autre événement : un échec de ce hook.
+            Decision::Deny(r) | Decision::Ask(r) => ("échec", Some(r)),
+            Decision::Args(_) => ("échec", Some("`args` n'existe qu'avant l'outil".into())),
+        };
+        super::hook_exec::record(&self.services, hook, &launch, verdict, exit_code, ms).await;
         Ran {
             name: hook.name.clone(),
             verdict,
@@ -194,22 +135,6 @@ impl NativeToolExecutor {
             ms,
             note,
             deliver: hook.deliver,
-        }
-    }
-
-    /// Chaque exécution est un événement du journal, jamais un effet rejoué.
-    async fn record_hook(&self, hook: &Hook, verdict: &str, exit_code: Option<i32>, ms: u64) {
-        let mut draft = penelope_kernel::event::EventDraft::new(
-            "hook.ran",
-            json!({"name": hook.name, "event": "post_tool", "verdict": verdict,
-                "exit_code": exit_code, "ms": ms}),
-        )
-        .session(&self.env.session_id);
-        if let Some(run) = &self.env.run_id {
-            draft = draft.run(run);
-        }
-        if let Err(e) = self.services.events.append(draft).await {
-            tracing::warn!(error = %e, hook = %hook.name, "exécution de hook non journalisée");
         }
     }
 
