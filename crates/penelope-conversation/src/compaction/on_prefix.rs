@@ -63,8 +63,9 @@ async fn request(d: &Context, job: &SummaryJob) -> Option<ChatRequest> {
     let tools = penelope_app::frozen_tools::frozen(s, sid).await?;
     let previous = s.budget.previous_call(sid).await.ok()??;
     // Le modèle de la dernière requête : l'abonnement ChatGPT ne sert que les tours du
-    // propriétaire (#142).
-    let model = previous.model.clone();
+    // propriétaire (#142). Identifiant complet : nu, `gpt-6.1-sol` servi par codex partait
+    // chez OpenRouter (#391).
+    let model = previous.full_model();
     if penelope_app::codex_scope::is_codex(&model) {
         return None;
     }

@@ -142,6 +142,7 @@ mod tests {
         PreviousCall {
             ts_ms,
             model: "z-ai/glm-5.3".into(),
+            provider: Some("openrouter".into()),
             upstream: Some(upstream.into()),
             msg_count: Some(n as i64),
             request_hash: fp.chain.get(n - 1).cloned(),

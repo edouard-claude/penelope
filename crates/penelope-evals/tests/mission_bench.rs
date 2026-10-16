@@ -208,7 +208,17 @@ async fn run_story(story: &Story, timeout: Duration) -> Measure {
     })
     .expect("configuration");
     let s = d.services.clone();
-    let session = format!("mission-{}", story.id);
+    // Une vraie session : le moteur refuse un identifiant qu'il ne connaît pas.
+    let session = s
+        .sessions
+        .create(
+            penelope_kernel::session::SessionKind::Chat,
+            Some(format!("mission {}", story.id)),
+        )
+        .await
+        .expect("session")
+        .id
+        .to_string();
     let mut m = Measure {
         id: story.id.clone(),
         title: story.title.clone(),
