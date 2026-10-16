@@ -78,7 +78,7 @@ ignore = "0.4"
 # --- documents (§6.13) ---
 # Sans fonctionnalités par défaut : ni `rayon` ni horloges, lecture seule.
 lopdf = { version = "0.45", default-features = false }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2"] }
 # `zip` active `flate2` **sans dorsale** : la déflation ne compile alors que si un autre
 # crate du graphe en choisit une, par unification (#146). Chaque crate qui dépend de `zip`
 # nomme donc aussi `flate2` ici, pour `rust_backend` — c'est-à-dire `miniz_oxide`, en Rust

@@ -27,6 +27,10 @@ suivant redemandait les mêmes outils Camofox (53 demandes en 17 sessions depuis
   planification (`schedule:<id>`), qui vaut pour toutes ses exécutions et pour elles
   seulement ; le bouton dit « ✅ Pour cette planification ». La règle reste visible et
   révocable dans `/policies`.
+- Dépendances : `rustls` 0.23.46 (avis RUSTSEC-2026-0346, 0347 et 0348 publiés le 16/10,
+  `cargo deny` refusait tout lot) ; `zip` 9.0.3, toutes les 8.x ayant été retirées de
+  crates.io (`name()` rend désormais un `Result` : une entrée au nom illisible est
+  ignorée à la lecture, refusée à l'installation).
 
 ### 1.0.64
 

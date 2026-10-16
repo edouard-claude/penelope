@@ -146,7 +146,9 @@ pub fn list_in_zip(bytes: &[u8]) -> Result<Vec<String>, String> {
     let mut names = BTreeSet::new();
     for i in 0..archive.len() {
         let Ok(f) = archive.by_index(i) else { continue };
-        if let Some(name) = skill_name_of(f.name()) {
+        // `zip` 9 : un nom d'entrée illisible est une erreur, l'entrée est ignorée.
+        let Ok(entry) = f.name() else { continue };
+        if let Some(name) = skill_name_of(&entry) {
             names.insert(name);
         }
     }
@@ -171,7 +173,9 @@ pub fn install_from_zip(
     let mut dirs: BTreeSet<(String, String)> = BTreeSet::new();
     for i in 0..archive.len() {
         let Ok(f) = archive.by_index(i) else { continue };
-        let name = f.name().to_string();
+        let Ok(name) = f.name().map(|n| n.to_string()) else {
+            continue;
+        };
         if let Some(skill) = skill_name_of(&name) {
             let dir = name.trim_end_matches("SKILL.md").to_string();
             dirs.insert((skill, dir));
@@ -239,7 +243,7 @@ fn install_one(
         if f.is_dir() {
             continue;
         }
-        let entry = f.name().to_string();
+        let entry = f.name().map_err(|e| format!("archive : {e}"))?.to_string();
         let Some(rel) = entry.strip_prefix(dir) else {
             continue;
         };
