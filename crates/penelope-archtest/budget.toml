@@ -148,6 +148,7 @@ required = [
     "ca_9_4_an_approved_tool_runs_once_after_resume_and_the_ledger_shows_it",
     "ca_9_5_a_denied_tool_is_reported_to_the_model_and_never_runs",
     "ca_9_6_a_session_window_lets_the_same_call_pass_without_a_new_request",
+    "ca_9_7_hook_cannot_loosen",
 ]
 
 # Frontière canal / cœur (R8 du découpage, #214) : mentions du canal (`telegram` en toute

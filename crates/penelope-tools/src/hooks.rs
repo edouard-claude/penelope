@@ -331,6 +331,63 @@ pub fn verdict_of(
     }
 }
 
+/// Ce qu'un hook décide, selon son événement (#384) : `post_tool` et `turn_end` rendent
+/// `continue` ou `block` ; `pre_tool` rend `continue`, `deny`, `ask` ou `args`. Jamais
+/// `allow` : un hook ne desserre pas (décision 0023).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decision {
+    Continue(Option<String>),
+    Block(Option<String>),
+    Deny(String),
+    Ask(String),
+    /// Nouveaux arguments, pour le même outil.
+    Args(serde_json::Value),
+    /// Échec avec `on_failure = continue` : une note, rien de plus.
+    Failed(Option<String>),
+}
+
+/// La décision d'un hook d'après son événement, son code et sa sortie.
+pub fn decide(event: Event, exit_code: i32, output: &str, on_failure: OnFailure) -> Decision {
+    let (verdict, note) = verdict_of(exit_code, output, OnFailure::Continue);
+    let failed = |note: Option<String>| match (on_failure, event) {
+        (OnFailure::Block, Event::PreTool) => {
+            Decision::Deny(note.unwrap_or_else(|| "le hook a échoué".into()))
+        }
+        (OnFailure::Block, _) => Decision::Block(note),
+        (OnFailure::Continue, _) => Decision::Failed(note),
+    };
+    if exit_code != 2 {
+        return match verdict {
+            "continue" => Decision::Continue(note),
+            _ => failed(note),
+        };
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(output.trim()).unwrap_or(serde_json::Value::Null);
+    let reason = v["reason"]
+        .as_str()
+        .or(v["note"].as_str())
+        .unwrap_or("sans motif")
+        .to_string();
+    match (event, v["verdict"].as_str()) {
+        (_, Some("continue")) => Decision::Continue(note),
+        (Event::PreTool, Some("deny")) => Decision::Deny(reason),
+        (Event::PreTool, Some("ask")) => Decision::Ask(reason),
+        (Event::PreTool, Some("args")) if v["args"].is_object() => {
+            Decision::Args(v["args"].clone())
+        }
+        (Event::PostTool | Event::TurnEnd, Some("block")) => Decision::Block(note),
+        _ => failed(Some(format!(
+            "verdict illisible pour `{}` : {}",
+            serde_json::to_value(event)
+                .ok()
+                .and_then(|e| e.as_str().map(String::from))
+                .unwrap_or_default(),
+            v["verdict"].as_str().unwrap_or("absent")
+        ))),
+    }
+}
+
 /// Lance un hook rendu, sans shell, sous le profil donné et dans `cwd`.
 pub async fn run(
     host: &penelope_platform::UnixProcessHost,

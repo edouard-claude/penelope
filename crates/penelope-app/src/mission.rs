@@ -294,6 +294,22 @@ pub async fn stop(s: &Services, session_id: &str) -> anyhow::Result<Mission> {
     Ok(m)
 }
 
+/// Bloque la mission en cours d'une session (#384 : un hook demande l'avis du
+/// propriétaire alors que personne ne répond aux cartes). Sans mission en cours, rien.
+pub async fn block(s: &Services, session_id: &str, reason: &str) -> anyhow::Result<()> {
+    let Some(mut m) = load(s, session_id).await else {
+        return Ok(());
+    };
+    if m.state != State::Running {
+        return Ok(());
+    }
+    m.state = State::Blocked;
+    m.note = format!("🧱 Mission bloquée : {reason}");
+    save(s, &m).await?;
+    event(s, &m, "mission.finished").await;
+    Ok(())
+}
+
 /// La consigne d'un tour de mission : l'objectif, la vérification et les règles de fin,
 /// en tête de chaque relance pour survivre aux compactions. `why` : pourquoi on relance.
 pub fn brief(m: &Mission, why: Option<&str>) -> String {

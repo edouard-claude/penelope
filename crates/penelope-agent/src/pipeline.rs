@@ -389,6 +389,22 @@ impl AgentLoop {
         let verdict =
             PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
                 .await?;
+        // 4 bis. Hooks `pre_tool` du propriétaire (#384) : après la politique, ils ne
+        // peuvent que resserrer ; des arguments modifiés repassent la politique.
+        let (call, effective_args, verdict) = match self
+            .pre_tool_hooks(
+                spec,
+                policy_workspace.as_deref(),
+                &info,
+                call,
+                effective_args,
+                verdict,
+            )
+            .await?
+        {
+            Gated::Go(call, args, verdict) => (call, args, verdict),
+            Gated::Refused(call, text) => return Ok(Decided::Step(Step::Record(call, text))),
+        };
 
         if let Some(refusal) = nested_ask(&context, verdict.decision, &verdict.reason) {
             return Ok(Decided::Step(Step::Record(call, refusal.text())));
@@ -503,6 +519,131 @@ impl AgentLoop {
             parallel,
             id: context.call_id,
         }))
+    }
+
+    /// Les hooks `pre_tool` d'un appel (#384) : refus, carte forcée (en tour autonome, la
+    /// mission passe bloquée), ou arguments modifiés qui repassent toute la politique, le
+    /// plus strict l'emportant toujours.
+    async fn pre_tool_hooks(
+        &self,
+        spec: &TurnSpec,
+        workspace: Option<&std::path::Path>,
+        info: &CallInfo,
+        call: ToolCall,
+        effective_args: Value,
+        verdict: policy::Verdict,
+    ) -> anyhow::Result<Gated> {
+        use penelope_app::hook_gate::PreToolGate;
+        use policy::{HookPull, VerdictLayer, stricter, with_hook};
+        let s = &self.services;
+        let gate = s
+            .hooks
+            .pre_tool(
+                &spec.session_id,
+                spec.run_id.as_deref(),
+                &info.effective_name,
+                &effective_args,
+            )
+            .await;
+        match gate {
+            PreToolGate::Continue => {
+                let decision = with_hook(verdict.decision, HookPull::Continue);
+                Ok(Gated::Go(
+                    call,
+                    effective_args,
+                    policy::Verdict {
+                        decision,
+                        ..verdict
+                    },
+                ))
+            }
+            PreToolGate::Deny { hook, reason } => {
+                debug_assert_eq!(
+                    with_hook(verdict.decision, HookPull::Deny),
+                    PolicyDecision::Deny
+                );
+                tracing::info!(session = %spec.session_id, hook = %hook, "appel refusé par un hook");
+                Ok(Gated::Refused(
+                    call,
+                    Refusal::Policy {
+                        reason: format!("refusé par le hook `{hook}` : {reason}"),
+                    }
+                    .text(),
+                ))
+            }
+            PreToolGate::Ask { hook, reason } => {
+                let unattended = s
+                    .modes
+                    .of_turn(&spec.session_id, spec.run_id.as_deref())
+                    .await
+                    == ApprovalMode::Unattended;
+                if unattended {
+                    // Personne pour répondre à la carte : la mission le dit et s'arrête.
+                    let why = format!("le hook `{hook}` demande l'avis du propriétaire : {reason}");
+                    s.hooks
+                        .blocked(&spec.session_id, spec.run_id.as_deref(), &why)
+                        .await;
+                    return Ok(Gated::Refused(
+                        call,
+                        Refusal::Policy {
+                            reason: format!("{why} ; rien ne part sans lui"),
+                        }
+                        .text(),
+                    ));
+                }
+                let decision = with_hook(verdict.decision, HookPull::Ask);
+                Ok(Gated::Go(
+                    call,
+                    effective_args,
+                    policy::Verdict {
+                        decision,
+                        layer: VerdictLayer::Hook { name: hook.clone() },
+                        reason: format!("hook `{hook}` : {reason}"),
+                    },
+                ))
+            }
+            PreToolGate::Args { hook, args } => {
+                // Le même outil seulement : par `tool_call`, l'outil visé ne change pas.
+                let renamed = call.name == "tool_call"
+                    && args
+                        .get("name")
+                        .is_some_and(|n| Some(n) != call.arguments.get("name"));
+                if renamed {
+                    return Ok(Gated::Refused(
+                        call,
+                        Refusal::Policy {
+                            reason: format!(
+                                "le hook `{hook}` change l'outil appelé : erreur de hook, appel refusé"
+                            ),
+                        }
+                        .text(),
+                    ));
+                }
+                let mut modified = call.clone();
+                if call.name == "tool_call" {
+                    modified.arguments["args"] = args.clone();
+                } else {
+                    modified.arguments = args.clone();
+                }
+                let new_args = crate::effective_arguments(&modified.name, &modified.arguments);
+                let again = PolicyStage::evaluate(s, spec, workspace, info, &new_args).await?;
+                tracing::info!(session = %spec.session_id, hook = %hook, before = %effective_args, after = %new_args, "arguments modifiés par un hook");
+                let decision = stricter(verdict.decision, again.decision);
+                Ok(Gated::Go(
+                    modified,
+                    new_args,
+                    policy::Verdict {
+                        decision,
+                        layer: VerdictLayer::Hook { name: hook.clone() },
+                        reason: format!(
+                            "hook `{hook}` : arguments modifiés (avant : {}) ; {}",
+                            penelope_observe::redact_json(&effective_args),
+                            again.reason
+                        ),
+                    },
+                ))
+            }
+        }
     }
 
     /// Identité d'un appel pour la carte d'approbation, le ledger d'effets et le jeu de
@@ -815,4 +956,12 @@ pub fn effect_kind(tool: &str) -> EffectKind {
         "send_message" | "send_file" => EffectKind::Telegram,
         _ => EffectKind::Tool,
     }
+}
+
+/// L'issue des hooks `pre_tool` d'un appel (#384).
+enum Gated {
+    /// L'appel continue, peut-être modifié, avec sa décision resserrée.
+    Go(ToolCall, Value, policy::Verdict),
+    /// L'appel s'arrête là ; le texte va au modèle.
+    Refused(ToolCall, String),
 }

@@ -12,6 +12,25 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.68
+
+**Hooks de cycle de vie, lot 3 : `pre_tool` et `turn_end`, une couche de verdict qui ne
+peut que resserrer (#384, épopée #386).**
+
+- `pre_tool`, après la politique d'approbation et avant la carte ou l'outil : `deny`
+  refuse l'appel avec son motif ; `ask` force une carte même si une règle « Toujours » ou
+  le mode `auto` l'aurait laissé passer (en tour autonome, l'appel est refusé et la
+  mission passe `blocked` avec le motif) ; `args` remplace les arguments du même outil, et
+  l'appel modifié repasse toute la politique. Le plus strict l'emporte toujours
+  (`ca_9_7_hook_cannot_loosen`) ; la couche `hook` est nommée dans le motif.
+- `turn_end` : un `block` relance une seule fois le modèle avec la note, encadrée comme
+  donnée ; la réponse part ensuite avec la note en pied.
+- Port `HookGate` dans `penelope_app::hook_gate`, implémenté par l'exécuteur : la boucle
+  ne voit pas l'exécuteur.
+- Le chemin visé par un appel est résolu comme l'outil le fera avant les motifs : `./` et
+  `..` n'échappent plus à un hook (revue de sécurité).
+- Scénarios `hooks-avant-outil` et `hooks-fin-de-tour-et-mission`.
+
 ### 1.0.67
 
 **Hooks de cycle de vie, lots 1 et 2 : moteur sans shell, `hooks.d/` rechargé à chaud,

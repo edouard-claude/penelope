@@ -59,6 +59,8 @@ pub struct AgentServices {
     pub attempts: Arc<dyn AttemptSink>,
     /// Juge d'approbation (#203, T22).
     pub judge: Arc<dyn Judge>,
+    /// Hooks `pre_tool` et `turn_end` du propriétaire (#384).
+    pub hooks: Arc<dyn penelope_app::hook_gate::HookGate>,
 }
 
 /// Mode d'approbation d'une session (issue #111).
@@ -234,6 +236,7 @@ impl AgentServices {
             jobs: Arc::new(NoJobs),
             attempts: Arc::new(MemoryAttempts::default()),
             judge: Arc::new(NoJudge),
+            hooks: Arc::new(penelope_app::hook_gate::NoHooks),
             catalog: Catalog::new(),
             events,
             store,

@@ -34,6 +34,41 @@ pub(crate) enum VerdictLayer {
     SensitiveConfig,
     /// Le juge d'approbation, sous contrôle déterministe (#203).
     Judge,
+    /// Un hook `pre_tool` du propriétaire (#384) : il ne peut que resserrer.
+    Hook { name: String },
+}
+
+/// Ce qu'un hook peut faire d'une décision : la laisser, forcer une carte, refuser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookPull {
+    Continue,
+    Ask,
+    Deny,
+}
+
+/// Rang d'une décision : Auto < Ask < AskTwice < Deny.
+fn rank(d: PolicyDecision) -> u8 {
+    match d {
+        PolicyDecision::Auto => 0,
+        PolicyDecision::Ask => 1,
+        PolicyDecision::AskTwice => 2,
+        PolicyDecision::Deny => 3,
+    }
+}
+
+/// La plus stricte de deux décisions.
+pub(crate) fn stricter(a: PolicyDecision, b: PolicyDecision) -> PolicyDecision {
+    if rank(b) > rank(a) { b } else { a }
+}
+
+/// La décision après un hook : jamais moins stricte que celle de la politique seule
+/// (`ca_9_7_hook_cannot_loosen`).
+pub(crate) fn with_hook(policy: PolicyDecision, hook: HookPull) -> PolicyDecision {
+    match hook {
+        HookPull::Continue => policy,
+        HookPull::Ask => stricter(policy, PolicyDecision::Ask),
+        HookPull::Deny => PolicyDecision::Deny,
+    }
 }
 
 /// Décision de la politique sur un appel.
@@ -260,4 +295,43 @@ pub fn declared_allow(
         "autorisé d'avance : famille(s) « {} » de `{key}`",
         matched.join(" », « ")
     ))
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+
+    const ALL: [PolicyDecision; 4] = [
+        PolicyDecision::Auto,
+        PolicyDecision::Ask,
+        PolicyDecision::AskTwice,
+        PolicyDecision::Deny,
+    ];
+
+    /// CA 9 (#384, décision 0023) : pour tout couple (verdict de la politique, verdict du
+    /// hook), la décision n'est jamais moins stricte que la politique seule ; et un appel
+    /// modifié par un hook ne finit jamais moins strict que l'original.
+    #[test]
+    fn ca_9_7_hook_cannot_loosen() {
+        for policy in ALL {
+            for pull in [HookPull::Continue, HookPull::Ask, HookPull::Deny] {
+                let after = with_hook(policy, pull);
+                assert!(
+                    rank(after) >= rank(policy),
+                    "{policy:?} + {pull:?} = {after:?}"
+                );
+            }
+            assert_eq!(with_hook(policy, HookPull::Continue), policy);
+            assert_eq!(with_hook(policy, HookPull::Deny), PolicyDecision::Deny);
+            for again in ALL {
+                let both = stricter(policy, again);
+                assert!(rank(both) >= rank(policy) && rank(both) >= rank(again));
+            }
+        }
+        // Un `ask` n'abaisse pas une double confirmation.
+        assert_eq!(
+            with_hook(PolicyDecision::AskTwice, HookPull::Ask),
+            PolicyDecision::AskTwice
+        );
+    }
 }

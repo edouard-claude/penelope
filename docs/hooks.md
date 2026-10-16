@@ -1,8 +1,8 @@
 # Hooks de cycle de vie
 
 Un hook est une commande que **le propriétaire** branche sur un moment de la boucle de
-Pénélope : après un outil (format, lint, test ciblé), et, aux lots suivants de l'épopée
-#386, avant un outil, en fin de tour, à l'ouverture d'une session ou à l'arrivée d'un
+Pénélope : avant un outil (garde-fou), après un outil (format, lint, test ciblé), en fin de
+tour ; au lot suivant de l'épopée #386, à l'ouverture d'une session et à l'arrivée d'un
 message. Un hook peut signaler et bloquer ; il ne peut jamais autoriser ce que la
 politique d'approbation aurait demandé (décision [0023](decisions/0023-hooks-de-cycle-de-vie.md)).
 
@@ -30,7 +30,7 @@ env     = { TOKEN = "${SECRET:mon_jeton}" }
 
 | Champ | Rôle | Défaut |
 |---|---|---|
-| `on` | l'événement ; seul `post_tool` est servi pour l'instant (#384, #385 pour les autres) | requis |
+| `on` | l'événement : `pre_tool`, `post_tool`, `turn_end` (`session_start` et `prompt_submit` arrivent avec #385) | requis |
 | `match.tool` | noms d'outils séparés par `\|` (`fs_write\|fs_edit`, `mcp__srv__outil`) | tous |
 | `match.path` | motif du chemin visé, relatif au workspace : `**` pour des dossiers, `*` dans un nom | tous |
 | `command` | l'exécutable, lancé **sans shell** | requis |
@@ -61,6 +61,41 @@ Sur son entrée standard, en JSON : `event`, `session_id`, `run_id`, `cwd`,
 
 Le résultat est joint à celui de l'outil (`hooks`) et à son texte, encadré comme une
 donnée (`[hook <nom> : verdict]`), jamais comme une consigne du propriétaire.
+
+## Avant l'outil : `pre_tool`
+
+Le hook passe après la politique d'approbation, avant la carte ou l'exécution. Code 2 et
+verdict JSON :
+
+- `{"verdict": "deny", "reason": "…"}` : l'appel est refusé, le motif va au modèle ;
+- `{"verdict": "ask", "reason": "…"}` : une carte est forcée, même si une règle
+  « Toujours » ou le mode `auto` l'aurait laissé passer ; dans un tour autonome (mission,
+  run autonome), personne ne peut répondre : l'appel est refusé et la mission passe
+  `blocked` avec le motif ;
+- `{"verdict": "args", "args": {…}}` : nouveaux arguments pour **le même outil** ; l'appel
+  modifié repasse toute la politique, et finit au moins aussi strict que l'original ;
+- `{"verdict": "continue"}` ou code 0 : rien ne change.
+
+Le plus strict l'emporte toujours (`ca_9_7_hook_cannot_loosen`) ; la couche `hook` est
+nommée dans le motif de la carte et le jeu de décisions. Un `allow` n'existe pas : un JSON
+qui le dit est une erreur du hook, tranchée par `on_failure` (`block` refuse l'appel).
+
+Exemple, « jamais `git push` vers `main` » :
+
+```toml
+# hooks.d/garde-git.toml
+on      = "pre_tool"
+match   = { tool = "shell_exec" }
+command = "sh"
+args    = ["-c", "input=$(cat); case \"$input\" in *'git push'*main*) echo '{\"verdict\":\"deny\",\"reason\":\"jamais vers main\"}'; exit 2;; esac"]
+on_failure = "block"
+```
+
+## En fin de tour : `turn_end`
+
+Le hook reçoit la réponse prête (`answer`). `{"verdict": "block", "note": "…"}` relance
+**une seule fois** le modèle avec la note, encadrée comme donnée ; si le hook retient aussi
+la seconde réponse, elle part avec la note en pied.
 
 ## Bornes et sûreté
 

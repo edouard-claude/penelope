@@ -1,0 +1,5 @@
+{"text": "Lisbonne."}
+{"text": "Lisbonne (source : atlas)."}
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_write", "arguments": {"path": "infra/proxy.conf", "content": "listen 80\n"}}]}}
+{"text": "Le propriétaire doit valider infra/ : je m'arrête. MISSION BLOQUÉE"}
+{"text": "Toujours bloquée sur infra/. MISSION BLOQUÉE"}

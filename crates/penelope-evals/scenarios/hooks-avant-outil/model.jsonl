@@ -1,0 +1,5 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "shell_exec", "arguments": {"command": "git push origin main"}}]}}
+{"text": "Le hook garde-git refuse de pousser vers main : je ne pousse pas."}
+{"tool_calls": {"text": "", "calls": [{"id": "c2", "name": "shell_exec", "arguments": {"command": "echo --force essai"}}]}}
+{"text": "La commande est partie réécrite en --force-with-lease."}
+{"tool_calls": {"text": "", "calls": [{"id": "c3", "name": "fs_write", "arguments": {"path": "infra/serveur.conf", "content": "port = 8080\n"}}]}}

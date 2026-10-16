@@ -1,0 +1,51 @@
+name = "hooks-avant-outil"
+description = """Hooks `pre_tool` de `hooks.d/` (#384), en mode `auto` : un garde-fou refuse
+`git push … main` (le modèle apprend le refus, rien ne part), réécrit `--force` en
+`--force-with-lease` (l'appel modifié repasse la politique et s'exécute modifié), et un
+hook force une carte pour toute écriture sous `infra/`, alors que le mode `auto` l'aurait
+laissée passer. Le monde après : le journal des hooks et la carte en attente."""
+
+[config]
+"models.routing.classifier" = false
+"tools.approval_mode" = "auto"
+
+[[observe]]
+name = "hooks_journal"
+sql = "SELECT json_extract(payload, '$.name'), json_extract(payload, '$.event'), json_extract(payload, '$.verdict') FROM events WHERE kind = 'hook.ran' ORDER BY seq"
+
+[[files]]
+root = "hooks"
+path = "garde-git.toml"
+content = """
+on = "pre_tool"
+match = { tool = "shell_exec" }
+command = "sh"
+args = ["-c", "input=$(cat); case \\"$input\\" in *'git push'*main*) echo '{\\"verdict\\":\\"deny\\",\\"reason\\":\\"jamais git push vers main\\"}'; exit 2;; *'--force '*) echo '{\\"verdict\\":\\"args\\",\\"args\\":{\\"command\\":\\"echo --force-with-lease\\"}}'; exit 2;; esac; exit 0"]
+timeout = "10s"
+"""
+
+[[files]]
+root = "hooks"
+path = "infra.toml"
+content = """
+on = "pre_tool"
+match = { tool = "fs_write", path = "infra/**" }
+command = "sh"
+args = ["-c", "echo '{\\"verdict\\":\\"ask\\",\\"reason\\":\\"toute écriture sous infra/ passe par une carte\\"}'; exit 2"]
+timeout = "10s"
+"""
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "pousse la branche sur main" }
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "lance la commande de force" }
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "écris infra/serveur.conf" }

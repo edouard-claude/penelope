@@ -22,6 +22,7 @@ pub mod frozen_tools;
 pub mod gateway;
 pub mod helpers;
 pub mod hook_admin;
+pub mod hook_gate;
 pub mod jobs;
 pub mod journal;
 pub mod judge;

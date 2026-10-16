@@ -33,5 +33,6 @@ release.
   de l'outil, journal, `penelope hooks test`).
 - Un hook ne peut pas rendre Pénélope plus permissive ; un hook lent ou cassé est borné
   (délai, 8 par événement, 2 minutes par appel) et tranché par `on_failure`.
-- Les événements autres que `post_tool` arrivent aux lots #384 et #385 ; ils sont refusés
-  au chargement d'ici là, avec le motif.
+- `pre_tool` et `turn_end` sont servis depuis #384 : la couche `hook` de la politique ne
+  peut que resserrer (`ca_9_7_hook_cannot_loosen`). `session_start` et `prompt_submit`
+  arrivent avec #385 et sont refusés au chargement d'ici là.

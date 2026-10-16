@@ -1,0 +1,48 @@
+name = "hooks-fin-de-tour-et-mission"
+description = """Hook `turn_end` (#384) qui retient toute réponse : exactement une relance du
+modèle avec la note, puis la réponse part avec la note. Puis une mission (autonome, aucune
+carte) dont le premier appel touche `infra/`, où un hook `pre_tool` demande l'avis du
+propriétaire : personne ne peut répondre, l'appel est refusé et la mission passe
+`blocked` avec le motif. Le monde après : le journal des hooks et l'état de la mission."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "hooks_journal"
+sql = "SELECT json_extract(payload, '$.name'), json_extract(payload, '$.event'), json_extract(payload, '$.verdict') FROM events WHERE kind = 'hook.ran' ORDER BY seq"
+
+[[observe]]
+name = "missions"
+sql = "SELECT json_extract(v, '$.state'), json_extract(v, '$.note') FROM kv WHERE k LIKE 'mission.%' ORDER BY k"
+
+[[files]]
+root = "hooks"
+path = "sources.toml"
+content = """
+on = "turn_end"
+command = "sh"
+args = ["-c", "echo '{\\"verdict\\":\\"block\\",\\"note\\":\\"cite ta source\\"}'; exit 2"]
+timeout = "10s"
+"""
+
+[[files]]
+root = "hooks"
+path = "infra.toml"
+content = """
+on = "pre_tool"
+match = { tool = "fs_write", path = "infra/**" }
+command = "sh"
+args = ["-c", "echo '{\\"verdict\\":\\"ask\\",\\"reason\\":\\"toute écriture sous infra/ passe par une carte\\"}'; exit 2"]
+timeout = "10s"
+"""
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "quelle est la capitale du Portugal ?" }
+
+[[steps]]
+kind = "rpc"
+method = "mission.start"
+params = { goal = "écrire infra/proxy.conf" }

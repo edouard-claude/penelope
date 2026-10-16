@@ -339,6 +339,9 @@ impl NativeToolExecutor {
 
 mod args;
 mod defs;
+mod hook_exec;
+mod hook_gate;
+pub use hook_gate::ExecHookGate;
 mod meta;
 mod post_hooks;
 mod precheck;

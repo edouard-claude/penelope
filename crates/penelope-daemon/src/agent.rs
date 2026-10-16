@@ -22,6 +22,7 @@ pub fn services_of(s: &Arc<Services>) -> Arc<AgentServices> {
         Arc::new(crate::approval_mode::KvModes(s.clone())),
         Arc::new(crate::prompt_snapshot::StoredSnapshots(s.clone())),
         Arc::new(DaemonJobs(s.clone())),
+        Arc::new(penelope_executor::executor::ExecHookGate(s.clone())),
     )
 }
 
@@ -37,6 +38,7 @@ fn registries_of(s: &Services) -> Arc<AgentServices> {
         Arc::new(MemoryModes::new(s.config.clone())),
         Arc::new(NoAudit),
         Arc::new(NoJobs),
+        Arc::new(penelope_app::hook_gate::NoHooks),
     )
 }
 
@@ -45,6 +47,7 @@ fn with_ports(
     modes: Arc<dyn SessionModes>,
     snapshots: Arc<dyn PromptSnapshots>,
     jobs: Arc<dyn JobRunner>,
+    hooks: Arc<dyn penelope_app::hook_gate::HookGate>,
 ) -> Arc<AgentServices> {
     Arc::new(AgentServices {
         store: s.store.clone(),
@@ -63,6 +66,7 @@ fn with_ports(
         jobs,
         attempts: Arc::new(penelope_app::journal::JournalAttempts(s.events.clone())),
         judge: Arc::new(penelope_app::judge::NoJudge),
+        hooks,
     })
 }
 

@@ -218,3 +218,44 @@ env = { JETON = "${SECRET:jeton_hook}" }
     assert!(r.text.contains("[hook jeton"), "{}", r.text);
     assert!(!r.text.contains("valeur-tres-secrete-42"), "{}", r.text);
 }
+
+/// Revue de sécurité du 16/10 : un chemin détourné (`./`, `..`) n'échappe pas au motif
+/// d'un hook `pre_tool`.
+#[tokio::test]
+async fn a_disguised_path_still_matches_a_pre_tool_hook() {
+    use penelope_app::hook_gate::{HookGate, PreToolGate};
+    let (_d, x) = executor().await;
+    let dir = x.services.platform.dirs.hooks_d();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("infra.toml"),
+        r#"
+on = "pre_tool"
+match = { tool = "fs_write", path = "infra/**" }
+command = "sh"
+args = ["-c", "echo '{\"verdict\":\"ask\",\"reason\":\"infra\"}'; exit 2"]
+"#,
+    )
+    .unwrap();
+    let gate = super::super::ExecHookGate(x.services.clone());
+    for path in ["infra/a.conf", "./infra/a.conf", "src/../infra/a.conf"] {
+        let v = gate
+            .pre_tool(
+                "s1",
+                None,
+                "fs_write",
+                &json!({"path": path, "content": "x"}),
+            )
+            .await;
+        assert!(matches!(v, PreToolGate::Ask { .. }), "{path} : {v:?}");
+    }
+    let v = gate
+        .pre_tool(
+            "s1",
+            None,
+            "fs_write",
+            &json!({"path": "src/a.conf", "content": "x"}),
+        )
+        .await;
+    assert_eq!(v, PreToolGate::Continue);
+}
