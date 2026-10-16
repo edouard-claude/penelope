@@ -5,6 +5,27 @@ use super::*;
 impl TelegramGateway {
     // ================================================================ cartes
 
+    /// Libellé du bouton de fenêtre : une session ouverte par une planification accorde
+    /// pour toutes ses exécutions (#379), le bouton le dit.
+    async fn session_grant_label(&self, a: &ApprovalRequest) -> &'static str {
+        let planned = match a.session_id.as_deref() {
+            Some(sid) => self
+                .daemon
+                .services
+                .kv_get(&penelope_hitl::policy::schedule_key(sid))
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            None => false,
+        };
+        if planned {
+            "✅ Pour cette planification"
+        } else {
+            "✅ Pour cette session"
+        }
+    }
+
     pub async fn send_approval_card(
         &self,
         chat_id: i64,
@@ -168,6 +189,7 @@ impl TelegramGateway {
         // Sans arguments vus, pas de fenêtre ni de « Toujours » : une règle couvrirait
         // l'outil entier (#83, régression de #67).
         let windows = a.payload.get("arguments").is_some();
+        let session_label = self.session_grant_label(a).await;
         let windowed = [
             tokens.get(k::APPROVE_RUN).cloned().unwrap_or_default(),
             tokens.get(k::APPROVE_ALWAYS).cloned().unwrap_or_default(),
@@ -190,8 +212,8 @@ impl TelegramGateway {
                     })
                     .map(|b| {
                         let mut b = b.clone();
-                        if b.label.contains("Pour ce run") {
-                            b.label = "✅ Pour cette session".into();
+                        if b.label.contains("Pour ce run") || b.label.contains("Pour cette session") {
+                            b.label = session_label.into();
                         }
                         // « Toujours » dit sur quoi il porte : la famille de commandes, le
                         // répertoire, l'hôte (#116). Quand il ne peut créer aucune règle, il

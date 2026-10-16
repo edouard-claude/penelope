@@ -424,7 +424,10 @@ mod tests {
         assert_eq!(bytes, zip_of(&files).unwrap());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), 2);
-        assert_eq!(archive.by_index(1).unwrap().name(), "depot-main/a/notes.md");
+        assert_eq!(
+            archive.by_index(1).unwrap().name().unwrap(),
+            "depot-main/a/notes.md"
+        );
     }
 
     #[test]

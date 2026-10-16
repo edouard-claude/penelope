@@ -149,6 +149,11 @@ pub(super) async fn fire(
                 .await?
                 .id
                 .to_string();
+            // Le lien vers la planification : un « pour cette session » accordé à une
+            // exécution vaut pour les suivantes (#379).
+            d.services
+                .kv_set(&penelope_hitl::policy::schedule_key(&session), &sched.id)
+                .await?;
             let dedup = format!(
                 "sch:{}:{}{}:{}",
                 sched.id,

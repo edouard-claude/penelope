@@ -354,9 +354,45 @@ pub struct PolicyEngine {
     clock: SharedClock,
 }
 
+/// Clé `kv` de la planification qui a ouvert une session (#379).
+pub fn schedule_key(session_id: &str) -> String {
+    format!("session.schedule.{session_id}")
+}
+
+/// Une règle « pour cette session » est-elle ouverte ici : pour la session elle-même, ou
+/// pour sa planification (`scope`, #379).
+fn open_in(
+    r: &PolicyRule,
+    run_id: Option<&str>,
+    session_id: Option<&str>,
+    scope: Option<&str>,
+) -> bool {
+    r.in_window(run_id, session_id) || (scope.is_some() && r.in_window(run_id, scope))
+}
+
 impl PolicyEngine {
     pub fn new(store: Store, clock: SharedClock) -> Self {
         PolicyEngine { store, clock }
+    }
+
+    /// Le périmètre d'une autorisation « pour cette session » (#379) : la planification
+    /// qui a ouvert la session (`schedule:<id>`), sinon la session. Une planification
+    /// ouvre une session par exécution ; sans ce périmètre, l'accord donné à un relevé
+    /// mourait avec lui et le suivant redemandait (Grand Raid, 16/10 : 18 cartes Camofox).
+    pub async fn session_scope(&self, session_id: Option<&str>) -> Option<String> {
+        let sid = session_id?.to_string();
+        let key = schedule_key(&sid);
+        let schedule = self
+            .store
+            .read(move |c| penelope_store::kv_get(c, &key))
+            .await
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty());
+        Some(match schedule {
+            Some(id) => format!("schedule:{id}"),
+            None => sid,
+        })
     }
 
     /// Politique par défaut d'une classe de risque, d'après la configuration.
@@ -406,6 +442,8 @@ impl PolicyEngine {
         workspace: Option<&Path>,
     ) -> penelope_store::Result<Verdict> {
         let rules = self.active_rules().await?;
+        let scope = self.session_scope(session_id).await;
+        let scope = scope.as_deref();
         // Une liste `a && b` n'est couverte par aucune règle seule : elle l'est quand
         // **chaque** étape l'est (issue #150). Les étapes sont jugées une par une, avec
         // les mêmes règles et le même réseau ; il suffit qu'une seule manque pour que la
@@ -423,7 +461,7 @@ impl PolicyEngine {
             if !r.matches_in(tool, server, args, workspace) {
                 continue;
             }
-            if !r.in_window(run_id, session_id) {
+            if !open_in(r, run_id, session_id, scope) {
                 continue;
             }
             let better = match best {
@@ -477,6 +515,7 @@ impl PolicyEngine {
         session_id: Option<&str>,
     ) -> penelope_store::Result<Option<Verdict>> {
         let network = args.get("network") == Some(&Value::Bool(true));
+        let scope = self.session_scope(session_id).await;
         let mut used: Vec<String> = Vec::new();
         for step in steps {
             if crate::cmdline::needs_no_rule(step) {
@@ -484,7 +523,9 @@ impl PolicyEngine {
             }
             let mut found: Option<&PolicyRule> = None;
             for r in rules {
-                if r.tool.as_deref() != Some("shell_exec") || !r.in_window(run_id, session_id) {
+                if r.tool.as_deref() != Some("shell_exec")
+                    || !open_in(r, run_id, session_id, scope.as_deref())
+                {
                     continue;
                 }
                 // La règle doit nommer une famille : une règle sur l'outil entier ne
@@ -541,6 +582,7 @@ impl PolicyEngine {
         run_id: Option<&str>,
         session_id: Option<&str>,
     ) -> penelope_store::Result<Vec<(PolicyRule, crate::powers::PowerGrant)>> {
+        let scope = self.session_scope(session_id).await;
         Ok(self
             .active_rules()
             .await?
@@ -548,7 +590,7 @@ impl PolicyEngine {
             .filter(|r| {
                 r.tool.as_deref() == Some("shell_exec")
                     && r.decision == PolicyDecision::Auto
-                    && r.in_window(run_id, session_id)
+                    && open_in(r, run_id, session_id, scope.as_deref())
             })
             .filter_map(|r| {
                 let grant = r.power_grant().filter(|g| g.readable())?;
@@ -567,10 +609,11 @@ impl PolicyEngine {
         session_id: Option<&str>,
     ) -> penelope_store::Result<Option<String>> {
         let heads = crate::powers::command_heads(line);
+        let scope = self.session_scope(session_id).await;
         for r in self.active_rules().await? {
             if r.tool.as_deref() != Some("shell_exec")
                 || r.decision == PolicyDecision::Auto
-                || !r.in_window(run_id, session_id)
+                || !open_in(&r, run_id, session_id, scope.as_deref())
             {
                 continue;
             }

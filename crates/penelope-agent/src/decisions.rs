@@ -133,7 +133,8 @@ pub async fn decide_approval(
             // révocable dans `/policies`.
             let window_ref = match decision.window {
                 PolicyWindow::Run => a.run_id.clone().or_else(|| a.session_id.clone()),
-                PolicyWindow::Session => a.session_id.clone(),
+                // Une session de planification : la règle vaut pour la planification (#379).
+                PolicyWindow::Session => s.policies.session_scope(a.session_id.as_deref()).await,
                 _ => None,
             };
             if decision.approved && decision.window != PolicyWindow::Once && rule_allowed {

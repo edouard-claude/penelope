@@ -515,3 +515,80 @@ fn server_scoped_and_power_rules_do_not_match_plain_calls() {
     assert!(r.power_grant().is_some());
     assert!(!r.matches("shell_exec", None, &json!({"command": "ls /srv"})));
 }
+
+/// #379 : un « pour cette session » accordé dans une session ouverte par une planification
+/// vaut pour toutes les sessions de cette planification, et nulle part ailleurs. Le 16/10,
+/// chaque relevé Grand Raid (une session par exécution) redemandait Camofox.
+#[tokio::test]
+async fn a_session_grant_in_a_scheduled_session_holds_for_the_schedule() {
+    let store = Store::open_memory().unwrap();
+    let e = PolicyEngine::new(store.clone(), Arc::new(TestClock::default()));
+    let cfg = McpPolicy::default();
+    for (sid, schedule) in [
+        ("relevé-1", "sch_raid"),
+        ("relevé-2", "sch_raid"),
+        ("autre", "sch_veille"),
+    ] {
+        let k = schedule_key(sid);
+        let v = schedule.to_string();
+        store
+            .write(move |tx| penelope_store::kv_set(tx, &k, &v))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        e.session_scope(Some("relevé-1")).await.as_deref(),
+        Some("schedule:sch_raid")
+    );
+    assert_eq!(
+        e.session_scope(Some("libre")).await.as_deref(),
+        Some("libre")
+    );
+
+    // La règle est écrite pour le périmètre de la session où l'accord a été donné.
+    let scope = e.session_scope(Some("relevé-1")).await;
+    e.create_rule(
+        RuleScope::Tool,
+        Some("mcp__camofox__create_tab"),
+        Some("camofox"),
+        None,
+        PolicyDecision::Auto,
+        PolicyWindow::Session,
+        scope.as_deref(),
+    )
+    .await
+    .unwrap();
+    let verdict = |sid: &'static str| {
+        let (e, cfg) = (&e, &cfg);
+        async move {
+            e.evaluate(
+                cfg,
+                "mcp__camofox__create_tab",
+                Some("camofox"),
+                &json!({}),
+                RiskClass::Write,
+                None,
+                Some(sid),
+            )
+            .await
+            .unwrap()
+            .decision
+        }
+    };
+    assert_eq!(
+        verdict("relevé-2").await,
+        PolicyDecision::Auto,
+        "relevé suivant"
+    );
+    assert_eq!(verdict("relevé-1").await, PolicyDecision::Auto);
+    assert_eq!(
+        verdict("autre").await,
+        PolicyDecision::Ask,
+        "autre planification"
+    );
+    assert_eq!(
+        verdict("libre").await,
+        PolicyDecision::Ask,
+        "conversation ordinaire"
+    );
+}
