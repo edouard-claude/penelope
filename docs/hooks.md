@@ -69,9 +69,15 @@ donnée (`[hook <nom> : verdict]`), jamais comme une consigne du propriétaire.
 - Chaque exécution est un événement du journal (`hook.ran` : nom, verdict, code, durée),
   jamais un effet rejoué après un redémarrage.
 - Un hook vient du propriétaire, jamais d'un dépôt : `fs_write` et `fs_edit` refusent
-  d'écrire dans `hooks.d/`, même si un workspace englobe le dossier de données, et une
-  `command` située dans un workspace est refusée. `hooks.d/` est aussi interdit en lecture
-  aux commandes du shell.
+  d'écrire dans `hooks.d/`, même si un workspace englobe le dossier de données ; sous le
+  bac à sable de macOS, `hooks.d/` (comme les autres chemins de `sandbox.deny_read`) est
+  interdit en lecture **et en écriture** aux commandes du shell. Une `command` qui, résolue
+  comme au lancement (PATH, chemin réel), se trouve dans un workspace est refusée.
+- Sous le profil `full` (aucun bac à sable), une commande du shell peut écrire où elle
+  veut, `hooks.d/` compris : l'agent y a déjà les pouvoirs du propriétaire. C'est le prix
+  assumé de ce profil.
+- Un secret passé par `env` est caviardé dans la sortie du hook avant d'aller au modèle,
+  dans une carte ou au journal.
 - Le bac à sable du hook s'applique là où la plateforme sait le faire (macOS) ; sur une
   plateforme sans bac à sable où la configuration dit `full`, le hook tourne comme le
   shell.

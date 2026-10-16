@@ -231,8 +231,14 @@ pub fn seatbelt_profile(p: &Profile) -> String {
     // viennent donc après les autorisations, sinon `(allow file-read*)` les effacerait
     // (issue #68). Le trousseau est fermé aussi : `security find-generic-password -w`
     // depuis une commande ne doit pas rendre une clé.
+    // Un chemin interdit en lecture l'est aussi en écriture (#383) : un workspace qui
+    // englobe le dossier de données ne doit pas laisser une commande écrire un hook dans
+    // `hooks.d/`, une clé dans `~/.ssh` ou une ligne dans la base.
     for d in p.deny_read.iter().flat_map(|d| with_real_path(d)) {
-        s.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", esc(&d)));
+        s.push_str(&format!(
+            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            esc(&d)
+        ));
     }
     // Le trousseau est fermé à tout profil imposé, même sans lecture refusée : une
     // configuration `deny_read = []` ne doit pas le rouvrir (issue #89). Seule une
@@ -380,7 +386,7 @@ mod tests {
             .find("(allow file-read*)\n")
             .expect("autorisation générale");
         let deny_at = sbpl
-            .find("(deny file-read* (subpath \"/Users/essai/.ssh\"))")
+            .find("(deny file-read* file-write* (subpath \"/Users/essai/.ssh\"))")
             .expect("refus des clés SSH");
         assert!(
             deny_at > allow_at,

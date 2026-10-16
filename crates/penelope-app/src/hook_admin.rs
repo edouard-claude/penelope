@@ -127,8 +127,18 @@ async fn test(s: &Services, name: &str, p: &Value) -> anyhow::Result<Value> {
     );
     let mut env = Vec::new();
     for (k, v) in &hook.env {
-        env.push((k.clone(), s.platform.secrets.expand(v)?));
+        let value = s.platform.secrets.expand(v)?;
+        penelope_observe::register_secret(&value);
+        env.push((k.clone(), value));
     }
+    let secrets: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
+    let mask = |t: &str| {
+        let mut t = t.to_string();
+        for secret in secrets.iter().filter(|v| v.len() >= 4) {
+            t = t.replace(secret.as_str(), "‹secret›");
+        }
+        penelope_observe::redact::redact(&t)
+    };
     let out = penelope_tools::shell::exec_argv_with_input(
         &s.platform.processes,
         &rendered.program,
@@ -145,7 +155,7 @@ async fn test(s: &Services, name: &str, p: &Value) -> anyhow::Result<Value> {
     )
     .await;
     let (exit_code, stdout, stderr) = match &out {
-        Ok(o) => (Some(o.exit_code), o.stdout.clone(), o.stderr.clone()),
+        Ok(o) => (Some(o.exit_code), mask(&o.stdout), mask(&o.stderr)),
         Err(e) => (None, String::new(), e.to_string()),
     };
     let (verdict, note) = match exit_code {

@@ -21,7 +21,7 @@ async fn a_stdio_server_cannot_read_what_the_shell_cannot() {
     let ssh = s.platform.dirs.expand("~/.ssh");
     let deny = sbpl
         .find(&format!(
-            "(deny file-read* (subpath \"{}\"))",
+            "(deny file-read* file-write* (subpath \"{}\"))",
             ssh.display()
         ))
         .unwrap_or_else(|| panic!("~/.ssh refusé :\n{sbpl}"));
@@ -189,7 +189,7 @@ async fn only_a_declared_server_reaches_the_keychain() {
     let sbpl = penelope_platform::sandbox::seatbelt_profile(&declared);
     assert!(!sbpl.contains(keychain), "{sbpl}");
     assert!(sbpl.contains(&format!(
-        "(deny file-read* (subpath \"{}\"))",
+        "(deny file-read* file-write* (subpath \"{}\"))",
         ssh.display()
     )));
     assert!(

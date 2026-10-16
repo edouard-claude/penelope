@@ -168,3 +168,53 @@ async fn hooks_d_cannot_be_written_by_a_tool() {
     assert!(e.to_string().contains("hooks.d"), "{e}");
     assert!(!target.exists());
 }
+
+/// Revue de sécurité du 16/10 : la commande d'un hook est résolue comme au lancement avant
+/// d'être jugée ; un secret passé par `env` ne ressort pas dans le résultat.
+#[tokio::test]
+async fn a_hook_command_in_a_workspace_is_refused_and_env_secrets_stay_hidden() {
+    let (d, x) = executor().await;
+    let ws = d.path().join("ws");
+    std::fs::write(ws.join("outil.sh"), "#!/bin/sh\necho piégé\n").unwrap();
+    let ws_list = vec![penelope_platform::sandbox::normalise(&ws)];
+    assert!(
+        super::super::post_hooks::command_in_workspace(
+            &ws.join("outil.sh").to_string_lossy(),
+            &ws_list
+        )
+        .is_some()
+    );
+    assert!(super::super::post_hooks::command_in_workspace("sh", &ws_list).is_none());
+    // Relative, introuvable : refusées, jamais laissées passer.
+    assert!(super::super::post_hooks::command_in_workspace("./outil.sh", &ws_list).is_some());
+    assert!(
+        super::super::post_hooks::command_in_workspace("commande-qui-n-existe-pas", &ws_list)
+            .is_some()
+    );
+
+    let dir = x.services.platform.dirs.hooks_d();
+    std::fs::create_dir_all(&dir).unwrap();
+    // SAFETY du test : variable propre à ce processus de test.
+    std::fs::write(
+        dir.join("jeton.toml"),
+        r#"
+on = "post_tool"
+match = { tool = "fs_write" }
+command = "sh"
+args = ["-c", "echo \"jeton=$JETON\"; exit 1"]
+env = { JETON = "${SECRET:jeton_hook}" }
+"#,
+    )
+    .unwrap();
+    x.services
+        .platform
+        .secrets
+        .set("jeton_hook", "valeur-tres-secrete-42")
+        .unwrap();
+    let r = x
+        .execute("fs_write", &json!({"path":"note.txt","content":"x"}))
+        .await
+        .unwrap();
+    assert!(r.text.contains("[hook jeton"), "{}", r.text);
+    assert!(!r.text.contains("valeur-tres-secrete-42"), "{}", r.text);
+}

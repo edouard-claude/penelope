@@ -35,9 +35,12 @@ ligne de shell.
 - `penelope hooks list|show|test|edit` (RPC `hooks.*`) ; `self_status --section tools`
   liste les hooks (la section devient `{native, hooks}`).
 - Sûreté : un hook vient du propriétaire, jamais d'un dépôt. `fs_write` et `fs_edit`
-  refusent `hooks.d/`, aussi interdit en lecture au shell ; une commande située dans un
+  refusent `hooks.d/` ; une commande qui, résolue comme au lancement, se trouve dans un
   workspace est refusée ; le bac à sable du hook n'est jamais plus large que celui de la
-  configuration.
+  configuration ; un secret passé par `env` est caviardé dans sa sortie.
+- Bac à sable macOS : un chemin de `sandbox.deny_read` (clés SSH, base, secrets, `mcp.d`,
+  `hooks.d`…) est désormais interdit en écriture aussi, pas seulement en lecture (revue
+  de sécurité du 16/10).
 - `runtime::Hooks` du daemon devient `Slots`.
 - `docs/hooks.md`, décision [0023](decisions/0023-hooks-de-cycle-de-vie.md) : un hook ne
   peut que resserrer, pas de verdict `allow`.

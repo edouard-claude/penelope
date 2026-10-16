@@ -106,10 +106,10 @@ impl NativeToolExecutor {
         let t0 = std::time::Instant::now();
         let fail = |why: String| (hook.on_failure, why);
         let result: Result<(i32, String), (OnFailure, String)> = async {
-            // Une commande prise dans un workspace pourrait être écrite par l'agent.
-            let cmd = Path::new(&hook.command);
-            if cmd.is_absolute() && self.workspaces().iter().any(|w| cmd.starts_with(w)) {
-                return Err(fail("commande située dans un workspace : refusée".into()));
+            // Une commande prise dans un workspace pourrait être écrite par l'agent : elle
+            // est résolue comme au lancement (PATH, chemin réel) avant d'être jugée.
+            if let Some(why) = command_in_workspace(&hook.command, &self.workspaces()) {
+                return Err(fail(why));
             }
             let vars = Vars {
                 file: file.map(String::from),
@@ -135,6 +135,7 @@ impl NativeToolExecutor {
                 penelope_observe::register_secret(&value);
                 env.push((k.clone(), value));
             }
+            let secrets: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
             let profile = penelope_tools::shell::profile_with_denied_reads(
                 hook.sandbox
                     .effective(&s.config.config().sandbox.default_profile),
@@ -167,7 +168,12 @@ impl NativeToolExecutor {
             )
             .await
             .map_err(|e| fail(e.to_string()))?;
-            Ok((out.exit_code, format!("{}{}", out.stdout, out.stderr)))
+            // Un secret passé par `env` ne ressort ni au modèle ni dans une carte.
+            let mut text = format!("{}{}", out.stdout, out.stderr);
+            for secret in secrets.iter().filter(|v| v.len() >= 4) {
+                text = text.replace(secret.as_str(), "‹secret›");
+            }
+            Ok((out.exit_code, penelope_observe::redact::redact(&text)))
         }
         .await;
         let ms = t0.elapsed().as_millis() as u64;
@@ -273,4 +279,32 @@ impl NativeToolExecutor {
         }
         outcome.text.push_str(&text);
     }
+}
+
+/// Le motif du refus si `command` ne peut pas être lancée sans risque : un chemin relatif
+/// (qui dépendrait du dossier de lancement), une commande introuvable, ou une commande
+/// dont le chemin réel (PATH résolu, liens suivis) se trouve dans un workspace.
+pub(crate) fn command_in_workspace(command: &str, workspaces: &[PathBuf]) -> Option<String> {
+    let path = Path::new(command);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else if command.contains('/') {
+        return Some(format!(
+            "commande `{command}` relative à un dossier : donner un nom du PATH ou un chemin \
+             absolu"
+        ));
+    } else {
+        match penelope_platform::which(command) {
+            Some(p) => p,
+            None => return Some(format!("commande `{command}` introuvable dans le PATH")),
+        }
+    };
+    let Ok(real) = std::fs::canonicalize(&resolved) else {
+        return Some(format!("commande `{command}` introuvable"));
+    };
+    workspaces
+        .iter()
+        .map(|w| std::fs::canonicalize(w).unwrap_or_else(|_| w.clone()))
+        .any(|w| real.starts_with(&w))
+        .then(|| format!("commande `{command}` située dans un workspace : refusée"))
 }
