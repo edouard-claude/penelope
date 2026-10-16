@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.67
+
+**Hooks de cycle de vie, lots 1 et 2 : moteur sans shell, `hooks.d/` rechargé à chaud,
+hooks `post_tool`, `penelope hooks` (#382, #383, épopée #386).**
+
+Le 16/10, la lecture de Claude Desktop a montré des hooks déclarés par l'utilisateur ; le
+seul hook de Pénélope était le `--hook` de mission (#366), codé en dur et lancé par une
+ligne de shell.
+
+- Moteur (`penelope_tools::hooks`) : une déclaration (événement, outils, motif de chemin,
+  commande, arguments, délai, bac à sable, échec, livraison), rendue élément par élément
+  et lancée **sans shell** (`shell::exec_argv`, même bac à sable et mêmes bornes que
+  `shell::exec`) ; une valeur qui porte un caractère du shell ne lance pas le hook. Le
+  `--hook` de mission passe par ce moteur et reste la seule ligne de shell.
+- `hooks.d/<nom>.toml`, relu dès que le dossier change ; un fichier invalide est signalé
+  par `doctor` et `penelope hooks list`. Après chaque outil réussi, les hooks
+  `post_tool` qui le visent tournent avec leur contexte en JSON sur l'entrée standard :
+  code 0 = note, code 2 = verdict `continue` ou `block` (l'appel devient une erreur pour
+  le modèle), autre code = `on_failure`. 8 hooks par événement, 2 minutes cumulées ;
+  chaque exécution est un événement `hook.ran`.
+- `penelope hooks list|show|test|edit` (RPC `hooks.*`) ; `self_status --section tools`
+  liste les hooks (la section devient `{native, hooks}`).
+- Sûreté : un hook vient du propriétaire, jamais d'un dépôt. `fs_write` et `fs_edit`
+  refusent `hooks.d/`, aussi interdit en lecture au shell ; une commande située dans un
+  workspace est refusée ; le bac à sable du hook n'est jamais plus large que celui de la
+  configuration.
+- `runtime::Hooks` du daemon devient `Slots`.
+- `docs/hooks.md`, décision [0023](decisions/0023-hooks-de-cycle-de-vie.md) : un hook ne
+  peut que resserrer, pas de verdict `allow`.
+
 ### 1.0.66
 
 **Répondre à une bulle : le message cité arrive au modèle, par un contrat de citation du
