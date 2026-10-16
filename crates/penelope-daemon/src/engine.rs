@@ -152,6 +152,22 @@ impl Daemon {
         let history = &s.context.history;
         let recorded = history.recorded(&turn.session_id, turn.id.as_str()).await?;
         let prov = |source| Provenance::queued(source, turn.id.as_str(), &turn.enqueued_at);
+        // Hooks `session_start` et `prompt_submit` du propriétaire (#385).
+        let gate = penelope_executor::executor::ExecHookGate(s.clone());
+        let owner_message = turn.kind == TurnKind::Message && !recorded;
+        let hook_notes = match gate
+            .before_turn(&turn.session_id, None, &text, owner_message)
+            .await
+        {
+            penelope_executor::executor::BeforeTurn::Go(notes) => notes,
+            penelope_executor::executor::BeforeTurn::Block { hook, reason } => {
+                return Ok(TurnOutcome::Answered {
+                    text: format!("⛔ Message retenu par le hook `{hook}` : {reason}"),
+                    iterations: 0,
+                    cost_usd: 0.0,
+                });
+            }
+        };
         let mut episode = session.episode_seq;
         if turn.kind == TurnKind::Message && !recorded {
             let (s, p) = (self.services.clone(), self.providers.clone());
@@ -252,6 +268,10 @@ impl Daemon {
         if let Some(block) = self.intents_block(turn, &text, vector.as_deref()).await? {
             tiers.volatile.push_str("\n\n");
             tiers.volatile.push_str(&block);
+        }
+        for note in hook_notes {
+            tiers.volatile.push_str("\n\n");
+            tiers.volatile.push_str(&note);
         }
         // Cache de prompt (issue #17, #236) : un préfixe modifié attend que le cache soit
         // froid, sa différence part en fin, le contexte volatil reste avec son message.

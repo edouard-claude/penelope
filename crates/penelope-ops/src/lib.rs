@@ -14,6 +14,7 @@ pub mod codex_auth;
 pub mod codex_quota;
 pub mod doctor;
 pub mod hermes;
+pub mod hook_usage;
 pub mod lifecycle;
 pub mod models;
 pub mod purge;

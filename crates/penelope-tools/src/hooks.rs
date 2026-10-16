@@ -170,6 +170,18 @@ pub struct Hook {
     pub deliver: Deliver,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// `prompt_submit` : le texte du message passé au hook, seulement si `text` (#385).
+    #[serde(default)]
+    pub input: Input,
+}
+
+/// Ce que `prompt_submit` passe du message au hook : rien par défaut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Input {
+    #[default]
+    None,
+    Text,
 }
 
 fn default_timeout() -> Duration {
@@ -236,6 +248,7 @@ impl Hook {
             on_failure: OnFailure::Continue,
             deliver: Deliver::Note,
             env: BTreeMap::new(),
+            input: Input::None,
         }
     }
 
@@ -376,7 +389,9 @@ pub fn decide(event: Event, exit_code: i32, output: &str, on_failure: OnFailure)
         (Event::PreTool, Some("args")) if v["args"].is_object() => {
             Decision::Args(v["args"].clone())
         }
-        (Event::PostTool | Event::TurnEnd, Some("block")) => Decision::Block(note),
+        (Event::PostTool | Event::TurnEnd | Event::PromptSubmit, Some("block")) => {
+            Decision::Block(note)
+        }
         _ => failed(Some(format!(
             "verdict illisible pour `{}` : {}",
             serde_json::to_value(event)

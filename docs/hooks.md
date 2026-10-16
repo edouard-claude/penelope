@@ -1,9 +1,8 @@
 # Hooks de cycle de vie
 
 Un hook est une commande que **le propriétaire** branche sur un moment de la boucle de
-Pénélope : avant un outil (garde-fou), après un outil (format, lint, test ciblé), en fin de
-tour ; au lot suivant de l'épopée #386, à l'ouverture d'une session et à l'arrivée d'un
-message. Un hook peut signaler et bloquer ; il ne peut jamais autoriser ce que la
+Pénélope : à l'ouverture d'une session, à l'arrivée d'un message, avant un outil
+(garde-fou), après un outil (format, lint, test ciblé), en fin de tour. Un hook peut signaler et bloquer ; il ne peut jamais autoriser ce que la
 politique d'approbation aurait demandé (décision [0023](decisions/0023-hooks-de-cycle-de-vie.md)).
 
 ## Déclarer un hook
@@ -30,7 +29,7 @@ env     = { TOKEN = "${SECRET:mon_jeton}" }
 
 | Champ | Rôle | Défaut |
 |---|---|---|
-| `on` | l'événement : `pre_tool`, `post_tool`, `turn_end` (`session_start` et `prompt_submit` arrivent avec #385) | requis |
+| `on` | l'événement : `session_start`, `prompt_submit`, `pre_tool`, `post_tool`, `turn_end` | requis |
 | `match.tool` | noms d'outils séparés par `\|` (`fs_write\|fs_edit`, `mcp__srv__outil`) | tous |
 | `match.path` | motif du chemin visé, relatif au workspace : `**` pour des dossiers, `*` dans un nom | tous |
 | `command` | l'exécutable, lancé **sans shell** | requis |
@@ -41,6 +40,7 @@ env     = { TOKEN = "${SECRET:mon_jeton}" }
 | `on_failure` | ce qu'un échec décide (code inattendu, délai, lancement impossible) | `continue` |
 | `deliver` | où va le résultat : au modèle, en carte au propriétaire, ou au journal seul | `note` |
 | `env` | variables ajoutées ; seul endroit où `${SECRET:nom}` est admis | aucune |
+| `input` | `prompt_submit` seulement : `text` passe le texte du message au hook | `none` |
 
 Valeurs substituées dans `args` et `cwd`, élément par élément : `{file}` (le chemin visé,
 relatif au workspace), `{workspace}`, `{session}`, `{tool}`, `{data}`. Un argument n'est
@@ -61,6 +61,21 @@ Sur son entrée standard, en JSON : `event`, `session_id`, `run_id`, `cwd`,
 
 Le résultat est joint à celui de l'outil (`hooks`) et à son texte, encadré comme une
 donnée (`[hook <nom> : verdict]`), jamais comme une consigne du propriétaire.
+
+## À l'ouverture d'une session : `session_start`
+
+Le hook tourne une fois par session, au premier tour (lancer un `git fetch`, vérifier
+qu'un service répond, préparer un dossier). Sa sortie (code 0) est une note ajoutée au
+contexte volatil du tour (T4), encadrée comme donnée : jamais au préfixe du prompt, le
+cache ne bouge pas. Pas de `block` : une session s'ouvre toujours.
+
+## À l'arrivée d'un message : `prompt_submit`
+
+Le hook passe sur chaque message du propriétaire accepté, avant la construction du
+prompt. Le texte du message ne lui est passé que s'il le déclare (`input = "text"`,
+montré par `penelope hooks show`). `{"verdict": "block", "reason": "…"}` : le message
+n'est pas envoyé au modèle, le propriétaire reçoit le motif ; une sortie en code 0 est une
+note ajoutée au contexte volatil (T4).
 
 ## Avant l'outil : `pre_tool`
 
@@ -117,6 +132,16 @@ la seconde réponse, elle part avec la note en pied.
   plateforme sans bac à sable où la configuration dit `full`, le hook tourne comme le
   shell.
 
+## Limites actuelles
+
+- 8 hooks au plus par événement, 2 minutes cumulées par événement (par appel d'outil pour
+  `pre_tool` et `post_tool`) ; au-delà, les suivants sont sautés.
+- `session_start` ne tourne qu'au premier tour d'une session ; la reprise d'un tour après
+  un redémarrage ne le relance pas.
+- `turn_end` relance le modèle une seule fois par tour.
+- Le temps des hooks se lit par hook (`penelope usage --by hook`), pas encore dans la
+  bulle de réponse.
+
 ## Commandes
 
 ```bash
@@ -124,6 +149,7 @@ penelope hooks list
 penelope hooks show fmt
 penelope hooks test fmt --tool fs_edit --file src/lib.rs
 penelope hooks edit fmt timeout 30s
+penelope usage --by hook --since 2026-10-16
 ```
 
 `test` lance le hook sur une entrée synthétique, sous son bac à sable, et montre l'entrée,
@@ -131,7 +157,8 @@ la sortie, le code et le verdict, sans rien écrire au journal. `edit` suit les 
 `mcp edit` : une valeur seule pour `args` vaut une liste d'un élément, plusieurs en JSON
 (`'["--check","{file}"]'`) ; le fichier n'est réécrit que si la déclaration reste valide.
 
-`self_status --section tools` liste les hooks et leurs événements.
+`self_status --section tools` liste les hooks et leurs événements ; `penelope usage --by
+hook` donne, par hook, le nombre d'exécutions et le temps cumulé (journal `hook.ran`).
 
 ## Le `--hook` d'une mission
 

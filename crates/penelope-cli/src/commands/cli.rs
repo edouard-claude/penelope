@@ -174,7 +174,7 @@ pub enum Command {
     /// sortie, part de cache.
     Usage {
         /// Regroupement : session, turn (requête), model, day, role, provider, upstream,
-        /// run, miss (ratés de cache par cause).
+        /// run, miss (ratés de cache par cause), hook (temps passé dans les hooks).
         #[arg(long, default_value = "session")]
         by: String,
         /// Limite à une session.

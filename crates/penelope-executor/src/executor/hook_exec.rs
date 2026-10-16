@@ -16,6 +16,8 @@ pub(crate) struct Launch<'a> {
     pub result: Option<&'a str>,
     /// Réponse prête (`turn_end`).
     pub answer: Option<&'a str>,
+    /// Message du propriétaire (`prompt_submit` avec `input = "text"`).
+    pub prompt: Option<&'a str>,
     pub workspaces: &'a [PathBuf],
     pub workspace: Option<&'a Path>,
     pub file: Option<&'a str>,
@@ -83,6 +85,7 @@ pub(crate) async fn launch(
         })),
         "result": clip(l.result).map(|o| json!({"ok": true, "output": o})),
         "answer": clip(l.answer),
+        "prompt": clip(l.prompt),
     });
     let out = penelope_tools::shell::exec_argv_with_input(
         &s.platform.processes,
