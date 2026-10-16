@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.70
+
+**Compaction sur préfixe : le fournisseur du dernier appel est gardé (#391).**
+
+- `usage.model` est journalisé sans préfixe (`gpt-6.1-sol` servi par `codex`). Le dernier
+  appel relu par la compaction sur préfixe passait donc pour un modèle OpenRouter : le
+  garde-fou codex (#142) ne le reconnaissait pas, le résumé partait chez OpenRouter sous
+  un identifiant inconnu et `auto` le jugeait gratuit au prix du catalogue codex.
+- `PreviousCall` porte le fournisseur et rend l'identifiant complet (`full_model`) :
+  `codex:` n'est plus résumé sur le préfixe, `local:` et `openai_compat:` repartent chez
+  leur fournisseur. Les autres lecteurs du dernier appel ne lisent que l'heure ou les
+  empreintes.
+- Le contournement `context.compaction_on_prefix = "never"` peut être retiré.
+- `penelope eval mission-bench` crée une vraie session par story (l'identifiant inventé
+  faisait échouer le lancement de la mission).
+
 ### 1.0.69
 
 **Hooks de cycle de vie, lot 4 : `session_start`, `prompt_submit`, temps des hooks dans

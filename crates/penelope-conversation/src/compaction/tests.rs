@@ -452,6 +452,16 @@ async fn warm_conversation(
     sid: &str,
     model: &str,
 ) -> (Vec<ChatMessage>, penelope_llm::cache::Fingerprint) {
+    warm_conversation_on(d, sid, model, "mock").await
+}
+
+/// [`warm_conversation`], l'appel facturé au nom de `provider`.
+async fn warm_conversation_on(
+    d: &Context,
+    sid: &str,
+    model: &str,
+    provider: &str,
+) -> (Vec<ChatMessage>, penelope_llm::cache::Fingerprint) {
     let s = &d.services;
     let mut tiers = crate::build_tiers(s, "", &[], None).await;
     crate::prefix::settle(s, sid, None, &mut tiers)
@@ -471,7 +481,7 @@ async fn warm_conversation(
             session_id: Some(sid.into()),
             role: Some("chat".into()),
             model: model.into(),
-            provider: "mock".into(),
+            provider: provider.into(),
             system_hash: Some(fp.system_hash.clone()),
             tools_hash: Some(fp.tools_hash.clone()),
             ..Default::default()
@@ -572,6 +582,40 @@ async fn a_failed_prefix_summary_falls_back_to_the_summarizer() {
         1,
         "le résumeur a pris la suite"
     );
+}
+
+/// #391 : `usage.model` est journalisé sans préfixe. Un dernier appel servi par codex
+/// (`gpt-6.1-sol`) ne fait pas de résumé sur le préfixe, qui serait parti chez OpenRouter ;
+/// un appel `local` repart chez `local:`, identifiant complet.
+#[tokio::test]
+async fn the_prefix_summary_keeps_the_provider_of_the_last_call() {
+    let (_dir, d, p) = context().await;
+    d.services
+        .publish_config("test", |c| {
+            c.context.compaction_on_prefix = penelope_kernel::config::PrefixCompaction::Always;
+            Ok(vec!["context.compaction_on_prefix".into()])
+        })
+        .unwrap();
+    let sid = long_session(&d).await;
+    warm_conversation_on(&d, &sid, "gpt-6.1-sol", "codex").await;
+    p.reply(SUMMARY);
+    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert_eq!(summarizer_requests(&p).len(), 1, "le résumeur, pas codex");
+    assert!(
+        p.requests()
+            .iter()
+            .all(|q| !q.model.ends_with("gpt-6.1-sol")),
+        "rien envoyé sous l'identifiant nu"
+    );
+
+    let sid = long_session(&d).await;
+    warm_conversation_on(&d, &sid, "qwen3-coder", "local").await;
+    p.reply(SUMMARY);
+    let r = compact(&d, &sid, Trigger::Manual, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert_eq!(r.model.as_deref(), Some("local:qwen3-coder"), "{r:?}");
+    assert_eq!(p.requests().last().unwrap().model, "local:qwen3-coder");
 }
 
 /// `auto` sans prix connus au catalogue : le résumeur classique, comme avant.

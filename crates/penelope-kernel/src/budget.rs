@@ -96,12 +96,35 @@ pub struct UsageRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviousCall {
     pub ts_ms: i64,
+    /// Le modèle tel que journalisé, souvent sans préfixe (`gpt-6.1-sol`) : voir
+    /// [`PreviousCall::full_model`].
     pub model: String,
+    /// Le fournisseur qui a servi l'appel (`codex`, `local`, `openrouter`…).
+    pub provider: Option<String>,
     pub upstream: Option<String>,
     pub msg_count: Option<i64>,
     pub request_hash: Option<String>,
     pub system_hash: Option<String>,
     pub tools_hash: Option<String>,
+}
+
+impl PreviousCall {
+    /// L'identifiant complet du modèle, préfixe du fournisseur compris (`codex:gpt-6.1-sol`)
+    /// : `usage.model` est journalisé sans lui, et un identifiant nu se lit comme un modèle
+    /// OpenRouter (issue #391). Un identifiant déjà préfixé, ou servi par OpenRouter, reste
+    /// tel quel.
+    pub fn full_model(&self) -> String {
+        let prefixed = self
+            .model
+            .split_once(':')
+            .is_some_and(|(p, _)| crate::config::is_provider_prefix(p));
+        match self.provider.as_deref() {
+            Some(p) if !prefixed && p != "openrouter" && crate::config::is_provider_prefix(p) => {
+                format!("{p}:{}", self.model)
+            }
+            _ => self.model.clone(),
+        }
+    }
 }
 
 /// Une ligne de rapport de consommation.
@@ -389,7 +412,7 @@ impl BudgetLedger {
             .store
             .read(move |c| {
                 Ok(c.query_row(
-                    "SELECT ts, model, upstream, msg_count, request_hash, system_hash, tools_hash
+                    "SELECT ts, model, upstream, msg_count, request_hash, system_hash, tools_hash, provider
                      FROM usage WHERE session_id = ?1 AND COALESCE(role, 'chat') = 'chat'
                      ORDER BY ts DESC, rowid DESC LIMIT 1",
                     [sid],
@@ -404,6 +427,7 @@ impl BudgetLedger {
                                 request_hash: r.get(4)?,
                                 system_hash: r.get(5)?,
                                 tools_hash: r.get(6)?,
+                                provider: r.get(7)?,
                             },
                         ))
                     },

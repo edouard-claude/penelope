@@ -310,3 +310,42 @@ async fn the_runtime_event_marks_the_hint_only_when_it_was_sent() {
     assert_eq!(logged[0].payload["context_hint"], true);
     assert!(logged[1].payload.get("context_hint").is_none());
 }
+
+/// #391 : `usage.model` est journalisé sans préfixe ; le dernier appel rend l'identifiant
+/// complet, que le fournisseur soit codex, local ou compatible OpenAI.
+#[tokio::test]
+async fn the_previous_call_keeps_its_provider() {
+    let store = Store::open_memory().unwrap();
+    let ledger = BudgetLedger::new(store, Arc::new(TestClock::default()));
+    for (model, provider, full) in [
+        ("gpt-6.1-sol", "codex", "codex:gpt-6.1-sol"),
+        ("qwen3-coder", "local", "local:qwen3-coder"),
+        (
+            "mistral-large",
+            "openai_compat",
+            "openai_compat:mistral-large",
+        ),
+        ("codex:gpt-6.1-sol", "codex", "codex:gpt-6.1-sol"),
+        (
+            "deepseek/deepseek-v4-pro",
+            "openrouter",
+            "deepseek/deepseek-v4-pro",
+        ),
+        ("z-ai/glm-5.3", "mock", "z-ai/glm-5.3"),
+    ] {
+        let sid = format!("s-{full}-{provider}");
+        ledger
+            .record(UsageRecord {
+                session_id: Some(sid.clone()),
+                role: Some("chat".into()),
+                model: model.into(),
+                provider: provider.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let previous = ledger.previous_call(&sid).await.unwrap().unwrap();
+        assert_eq!(previous.provider.as_deref(), Some(provider));
+        assert_eq!(previous.full_model(), full, "{model} chez {provider}");
+    }
+}
