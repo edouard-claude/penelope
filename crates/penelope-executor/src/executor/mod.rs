@@ -340,6 +340,7 @@ impl NativeToolExecutor {
 mod args;
 mod defs;
 mod meta;
+mod post_hooks;
 mod precheck;
 mod tools;
 

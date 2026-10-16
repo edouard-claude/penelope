@@ -539,7 +539,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `sandbox.allow_keychain_for` | `[]` | Serveurs MCP stdio qui gardent leur bac à sable mais joignent le trousseau macOS : ceux dont le métier est de lire leurs propres identifiants. Le trousseau reste fermé aux autres, qui y verraient « introuvable » ce qui y est rangé. |
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
 | `sandbox.shell_network` | `false` | Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux : une commande n'a le réseau que si son appel le demande (`network: true`, carte d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son étape de workflow le déclare. Une configuration qui porte `true` le garde. |
-| `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
+| `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{data}/hooks.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
 
 **[observability]**
 

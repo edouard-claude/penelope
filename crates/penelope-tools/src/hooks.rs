@@ -17,6 +17,11 @@
 //! Seul le `--hook` de mission (#366) garde sa ligne de shell, traduite en
 //! `sh -c <ligne rendue>` par [`Hook::mission`] ; un hook déclaré n'a pas cette porte.
 
+mod admin;
+mod registry;
+pub use admin::{EDITABLE, edit};
+pub use registry::{Loaded, Registry, load_dir, parse, validate};
+
 use crate::edit_hooks::safe_path;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -67,8 +72,32 @@ impl Sandbox {
     /// Le profil du bac à sable du shell qui lui correspond.
     pub fn profile_name(self) -> &'static str {
         match self {
-            Sandbox::ReadOnly => "read-only",
+            Sandbox::ReadOnly => "readonly",
             Sandbox::WorkspaceWrite => "workspace-write",
+        }
+    }
+
+    /// Le profil effectif d'un hook (#383) : le sien là où la plateforme sait l'appliquer
+    /// (macOS), jamais plus large que celui de la configuration ; sur une plateforme sans
+    /// bac à sable où le propriétaire a choisi `full`, celui du shell, faute de quoi tout
+    /// hook échouerait fermé.
+    pub fn effective(self, configured: &str) -> &'static str {
+        let rank = |p: &str| match p {
+            "readonly" | "read-only" => 0,
+            "full" => 2,
+            _ => 1,
+        };
+        if configured == "full" && !cfg!(target_os = "macos") {
+            return "full";
+        }
+        if rank(configured) < rank(self.profile_name()) {
+            if rank(configured) == 0 {
+                "readonly"
+            } else {
+                "workspace-write"
+            }
+        } else {
+            self.profile_name()
         }
     }
 }
@@ -258,6 +287,48 @@ pub fn note_of(label: &str, out: &crate::shell::ShellOutput) -> serde_json::Valu
         .collect();
     serde_json::json!({"command": label, "exitCode": out.exit_code, "output": tail,
         "note": "le hook échoue après cette édition : corrige avant de continuer"})
+}
+
+/// Le verdict d'un hook d'après son code de sortie et sa sortie : 0 = `continue` (la
+/// sortie est une note), 2 = verdict JSON `{"verdict":"continue|block","reason","note"}`,
+/// tout autre code = échec tranché par `on_failure` (`échec` ou `block`). Rend le
+/// verdict et la note bornée.
+pub fn verdict_of(
+    exit_code: i32,
+    output: &str,
+    on_failure: OnFailure,
+) -> (&'static str, Option<String>) {
+    let bounded = |t: &str| -> Option<String> {
+        let t = t.trim();
+        let chars: Vec<char> = t.chars().collect();
+        (!t.is_empty()).then(|| {
+            chars[chars.len().saturating_sub(NOTE_CHARS)..]
+                .iter()
+                .collect()
+        })
+    };
+    let failed = |note: Option<String>| match on_failure {
+        OnFailure::Block => ("block", note),
+        OnFailure::Continue => ("échec", note),
+    };
+    match exit_code {
+        0 => ("continue", bounded(output)),
+        2 => {
+            let v: serde_json::Value =
+                serde_json::from_str(output.trim()).unwrap_or(serde_json::Value::Null);
+            let note = v["note"]
+                .as_str()
+                .or(v["reason"].as_str())
+                .and_then(bounded);
+            match v["verdict"].as_str() {
+                Some("block") => ("block", note),
+                Some("continue") => ("continue", note),
+                // `allow` n'existe pas : un hook ne desserre jamais (#384).
+                _ => failed(bounded("verdict illisible (continue ou block attendu)")),
+            }
+        }
+        _ => failed(bounded(output)),
+    }
 }
 
 /// Lance un hook rendu, sans shell, sous le profil donné et dans `cwd`.

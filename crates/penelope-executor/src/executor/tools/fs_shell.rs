@@ -73,6 +73,7 @@ impl NativeToolExecutor {
             }
             "fs_write" => {
                 let p = self.path_arg(args, "path")?;
+                self.refuse_hooks_d(&p)?;
                 let lock = self.locks.for_path(&p);
                 let _g = lock.lock().await;
                 let content = str_arg(args, "content")?;
@@ -86,6 +87,7 @@ impl NativeToolExecutor {
             }
             "fs_edit" => {
                 let p = self.path_arg(args, "path")?;
+                self.refuse_hooks_d(&p)?;
                 let new = str_arg(args, "new")?;
                 vault_write_filter(args, &new)?;
                 let lock = self.locks.for_path(&p);
@@ -103,6 +105,20 @@ impl NativeToolExecutor {
             other => return Err(ToolError::Unknown(other.to_string())),
         };
         Ok(ToolOutcome::ok(v))
+    }
+
+    /// `hooks.d/` est au propriétaire (#383) : un hook écrit par l'agent passerait outre la
+    /// politique du shell, même si un workspace configuré englobe le dossier de données.
+    fn refuse_hooks_d(&self, path: &Path) -> ToolResult<()> {
+        let dir = canonical_workspace(&self.services.platform.dirs.hooks_d());
+        if canonical_workspace(path).starts_with(&dir) || path.starts_with(&dir) {
+            return Err(ToolError::Denied(format!(
+                "`{}` est dans hooks.d/ : les hooks sont déclarés par le propriétaire \
+                 (`penelope hooks edit`), jamais écrits par un outil",
+                path.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Hook après édition (#366) : la commande `--hook` de la mission en cours, jointe au

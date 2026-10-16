@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# `hooks.d/<nom>.toml` : déclarations de hooks du propriétaire (#383).
+toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

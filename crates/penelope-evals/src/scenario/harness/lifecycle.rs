@@ -649,6 +649,7 @@ fn write_under(
         SeedRoot::Workspace => workspace_of(services),
         SeedRoot::Vault => penelope_app::helpers::vault_dir(services),
         SeedRoot::Skills => services.platform.dirs.skills(),
+        SeedRoot::Hooks => services.platform.dirs.hooks_d(),
     };
     let path = root.join(path);
     if let Some(parent) = path.parent() {

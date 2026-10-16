@@ -1,0 +1,61 @@
+name = "commande-hooks"
+description = """Les hooks de `hooks.d/` (#383) par la socket locale, comme `penelope hooks …` :
+deux fichiers semés (un hook `post_tool` qui bloque un fichier contenant TODO, un fichier
+invalide). `hooks.list` montre le hook et signale le fichier invalide, `hooks.show` le
+montre, `hooks.test` le lance sur `src/a.rs` (qui contient TODO) : verdict `block`, sans
+journal ; `hooks.edit` change son délai. Puis un tour : le modèle écrit `src/b.rs` avec un
+TODO, le hook bloque l'appel, le modèle l'apprend. Le monde après : le journal de
+l'exécution (`hook.ran`) et le fichier modifié."""
+
+[config]
+"models.routing.classifier" = false
+"tools.approval_mode" = "auto"
+
+[[observe]]
+name = "hooks_journal"
+sql = "SELECT kind, json_extract(payload, '$.name'), json_extract(payload, '$.verdict'), json_extract(payload, '$.exit_code') FROM events WHERE kind = 'hook.ran' ORDER BY seq"
+
+[[files]]
+root = "hooks"
+path = "todo.toml"
+content = """
+on = "post_tool"
+match = { tool = "fs_write|fs_edit", path = "**/*.rs" }
+command = "sh"
+args = ["-c", "grep -q TODO \\"$1\\" && { echo '{\\"verdict\\":\\"block\\",\\"reason\\":\\"TODO restant dans le fichier\\"}'; exit 2; }; echo propre", "hook", "{file}"]
+timeout = "10s"
+"""
+
+[[files]]
+root = "hooks"
+path = "casse.toml"
+content = "on = \"pre_tool\"\ncommand = \"true\"\n"
+
+[[files]]
+path = "src/a.rs"
+content = "// TODO : écrire la fonction\n"
+
+[[steps]]
+kind = "rpc"
+method = "hooks.list"
+params = {}
+
+[[steps]]
+kind = "rpc"
+method = "hooks.show"
+params = { name = "todo" }
+
+[[steps]]
+kind = "rpc"
+method = "hooks.test"
+params = { name = "todo", file = "src/a.rs" }
+
+[[steps]]
+kind = "rpc"
+method = "hooks.edit"
+params = { name = "todo", patch = { timeout = "20s" } }
+
+[[steps]]
+kind = "rpc"
+method = "chat.send"
+params = { text = "écris src/b.rs avec une fonction b à compléter" }
