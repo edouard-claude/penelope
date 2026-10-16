@@ -12,6 +12,26 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.66
+
+**Répondre à une bulle : le message cité arrive au modèle, par un contrat de citation du
+cœur que le canal remplit (#381).**
+
+Constat (16/10) : en répondant à une bulle (« Répondre », éventuellement un passage
+surligné), le propriétaire voyait Pénélope répondre à côté : la passerelle lisait
+`reply_to_message` et l'ignorait.
+
+- Le cœur définit la citation (`penelope_app::channel::Quoted`, `with_quote`) : la
+  citation précède le message, avec son auteur (Pénélope, le propriétaire, un tiers) et
+  le passage surligné ; la parole d'un tiers est encadrée comme non fiable, son nom
+  nettoyé.
+- Le canal Telegram remplit ce contrat : texte ou légende de la bulle, passage
+  surligné (`quote`). La bulle n'est attribuée à Pénélope que si elle figure dans ses
+  envois ; une bulle transférée reste la parole d'un tiers ; la réponse implicite d'un
+  sujet de forum n'est pas une citation.
+- `wrap_untrusted` neutralise ses propres délimiteurs dans le contenu et la source : un
+  contenu ne peut plus fermer son bloc non fiable avant l'heure (revue de sécurité).
+
 ### 1.0.65
 
 **Planification : « Pour cette session » vaut pour toutes les exécutions de la

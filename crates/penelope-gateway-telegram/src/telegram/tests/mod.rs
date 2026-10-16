@@ -29,6 +29,7 @@ mod media;
 mod media_limits;
 mod ops;
 mod prompt_forms;
+mod quotes;
 mod screens_admin;
 mod screens_memory;
 mod screens_models;
