@@ -549,7 +549,7 @@ impl TelegramGateway {
     ) -> anyhow::Result<usize> {
         let d = &self.daemon;
         let sup = d
-            .hooks
+            .slots
             .mcp_supervisor()
             .ok_or_else(|| anyhow::anyhow!("aucun serveur MCP chargé"))?;
         let rendered = sup

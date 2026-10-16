@@ -93,7 +93,7 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
             .last()
             .map(|message| Origin::from_payload(&message.payload))
             .unwrap_or_else(|| Origin::from_payload(&turn.payload));
-        let offered = match daemon.hooks.delivery() {
+        let offered = match daemon.slots.delivery() {
             Some(channel) => channel.offer_burst(&turn.session_id, &origin, parts).await,
             None => Err("canal du propriétaire indisponible".into()),
         };
@@ -137,7 +137,7 @@ async fn process_turn(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) -> 
 /// Rafale en file avant même le tour : les seuils sont ceux du canal (T36).
 fn oversized_burst(daemon: &Daemon, turn: &Turn) -> Option<Vec<String>> {
     let limits = daemon
-        .hooks
+        .slots
         .delivery()?
         .burst_limits(&Origin::from_payload(&turn.payload))?;
     let parts: Vec<String> = std::iter::once(&turn.payload)
@@ -238,7 +238,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // (issue #39).
     let scheduled = turn.kind == penelope_kernel::turn::TurnKind::Trigger;
     if scheduled && let Some(schedule) = turn.payload["schedule"].as_str() {
-        let ports = daemon.hooks.scheduler();
+        let ports = daemon.slots.scheduler();
         let cx = crate::workflow::context_of(&daemon.core);
         penelope_orchestrator::scheduler::trigger_outcome_of(
             &cx, &ports, schedule, &outcome, &turn,
@@ -287,7 +287,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     let ports = penelope_conversation::compaction::MissionPorts {
         context: crate::compaction::context_of(&daemon.core),
         intake: daemon.core.clone(),
-        messenger: daemon.hooks.messenger(),
+        messenger: daemon.slots.messenger(),
     };
     penelope_app::mission::after_turn(&daemon.services, &ports, &turn.session_id, &outcome).await;
     outcome
@@ -296,7 +296,7 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
 impl Daemon {
     /// Livre l'issue d'un tour à son canal, qui ignore les origines d'ailleurs (CLI).
     pub async fn deliver(&self, turn: &Turn, origin: &Origin, outcome: &TurnOutcome) {
-        if let Some(channel) = self.hooks.delivery() {
+        if let Some(channel) = self.slots.delivery() {
             channel
                 .deliver(turn.id.as_str(), &turn.session_id, origin, outcome)
                 .await;
@@ -370,7 +370,7 @@ mod tests {
         let provider = Arc::new(MockProvider::new());
         daemon.set_provider_override(provider.clone());
         let channel = Arc::new(BurstChannel(std::sync::Mutex::new(Vec::new())));
-        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
+        *daemon.slots.delivery.write().unwrap() = Some(channel.clone());
         let origin = Origin::Telegram {
             chat_id: 10,
             topic_id: None,
@@ -507,7 +507,7 @@ mod tests {
         provider.reply("réponse unique");
         daemon.set_provider_override(provider);
         let channel = Arc::new(DeliveryChannel(std::sync::Mutex::new(None)));
-        *daemon.hooks.delivery.write().unwrap() = Some(channel.clone());
+        *daemon.slots.delivery.write().unwrap() = Some(channel.clone());
         let first = Origin::Telegram {
             chat_id: 10,
             topic_id: None,

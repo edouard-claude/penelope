@@ -91,7 +91,7 @@ async fn a_rule_dictated_by_the_owner_is_promoted() {
                 {"op": "add_entry", "candidat": 1, "file": "profil.md", "section": "Git",
                  "text": "Supprimer la branche qa", "importance": 8}]}"#,
     );
-    let o = run(&d.dream(), &d.hooks.messenger, false).await.unwrap();
+    let o = run(&d.dream(), &d.slots.messenger, false).await.unwrap();
     assert_eq!(o.report.promoted, 1, "{:?}", o.report);
     let vault = penelope_app::helpers::vault_dir(s);
     let profil = std::fs::read_to_string(vault.join("profil.md")).unwrap();

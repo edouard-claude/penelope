@@ -496,7 +496,7 @@ pub(super) async fn install_supervisor(
     }
     let sup = penelope_mcp_host::testing::supervisor(services.clone(), fake);
     sup.reload().await;
-    daemon.hooks.set_mcp(sup.clone());
+    daemon.slots.set_mcp(sup.clone());
     sup
 }
 

@@ -28,7 +28,7 @@ pub struct Core {
     /// Événements des tours, attentes de réponse, tours actifs.
     pub bus: Arc<penelope_app::bus::Bus>,
     /// Branchements optionnels : canal de message, MCP, orchestration.
-    pub hooks: Hooks,
+    pub slots: Slots,
     /// Compactions de fond en cours et demandées (§5.4).
     pub compaction: Arc<penelope_conversation::compaction::State>,
     /// Runs de workflow pilotés par ce processus (§12.7).
@@ -135,7 +135,7 @@ impl penelope_app::ports::ProviderSource for Providers {
 
 /// Points de branchement des sous-systèmes qui démarrent après le daemon.
 #[derive(Default)]
-pub struct Hooks {
+pub struct Slots {
     pub messenger: Slot<dyn penelope_executor::executor::Messenger>,
     pub mcp: Slot<dyn penelope_executor::executor::McpGateway>,
     pub orchestrator: Slot<dyn penelope_executor::executor::Orchestrator>,
@@ -145,7 +145,7 @@ pub struct Hooks {
     pub mcp_supervisor: Slot<dyn McpAdmin>,
 }
 
-impl Hooks {
+impl Slots {
     pub fn messenger(&self) -> Option<Arc<dyn penelope_executor::executor::Messenger>> {
         self.messenger.read().ok().and_then(|g| g.clone())
     }
@@ -206,24 +206,24 @@ impl Daemon {
     pub fn from_services(services: Arc<Services>) -> Self {
         let started_at_ms = services.clock.now_ms();
         let delivery = services.channel.delivery.clone();
-        let hooks = Hooks {
+        let slots = Slots {
             delivery,
-            ..Hooks::default()
+            ..Slots::default()
         };
         let core = Core {
             handle: Handle::new(started_at_ms),
             bus: Arc::new(penelope_app::bus::Bus::new()),
             compaction: Arc::new(penelope_conversation::compaction::State::with_messenger(
-                hooks.messenger.clone(),
+                slots.messenger.clone(),
             )),
             workflows: Arc::new(penelope_orchestrator::workflow::State::with_ports(
-                hooks.workflow(),
+                slots.workflow(),
             )),
             embeddings: Arc::default(),
             tasks: Arc::new(penelope_app::tasks::Tasks::default()),
             providers: Arc::new(Providers::new(services.clone())),
             services,
-            hooks,
+            slots,
         };
         Self {
             core: Arc::new(core),
@@ -385,7 +385,7 @@ impl Core {
     pub async fn status(&self) -> anyhow::Result<penelope_kernel::api::StatusReport> {
         let s = &self.services;
         let cfg = s.config.config();
-        let mcp = match self.hooks.mcp_supervisor() {
+        let mcp = match self.slots.mcp_supervisor() {
             Some(sup) => sup.statuses().await,
             None => Vec::new(),
         };

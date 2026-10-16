@@ -22,7 +22,7 @@ async fn mcp_elicitation_is_answered_from_telegram() {
     declare(&sup, "redmine", "");
     declare(&sup, "lent", "elicitation_timeout = \"300ms\"\n");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     let broker = g.daemon.services.elicitations.clone();
 
     // Un propriétaire est joignable : l'élicitation est annoncée, pas le sampling.
@@ -266,7 +266,7 @@ async fn tracker_and_drive(
     declare(&sup, "tracker", "");
     declare(&sup, "drive", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     (fake, sup)
 }
 

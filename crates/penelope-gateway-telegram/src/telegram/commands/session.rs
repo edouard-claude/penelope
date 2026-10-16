@@ -270,7 +270,7 @@ impl TelegramGateway {
         // n'attend pas, le bilan arrive en réponse quand il est prêt.
         let session = d.chat_session_for(&origin).await?;
         self.react(chat_id, message_id, reaction::RECEIVED);
-        let (daemon, messenger) = (d.clone(), d.hooks.messenger());
+        let (daemon, messenger) = (d.clone(), d.slots.messenger());
         tokio::spawn(async move {
             let text = match penelope_conversation::compaction::compact(
                 &penelope_daemon::compaction::context_of(&daemon),

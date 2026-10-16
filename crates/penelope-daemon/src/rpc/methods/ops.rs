@@ -19,7 +19,7 @@ impl Rpc {
                 "socket": s.platform.dirs.socket_path(),
             })),
             method::DOCTOR => {
-                let mut checks = super::doctor::run(s, self.daemon.hooks.mcp_supervisor()).await;
+                let mut checks = super::doctor::run(s, self.daemon.slots.mcp_supervisor()).await;
                 checks.push(penelope_ops::doctor::embedding_check(&self.daemon.embedder()).await);
                 checks.push(penelope_ops::doctor::vault_index_check(s).await);
                 checks.push(penelope_ops::doctor::vault_dead_zone_check(s).await);
@@ -39,7 +39,7 @@ impl Rpc {
                     .await,
                 );
                 checks.extend(penelope_ops::backup::doctor_checks(&self.daemon.services).await);
-                if let Some(channel) = self.daemon.hooks.delivery() {
+                if let Some(channel) = self.daemon.slots.delivery() {
                     checks.extend(channel.doctor_checks().await);
                 }
                 // Boucles de fond relancées ou mortes (#84).
@@ -116,7 +116,7 @@ impl Rpc {
             }
             method::IMPORT_HERMES => {
                 let d = &self.daemon;
-                let (mcp, m) = (d.hooks.mcp_supervisor(), d.hooks.messenger());
+                let (mcp, m) = (d.slots.mcp_supervisor(), d.slots.messenger());
                 penelope_ops::hermes::rpc(&d.services, mcp, m, p).await
             }
             method::STORE_REBUILD => {

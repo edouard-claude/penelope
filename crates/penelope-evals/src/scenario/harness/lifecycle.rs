@@ -92,7 +92,7 @@ impl Harness<'_> {
         // L'orchestrateur, comme au démarrage du superviseur : planification, workflows,
         // sous-agents, images et embeddings passent par lui.
         daemon
-            .hooks
+            .slots
             .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
                 &daemon.core,
             )));
@@ -101,7 +101,7 @@ impl Harness<'_> {
             let recorder = super::messenger::Recorder {
                 sent: self.sent.clone(),
             };
-            if let Ok(mut slot) = daemon.hooks.messenger.write() {
+            if let Ok(mut slot) = daemon.slots.messenger.write() {
                 *slot = Some(Arc::new(recorder));
             }
         }
@@ -309,7 +309,7 @@ impl Harness<'_> {
             release: tokio::sync::Notify::new(),
         });
         let mut slot = daemon
-            .hooks
+            .slots
             .mcp
             .write()
             .map_err(|_| anyhow::anyhow!("branchement MCP verrouillé"))?;
@@ -354,7 +354,7 @@ pub(super) async fn shut_down(life: Life, name: &str) -> bool {
     // Le superviseur tient une copie des services : la relâcher avant de les compter.
     drop(mcp);
     // L'orchestrateur tient une copie du daemon : la relâcher, sinon la vie ne finit pas.
-    if let Ok(mut slot) = daemon.hooks.orchestrator.write() {
+    if let Ok(mut slot) = daemon.slots.orchestrator.write() {
         *slot = None;
     }
     let db = services.store.path().to_path_buf();

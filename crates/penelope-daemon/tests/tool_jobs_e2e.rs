@@ -42,7 +42,7 @@ async fn daemon_at(root: &Path) -> (Arc<Daemon>, Arc<MockProvider>) {
     .unwrap();
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
-    d.hooks
+    d.slots
         .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
             &d.core,
         )));

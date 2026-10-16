@@ -26,7 +26,7 @@ async fn with_ticket_prompt(g: &TelegramGateway) {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake);
     declare(&sup, "docs", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup);
+    g.daemon.slots.set_mcp(sup);
 }
 
 async fn open_form(g: &Arc<TelegramGateway>) {

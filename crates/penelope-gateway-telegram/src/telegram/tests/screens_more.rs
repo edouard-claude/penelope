@@ -70,7 +70,7 @@ async fn status_offers_what_is_waiting() {
     let sup = penelope_mcp_host::testing::supervisor(s.clone(), fake);
     declare(&sup, "casse", "lazy_start = false\n");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
     penelope_orchestrator::workflow::start_run(
         &penelope_daemon::workflow::context_of(&g.daemon),
         "build-verify",
@@ -138,7 +138,7 @@ async fn mcp_prompts_are_listed_and_run() {
     let sup = penelope_mcp_host::testing::supervisor(s.clone(), fake);
     declare(&sup, "docs", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
 
     let (text, buttons) = screen_of(&g, "prompts", json!({})).await;
     assert!(text.starts_with("💬 **Prompts MCP**"), "{text}");

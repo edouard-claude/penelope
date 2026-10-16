@@ -131,7 +131,7 @@ impl Daemon {
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("penelope-sandbox"));
         penelope_conversation::budget_alert::AlertWatcher::install(
             &self.services,
-            self.hooks.messenger.clone(),
+            self.slots.messenger.clone(),
         );
         // Skills livrées et de l'utilisateur, disponibles dès le premier tour.
         if let Err(e) = penelope_app::services::reload_skills(&self.services).await {
@@ -174,7 +174,7 @@ impl Daemon {
         }
 
         // Workflows, sous-agents et images : offerts aux outils et à l'ordonnanceur.
-        self.hooks
+        self.slots
             .set_orchestrator(Arc::new(crate::workflow::orchestrator_of(&self.core)));
         // Chaque boucle est surveillée : une panique est journalisée, comptée et suivie
         // d'une relance, au lieu d'arrêter la boucle jusqu'au prochain démarrage (#84).
@@ -188,7 +188,7 @@ impl Daemon {
             supervised("catalog", |d| Box::pin(catalog_loop(d)) as BoxLoop),
             supervised("machine", |d| Box::pin(machine_loop(d)) as BoxLoop),
             supervised("scheduler", |d| {
-                let ports = d.hooks.scheduler();
+                let ports = d.slots.scheduler();
                 let cx = crate::workflow::context_of(&d.core);
                 Box::pin(penelope_orchestrator::scheduler::scheduler_loop(cx, ports)) as BoxLoop
             }),
@@ -201,14 +201,14 @@ impl Daemon {
                 Box::pin(crate::tool_jobs::deliver_loop(d.core.clone())) as BoxLoop
             }),
             supervised("codex.refresh", |d| {
-                let (s, messenger) = (d.services.clone(), d.hooks.messenger.clone());
+                let (s, messenger) = (d.services.clone(), d.slots.messenger.clone());
                 Box::pin(penelope_ops::codex_auth::refresh_loop(s, messenger)) as BoxLoop
             }),
             supervised("mcp.oauth_callback", |d| {
                 let ctx = penelope_mcp_host::auth::AuthContext {
                     services: d.services.clone(),
-                    messenger: d.hooks.messenger.clone(),
-                    mcp_admin: d.hooks.mcp_supervisor.clone(),
+                    messenger: d.slots.messenger.clone(),
+                    mcp_admin: d.slots.mcp_supervisor.clone(),
                     supervision: d.supervision(),
                 };
                 Box::pin(penelope_mcp_host::auth::callback_server(ctx)) as BoxLoop
@@ -216,7 +216,7 @@ impl Daemon {
             tokio::spawn(penelope_ops::upgrade::confirm_when_healthy(
                 self.services.clone(),
                 self.handle.clone(),
-                self.hooks.messenger.clone(),
+                self.slots.messenger.clone(),
             )),
         ];
         let cfg = self.services.config.config();
@@ -224,7 +224,7 @@ impl Daemon {
         // est donnée.
         if !cfg.webhooks.listen.trim().is_empty() {
             tasks.push(supervised("webhooks", |d| {
-                let ports = d.hooks.scheduler();
+                let ports = d.slots.scheduler();
                 let cx = crate::workflow::context_of(&d.core);
                 Box::pin(penelope_orchestrator::scheduler::webhook_server(cx, ports)) as BoxLoop
             }));
@@ -252,7 +252,7 @@ impl Daemon {
                 self.services.clone(),
             )),
         );
-        self.hooks.set_mcp(mcp.clone());
+        self.slots.set_mcp(mcp.clone());
         tasks.push(mcp.boot());
         {
             let mcp = mcp.clone();
@@ -345,7 +345,7 @@ async fn machine_loop(d: Arc<Daemon>) {
             Err(e) => tracing::warn!(error = %e, "inventaire de la machine"),
         }
         // Capacités trouvées et non branchées : proposées une fois au propriétaire (#260).
-        if let Some(m) = d.hooks.messenger()
+        if let Some(m) = d.slots.messenger()
             && let Err(e) =
                 penelope_app::environment::propose::propose(&d.services, m.as_ref()).await
         {
@@ -495,7 +495,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     // (CLI seule), rien n'est marqué : le propriétaire y est actif. Pendant les heures
     // calmes (#296), rien non plus : les relances échues partent à la fin de la plage, en
     // une seule par conversation.
-    if let Some(m) = d.hooks.messenger()
+    if let Some(m) = d.slots.messenger()
         && !penelope_app::quiet::is_quiet(s)
     {
         let mut due = Vec::new();
@@ -522,7 +522,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     }
 
     // Sauvegarde complète à l'heure dite (issue #42).
-    if let Err(e) = penelope_ops::backup::nightly_tick(&d.services, d.hooks.messenger()).await {
+    if let Err(e) = penelope_ops::backup::nightly_tick(&d.services, d.slots.messenger()).await {
         tracing::warn!(error = %e, "sauvegarde nocturne");
     }
 
@@ -538,9 +538,9 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
 
     // Outils MCP changés depuis leur « Toujours » : règles révoquées, le propriétaire le
     // sait (#92) ; pendant les heures calmes, l'avis attend dans la file (#296).
-    if let Some(sup) = d.hooks.mcp_supervisor() {
+    if let Some(sup) = d.slots.mcp_supervisor() {
         let notices = sup.take_notices();
-        if let Some(m) = d.hooks.messenger() {
+        if let Some(m) = d.slots.messenger() {
             let origin = penelope_app::helpers::owner_origin_of(&d.services);
             for n in notices {
                 if let Err(e) =
@@ -556,7 +556,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     // Serveurs MCP qui attendent une autorisation : le propriétaire reçoit le lien, une
     // fois par jour au plus (§8.5). Le lien expire : pendant les heures calmes il n'est
     // pas produit, il part frais au premier passage après la plage (#296).
-    if let Some(sup) = d.hooks.mcp_supervisor()
+    if let Some(sup) = d.slots.mcp_supervisor()
         && !penelope_app::quiet::is_quiet(s)
     {
         for st in sup.statuses().await {
@@ -579,7 +579,7 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
             };
             match penelope_mcp_host::auth::start(&d.services, &cfg, None).await {
                 Ok(start) => {
-                    if let Some(m) = d.hooks.messenger() {
+                    if let Some(m) = d.slots.messenger() {
                         let origin = penelope_app::helpers::owner_origin_of(&d.services);
                         let _ = m
                             .send_text(&origin, &penelope_mcp_host::auth::prompt_text(&start))

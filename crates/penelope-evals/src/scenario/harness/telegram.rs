@@ -85,12 +85,12 @@ impl Harness<'_> {
             _ => anyhow::bail!("`telegram` : `text` ou `click`, l'un des deux"),
         };
         let g = self.gateway(&d);
-        let (messenger, delivery) = (d.hooks.messenger.get(), d.hooks.delivery.get());
-        d.hooks.messenger.set(Some(g.clone() as Arc<_>));
-        d.hooks.delivery.set(Some(g.clone() as Arc<_>));
+        let (messenger, delivery) = (d.slots.messenger.get(), d.slots.delivery.get());
+        d.slots.messenger.set(Some(g.clone() as Arc<_>));
+        d.slots.delivery.set(Some(g.clone() as Arc<_>));
         let result = self.play(&g, &update).await;
-        d.hooks.messenger.set(messenger);
-        d.hooks.delivery.set(delivery);
+        d.slots.messenger.set(messenger);
+        d.slots.delivery.set(delivery);
         drop(g);
         let turns = result?;
         let mut v = self.screens().await;
@@ -114,13 +114,13 @@ impl Harness<'_> {
         let d = self.daemon()?;
         let cx = penelope_daemon::workflow::orchestrator_of(&d.core).context;
         let g = self.gateway(&d);
-        let (messenger, delivery) = (d.hooks.messenger.get(), d.hooks.delivery.get());
-        d.hooks.messenger.set(Some(g.clone() as Arc<_>));
-        d.hooks.delivery.set(Some(g.clone() as Arc<_>));
+        let (messenger, delivery) = (d.slots.messenger.get(), d.slots.delivery.get());
+        d.slots.messenger.set(Some(g.clone() as Arc<_>));
+        d.slots.delivery.set(Some(g.clone() as Arc<_>));
         let result = drive_until_still(&cx).await;
         let flushed = g.flush_outbox().await;
-        d.hooks.messenger.set(messenger);
-        d.hooks.delivery.set(delivery);
+        d.slots.messenger.set(messenger);
+        d.slots.delivery.set(delivery);
         drop(g);
         let runs = result?;
         flushed?;

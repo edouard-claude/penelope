@@ -49,7 +49,7 @@ impl Harness {
         ports.orchestrator.set(Some(Arc::new(WorkflowOrchestrator {
             context: cx.clone(),
         })));
-        // Le même emplacement que `Services.channel.delivery`, comme `Hooks` au daemon.
+        // Le même emplacement que `Services.channel.delivery`, comme `Slots` au daemon.
         let delivery = cx.services.channel.delivery.clone();
         Harness {
             dir,
@@ -60,7 +60,7 @@ impl Harness {
         }
     }
 
-    /// Branchements de l'ordonnanceur, comme `Hooks::scheduler`.
+    /// Branchements de l'ordonnanceur, comme `Slots::scheduler`.
     pub fn scheduler(&self) -> crate::scheduler::Ports {
         crate::scheduler::Ports {
             messenger: self.ports.messenger.clone(),

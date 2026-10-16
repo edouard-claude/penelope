@@ -148,7 +148,7 @@ impl Rpc {
                     if server != name {
                         anyhow::bail!("cette adresse autorise `{server}`, pas `{name}`");
                     }
-                    let status = match self.daemon.hooks.mcp_supervisor() {
+                    let status = match self.daemon.slots.mcp_supervisor() {
                         Some(sup) => sup
                             .restart(&server)
                             .await
@@ -160,7 +160,7 @@ impl Rpc {
                 }
                 let sup = self
                     .daemon
-                    .hooks
+                    .slots
                     .mcp_supervisor()
                     .ok_or_else(|| anyhow::anyhow!("superviseur MCP indisponible"))?;
                 let cfg = sup
@@ -180,7 +180,7 @@ impl Rpc {
 
     fn mcp(&self) -> anyhow::Result<Arc<dyn penelope_app::ports::McpAdmin>> {
         self.daemon
-            .hooks
+            .slots
             .mcp_supervisor()
             .ok_or_else(|| anyhow::anyhow!("superviseur MCP non démarré dans ce daemon"))
     }

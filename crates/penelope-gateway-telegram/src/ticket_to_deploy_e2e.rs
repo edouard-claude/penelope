@@ -193,14 +193,14 @@ impl World {
         d.set_provider_override(self.p.clone());
         let g = TelegramGateway::with_transport(d.core.clone(), self.t.clone());
         g.register();
-        d.hooks
+        d.slots
             .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(
                 &d.core,
             )));
         let sup = penelope_mcp_host::testing::supervisor(d.services.clone(), self.fake.clone());
         declare(&sup, "redmine", "");
         declare(&sup, "github", "");
-        d.hooks.set_mcp(sup.clone());
+        d.slots.set_mcp(sup.clone());
         sup.reload().await;
         d.recover().await.unwrap();
         (d, g)
@@ -210,11 +210,11 @@ impl World {
 /// Fin brutale d'une vie : plus rien ne tient le daemon (les hooks forment des cycles
 /// avec la passerelle et l'orchestrateur), la base se libère.
 fn kill(d: Arc<Daemon>, g: Arc<TelegramGateway>) {
-    *d.hooks.messenger.write().unwrap() = None;
-    *d.hooks.delivery.write().unwrap() = None;
-    *d.hooks.orchestrator.write().unwrap() = None;
-    *d.hooks.mcp.write().unwrap() = None;
-    *d.hooks.mcp_supervisor.write().unwrap() = None;
+    *d.slots.messenger.write().unwrap() = None;
+    *d.slots.delivery.write().unwrap() = None;
+    *d.slots.orchestrator.write().unwrap() = None;
+    *d.slots.mcp.write().unwrap() = None;
+    *d.slots.mcp_supervisor.write().unwrap() = None;
     d.handle.shutdown();
     drop(g);
     drop(d);

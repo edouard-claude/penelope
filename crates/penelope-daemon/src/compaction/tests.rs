@@ -84,7 +84,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
     let p = Arc::new(MockProvider::new());
     d.set_provider_override(p.clone());
     let rec = RecordingMessenger::new();
-    *d.hooks.messenger.write().unwrap() =
+    *d.slots.messenger.write().unwrap() =
         Some(rec.clone() as Arc<dyn penelope_app::ports::Messenger>);
     let sid = long_session(&d).await;
     for _ in 0..3 {
@@ -122,7 +122,7 @@ async fn three_failures_compact_without_a_model_and_say_so() {
         penelope_dream::digest_text(
             &d.dream(),
             penelope_orchestrator::scheduler::digest_inputs(&d.services).await,
-            d.hooks.mcp_supervisor()
+            d.slots.mcp_supervisor()
         )
         .await
         .unwrap()

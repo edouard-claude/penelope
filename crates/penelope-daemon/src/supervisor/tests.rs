@@ -60,7 +60,7 @@ async fn pending_approvals_are_reminded_at_one_and_six_hours() {
     );
     let d = Arc::new(Daemon::from_services(s.clone()));
     let rec = RecordingMessenger::new();
-    *d.hooks.messenger.write().unwrap() =
+    *d.slots.messenger.write().unwrap() =
         Some(rec.clone() as Arc<dyn penelope_executor::executor::Messenger>);
     let ask = |subject: &'static str| {
         let s = s.clone();

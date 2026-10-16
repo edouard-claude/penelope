@@ -24,7 +24,7 @@ async fn a_slow_button_is_acknowledged_immediately() {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "lent", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
 
     g.process_update(&updates::text_message(330, OWNER, OWNER, "/mcp"))
         .await

@@ -440,7 +440,7 @@ async fn run_without_parameters_turns_into_a_conversation() {
 async fn a_workflow_launch_card_cannot_bypass_the_plan_gate() {
     let (_d, g, t, p) = gateway().await;
     let d = g.daemon.clone();
-    d.hooks
+    d.slots
         .set_orchestrator(Arc::new(penelope_daemon::workflow::orchestrator_of(&d)));
     d.services
         .kv_set("tg.onboard.proposed", "test")

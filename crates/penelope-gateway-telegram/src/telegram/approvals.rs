@@ -455,7 +455,7 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let d = &self.daemon;
         let s = &d.services;
-        let Some(cfg) = (match d.hooks.mcp_supervisor() {
+        let Some(cfg) = (match d.slots.mcp_supervisor() {
             Some(sup) => sup.config_of(server).await,
             None => None,
         }) else {

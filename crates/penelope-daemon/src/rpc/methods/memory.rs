@@ -101,7 +101,7 @@ impl Rpc {
             method::MEM_AUDIT => {
                 let audit = penelope_vault::mem_audit::run(
                     &self.daemon.services,
-                    self.daemon.hooks.mcp_supervisor(),
+                    self.daemon.slots.mcp_supervisor(),
                 )
                 .await?;
                 Ok(penelope_vault::mem_audit::to_json(&audit))
@@ -125,7 +125,7 @@ impl Rpc {
                 let dry_run = p.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
                 let outcome = penelope_dream::dream::run(
                     &self.daemon.dream(),
-                    &self.daemon.hooks.messenger,
+                    &self.daemon.slots.messenger,
                     dry_run,
                 )
                 .await?;

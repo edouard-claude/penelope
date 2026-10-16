@@ -20,7 +20,7 @@ async fn an_mcp_server_is_disabled_then_enabled_from_its_screen() {
     let sup = penelope_mcp_host::testing::supervisor(g.daemon.services.clone(), fake.clone());
     declare(&sup, "redmine", "");
     sup.reload().await;
-    g.daemon.hooks.set_mcp(sup.clone());
+    g.daemon.slots.set_mcp(sup.clone());
 
     let (_, buttons) = screen_of(&g, "mcp", json!({})).await;
     token_of(&buttons, "🔄");
