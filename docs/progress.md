@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.65
+
+**Planification : « Pour cette session » vaut pour toutes les exécutions de la
+planification (#379).**
+
+Constat (16/10, suivi Grand Raid toutes les 2 h) : une planification ouvre une session
+par exécution (#39), et l'accord « pour cette session » mourait avec chaque relevé ; le
+suivant redemandait les mêmes outils Camofox (53 demandes en 17 sessions depuis le 15/10).
+
+- La session d'une exécution porte le lien vers sa planification
+  (`session.schedule.<session>`).
+- « Pour cette session » accordé dans une telle session crée une règle pour la
+  planification (`schedule:<id>`), qui vaut pour toutes ses exécutions et pour elles
+  seulement ; le bouton dit « ✅ Pour cette planification ». La règle reste visible et
+  révocable dans `/policies`.
+
 ### 1.0.64
 
 **Carte d'approbation : une commande très longue part en entier en pièce jointe, la carte
