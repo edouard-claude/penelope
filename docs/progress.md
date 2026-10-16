@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.69
+
+**Hooks de cycle de vie, lot 4 : `session_start`, `prompt_submit`, temps des hooks dans
+`penelope usage` (#385, épopée #386 close).**
+
+- `session_start` tourne une fois par session, au premier tour ; sa note va au contexte
+  volatil (T4), jamais au préfixe : le cache ne bouge pas. Pas de `block` : une session
+  s'ouvre toujours.
+- `prompt_submit` passe sur chaque message du propriétaire accepté, avant la construction
+  du prompt ; il ne reçoit le texte que s'il le déclare (`input = "text"`). `block` : le
+  message n'est pas envoyé au modèle et le propriétaire reçoit le motif ; une note va en
+  T4.
+- `penelope usage --by hook` : exécutions et temps cumulé par hook, lus dans le journal
+  `hook.ran`.
+- Les bornes (8 par événement, 2 minutes) sont dans la section « Limites actuelles » de
+  `docs/hooks.md`, reprise par `self_status --section limits`.
+- Scénario `hooks-ouverture-et-message`.
+
 ### 1.0.68
 
 **Hooks de cycle de vie, lot 3 : `pre_tool` et `turn_end`, une couche de verdict qui ne
