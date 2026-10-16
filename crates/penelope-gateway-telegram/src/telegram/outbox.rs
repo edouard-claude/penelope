@@ -183,6 +183,49 @@ impl TelegramGateway {
         let _ = std::fs::remove_file(&path);
         sent.map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string()))
     }
+    /// La citation d'une bulle telle que le cœur l'attend (#381). L'auteur n'est
+    /// Pénélope que si la bulle figure parmi ses envois : un nom ou `is_bot` ne suffit pas.
+    pub(super) async fn quoted_of(
+        &self,
+        chat_id: i64,
+        r: penelope_telegram::Replied,
+    ) -> penelope_app::channel::Quoted {
+        use penelope_app::channel::QuotedAuthor;
+        let message_id = r.message_id;
+        let ours = r.from_bot
+            && !r.forwarded
+            && self
+                .daemon
+                .services
+                .store
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "SELECT COUNT(*) FROM tg_outbox WHERE chat_id = ?1 AND message_id = ?2",
+                        penelope_store::rusqlite::params![chat_id, message_id],
+                        |row| row.get::<_, i64>(0),
+                    )? > 0)
+                })
+                .await
+                .unwrap_or(false);
+        let author = if ours {
+            QuotedAuthor::Agent
+        } else if !r.from_bot && !r.forwarded && r.from_id == Some(self.owner_id) {
+            QuotedAuthor::Owner
+        } else {
+            QuotedAuthor::Other(r.author)
+        };
+        let text = if r.text.is_empty() {
+            r.quote.clone().unwrap_or_default()
+        } else {
+            r.text
+        };
+        penelope_app::channel::Quoted {
+            text,
+            author,
+            excerpt: r.quote,
+        }
+    }
+
     pub(super) async fn outbox_push(
         &self,
         chat_id: i64,

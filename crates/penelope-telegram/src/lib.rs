@@ -36,6 +36,8 @@ pub enum Incoming {
         text: String,
         /// Réponse à une carte : le contexte de la carte est injecté.
         reply_to: Option<i64>,
+        /// Le message cité par « Répondre » (#381), sauf la réponse implicite d'un sujet.
+        replied: Option<Replied>,
         forwarded: bool,
     },
     Command {
@@ -107,6 +109,7 @@ pub enum Incoming {
         /// Le message tel qu'il a été collé.
         text: String,
         reply_to: Option<i64>,
+        replied: Option<Replied>,
         forwarded: bool,
     },
     Edited {
@@ -187,6 +190,7 @@ impl Incoming {
                 topic_id,
                 text,
                 reply_to,
+                replied,
                 forwarded,
             } => Incoming::Text {
                 update_id,
@@ -196,6 +200,7 @@ impl Incoming {
                 topic_id,
                 text,
                 reply_to,
+                replied,
                 forwarded,
             },
             other => other,
@@ -239,6 +244,72 @@ pub fn largest_photo_within(sizes: &[PhotoSize], max_bytes: usize) -> Option<&Ph
 /// `from.id` d'un message écrit en administrateur anonyme : le bot `GroupAnonymousBot`
 /// de Telegram, la conversation étant dans `sender_chat`.
 pub const ANONYMOUS_ADMIN_ID: i64 = 1_087_968_824;
+
+/// Le message auquel un message répond (#381), tel que Telegram le donne : son texte (ou
+/// sa légende), son auteur et le passage surligné par celui qui répond.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Replied {
+    pub message_id: i64,
+    pub text: String,
+    pub from_id: Option<i64>,
+    pub from_bot: bool,
+    /// Prénom ou nom d'utilisateur de l'auteur, pour le dire au modèle.
+    pub author: String,
+    pub quote: Option<String>,
+    /// La bulle citée est elle-même un message transféré : sa parole est celle d'un
+    /// tiers, quel que soit qui l'a transférée.
+    pub forwarded: bool,
+}
+
+/// Le message cité, sauf la réponse implicite d'un sujet de forum : dans un sujet,
+/// Telegram fait « répondre » chaque bulle au message de création du sujet.
+fn replied_of(msg: &Value) -> Option<Replied> {
+    let r = msg.get("reply_to_message")?;
+    if r.get("forum_topic_created").is_some()
+        || (msg.get("is_topic_message").is_some()
+            && r.get("message_id") == msg.get("message_thread_id"))
+    {
+        return None;
+    }
+    let text = r
+        .get("text")
+        .or_else(|| r.get("caption"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let quote = msg
+        .get("quote")
+        .and_then(|q| q.get("text"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if text.is_empty() && quote.is_none() {
+        return None;
+    }
+    let from = r.get("from");
+    let str_of = |k: &str| from.and_then(|f| f.get(k)).and_then(|v| v.as_str());
+    Some(Replied {
+        message_id: r.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0),
+        text,
+        from_id: from.and_then(|f| f.get("id")).and_then(|v| v.as_i64()),
+        from_bot: from
+            .and_then(|f| f.get("is_bot"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        author: str_of("first_name")
+            .or_else(|| str_of("username"))
+            .unwrap_or("un membre")
+            .to_string(),
+        quote,
+        forwarded: [
+            "forward_origin",
+            "forward_from",
+            "forward_from_chat",
+            "forward_sender_name",
+        ]
+        .iter()
+        .any(|k| r.get(*k).is_some()),
+    })
+}
 
 /// Qui peut parler à Pénélope, et où (§13.4, issue #113) : le propriétaire, en privé et
 /// dans les seules conversations de groupe nommées par leur identifiant.
@@ -464,6 +535,7 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         .and_then(|r| r.get("message_id"))
         .and_then(|v| v.as_i64());
     let forwarded = msg.get("forward_origin").is_some() || msg.get("forward_from").is_some();
+    let replied = replied_of(msg);
 
     if looks_like_oauth_callback(&text) {
         return Incoming::OAuthCallback {
@@ -474,6 +546,7 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
             topic_id,
             text,
             reply_to,
+            replied,
             forwarded,
         };
     }
@@ -498,6 +571,7 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         topic_id,
         text,
         reply_to,
+        replied,
         forwarded,
     }
 }

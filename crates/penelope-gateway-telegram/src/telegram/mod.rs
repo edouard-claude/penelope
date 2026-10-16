@@ -465,6 +465,7 @@ impl TelegramGateway {
                 topic_id,
                 text,
                 forwarded,
+                replied,
                 ..
             } => {
                 if self
@@ -500,6 +501,14 @@ impl TelegramGateway {
                     penelope_observe::injection::wrap_untrusted("message transféré", &text)
                 } else {
                     text
+                };
+                // « Répondre » à une bulle : le contrat de citation du cœur (#381).
+                let content = match replied {
+                    Some(r) => {
+                        let quoted = self.quoted_of(chat_id, r).await;
+                        penelope_app::channel::with_quote(&content, &quoted)
+                    }
+                    None => content,
                 };
                 self.react(chat_id, message_id, reaction::RECEIVED);
                 // Les morceaux d'un même envoi attendent la fin de la fenêtre et partent
