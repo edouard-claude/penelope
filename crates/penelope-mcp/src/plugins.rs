@@ -1,28 +1,20 @@
 //! Les serveurs MCP des plugins (#393) : `.mcp.json` d'un plugin au format Claude Code,
 //! lu en déclarations dérivées, jamais écrit dans le `mcp.d` du propriétaire.
 //!
-//! Un serveur prend le nom `<plugin>-<serveur>` ; `${CLAUDE_PLUGIN_ROOT}` est remplacé
-//! par le dossier du plugin. Il ne démarre que si la politique du propriétaire
-//! (`plugins.allowed_mcp_servers`) l'autorise ; sinon il est rendu en erreur avec la
-//! raison, visible dans `mcp list` et `doctor`.
+//! Un serveur prend le nom `<plugin>-<serveur>`, le plugin nommé par son dossier ;
+//! `${CLAUDE_PLUGIN_ROOT}` est remplacé par ce dossier. Il ne démarre que si la politique
+//! du propriétaire (`plugins.allowed_mcp_servers`, paires `<plugin>/<serveur>`)
+//! l'autorise ; sinon il est rendu en erreur avec la raison, visible dans `mcp list` et
+//! `doctor`. Un nom dérivé que deux plugins produisent est refusé aux deux.
 
 use crate::config::ServerConfig;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Nom d'un plugin : celui de son `plugin.json` s'il est valide, sinon son dossier.
+/// Nom d'un plugin : son dossier, que le plugin ne choisit pas (un `plugin.json` ne
+/// peut pas se faire passer pour un autre plugin autorisé).
 fn plugin_name(root: &Path) -> Option<String> {
-    let manifest: serde_json::Value =
-        std::fs::read_to_string(root.join(".claude-plugin").join("plugin.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
-    let declared = manifest["name"].as_str().unwrap_or_default();
-    let name = if penelope_platform::validate_slug(declared).is_ok() {
-        declared.to_string()
-    } else {
-        root.file_name()?.to_string_lossy().to_string()
-    };
+    let name = root.file_name()?.to_string_lossy().to_string();
     penelope_platform::validate_slug(&name)
         .is_ok()
         .then_some(name)
@@ -91,7 +83,7 @@ fn to_config(name: &str, decl: &serde_json::Value, root: &str) -> Result<ServerC
     Ok(cfg)
 }
 
-/// Les serveurs des plugins de `plugins_dir` ; `allows(plugin, serveur)` est la politique
+/// Les serveurs des plugins de `plugins_dir` ; `allows(plugin, clé)` est la politique
 /// du propriétaire. Rend les serveurs autorisés et valides, puis les autres avec leur
 /// raison.
 pub fn load(
@@ -120,12 +112,12 @@ pub fn load(
                 refused.push((name, "nom de serveur invalide".into()));
                 continue;
             }
-            if !allows(&plugin, &name) {
+            if !allows(&plugin, &server) {
                 refused.push((
                     name.clone(),
                     format!(
-                        "serveur du plugin {plugin} non autorisé : ajouter `{name}` à \
-                         `plugins.allowed_mcp_servers`"
+                        "serveur du plugin {plugin} non autorisé : ajouter `{plugin}/{server}` \
+                         à `plugins.allowed_mcp_servers`"
                     ),
                 ));
                 continue;
@@ -135,6 +127,15 @@ pub fn load(
                 Err(e) => refused.push((name, e)),
             }
         }
+    }
+    // `a-b` + `c` et `a` + `b-c` donnent le même nom : refusé aux deux.
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for c in &ok {
+        *seen.entry(c.name.clone()).or_default() += 1;
+    }
+    let (ok, twice): (Vec<_>, Vec<_>) = ok.into_iter().partition(|c| seen[&c.name] == 1);
+    for c in twice {
+        refused.push((c.name, "nom dérivé produit par deux plugins".into()));
     }
     (ok, refused)
 }
@@ -187,7 +188,7 @@ mod tests {
                 "web":{"type":"http","url":"https://example.org/mcp"}}}"#,
         );
         plugin(dir.path(), "autre", r#"{"srv":{"command":"x"}}"#);
-        let (ok, refused) = load(dir.path(), |p, n| p == "notes" && n == "notes-index");
+        let (ok, refused) = load(dir.path(), |p, n| p == "notes" && n == "index");
         assert_eq!(ok.len(), 1);
         let root = dir.path().join("notes").to_string_lossy().to_string();
         assert_eq!(ok[0].name, "notes-index");
@@ -196,12 +197,27 @@ mod tests {
         assert_eq!(ok[0].cwd, root);
         let names: Vec<&str> = refused.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["autre-srv", "notes-web"]);
-        assert!(refused[0].1.contains("plugins.allowed_mcp_servers"));
+        assert!(refused[0].1.contains("`autre/srv`"));
         let (ok, _) = load(dir.path(), |_, _| true);
         assert_eq!(ok.len(), 3);
         assert_eq!(
             ok.iter().find(|c| c.name == "notes-web").unwrap().url,
             "https://example.org/mcp"
+        );
+    }
+
+    #[test]
+    fn two_plugins_that_derive_the_same_name_are_both_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        plugin(dir.path(), "a-b", r#"{"c":{"command":"x"}}"#);
+        plugin(dir.path(), "a", r#"{"b-c":{"command":"y"}}"#);
+        let (ok, refused) = load(dir.path(), |_, _| true);
+        assert!(ok.is_empty());
+        assert_eq!(refused.len(), 2);
+        assert!(
+            refused
+                .iter()
+                .all(|(n, r)| n == "a-b-c" && r.contains("deux plugins"))
         );
     }
 
