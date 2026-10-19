@@ -159,9 +159,8 @@ impl Connector for ProcessConnector {
                         .await?
                         .ok_or_else(|| {
                             format!(
-                                "{} : `penelope mcp auth {}` ou `/mcp auth {}` sur Telegram",
+                                "{} : `penelope mcp auth {}`",
                                 crate::auth::AUTH_REQUIRED,
-                                cfg.name,
                                 cfg.name
                             )
                         })?;
