@@ -195,9 +195,11 @@ ne le répète (« identifiants refusés par le serveur CalDAV (HTTP 401) : vér
 | `AGENDA_TIMEZONE` | Fuseau par défaut des réponses, et celui des heures sans fuseau et des dates ; `UTC` sinon |
 | `AGENDA_CALENDARS` | Noms des calendriers servis, séparés par des virgules ; tous les calendriers d'événements sinon |
 | `AGENDA_TIMEOUT` | Délai d'une requête CalDAV, en secondes (20) |
+| `AGENDA_TRACE` | Un fichier où ajouter chaque réponse WebDAV (sans les en-têtes), pour diagnostiquer un serveur qui ne rend aucun calendrier ; il doit être dans `{data}/mcp-data/<serveur>/`, seul dossier où le bac à sable laisse écrire (1.0.76, #409) |
 
 La découverte suit RFC 6764 : `current-user-principal` sur l'adresse, `calendar-home-set`
-du principal, puis la liste du dossier ; les collections sans `VEVENT` (rappels, boîtes de
+du principal, puis la liste du dossier. Une adresse qui ne nomme pas de principal est
+interrogée elle-même sur `calendar-home-set` (le principal de Google, 1.0.76, #409) ; les collections sans `VEVENT` (rappels, boîtes de
 réception) sont écartées ; une redirection est suivie avec la même méthode. Les événements
 viennent d'un `REPORT calendar-query` borné dans le temps, puis sont développés côté
 serveur MCP : `TZID`, UTC, heures sans fuseau, journées entières, `DURATION`, `RRULE`
@@ -424,7 +426,7 @@ access_type = "offline"   # sans lui, pas de jeton de rafraîchissement
 prompt = "consent"
 
 [env]
-AGENDA_URL = "https://apidata.googleusercontent.com/caldav/v2/"
+AGENDA_URL = "https://apidata.googleusercontent.com/caldav/v2/prenom@exemple.fr/user"
 AGENDA_USER = "prenom@exemple.fr"
 AGENDA_TOKEN = "${OAUTH_ACCESS_TOKEN}"
 AGENDA_TIMEZONE = "Indian/Reunion"

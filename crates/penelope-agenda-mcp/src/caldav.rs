@@ -165,7 +165,26 @@ impl Client {
             }
             return match status.as_u16() {
                 401 | 403 => Err(Error::Auth(status.as_u16())),
-                200 | 207 => resp.text().await.map_err(|e| Error::Network(e.to_string())),
+                200 | 207 => {
+                    let body = resp
+                        .text()
+                        .await
+                        .map_err(|e| Error::Network(e.to_string()))?;
+                    // `AGENDA_TRACE=<fichier>` : chaque réponse WebDAV y est ajoutée, pour
+                    // comprendre un serveur qui ne rend aucun calendrier. Jamais les
+                    // en-têtes : ni identifiants ni jeton.
+                    if let Ok(path) = std::env::var("AGENDA_TRACE")
+                        && let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                    {
+                        use std::io::Write;
+                        let shown: String = body.chars().take(4000).collect();
+                        let _ = writeln!(f, "{method} {url} → {status} :\n{shown}\n");
+                    }
+                    Ok(body)
+                }
                 s => Err(Error::Status {
                     what: what.to_string(),
                     status: s,
@@ -262,12 +281,19 @@ impl Client {
         Ok(out)
     }
 
-    /// Principal, dossier, calendriers. Un serveur qui ne nomme pas de principal (ou une
-    /// adresse qui est déjà le dossier des calendriers) est listé directement.
+    /// Principal, dossier, calendriers. Un serveur qui ne nomme pas de principal est
+    /// interrogé directement sur son dossier des calendriers : Google sert son principal
+    /// (`…/caldav/v2/<compte>/user`) sans `current-user-principal`, mais avec
+    /// `calendar-home-set` (#409). Sans l'un ni l'autre, l'adresse est prise pour le dossier
+    /// lui-même, et à défaut pour un calendrier.
     pub async fn discover(&self) -> Result<Vec<Calendar>, Error> {
         let home = match self.principal().await {
             Ok(principal) => self.calendar_home(&principal).await?,
-            Err(Error::Discovery(_)) => self.base.clone(),
+            Err(Error::Discovery(_)) => match self.calendar_home(&self.base).await {
+                Ok(home) => home,
+                Err(Error::Discovery(_)) => self.base.clone(),
+                Err(e) => return Err(e),
+            },
             Err(e) => return Err(e),
         };
         self.calendars(&home).await
