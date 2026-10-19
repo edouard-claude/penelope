@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activity;
 pub mod attempts;
 pub mod autonomy;
 pub mod backup_state;
