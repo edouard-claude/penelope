@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.77
+
+**MCP : un fichier local passe à un outil en base64 sans traverser le modèle (#310).**
+
+- Un outil MCP qui n'accepte qu'un champ `content_base64` (import de références vers
+  Kelpo) obligeait le modèle à recopier des dizaines de milliers de caractères.
+- Une valeur `{"$file_base64": "<chemin>"}` dans les arguments est remplacée à l'appel par
+  le contenu du fichier. La carte d'approbation montre le chemin, jamais le contenu.
+- Règles appliquées :
+  - celles des outils `fs_*` (workspaces, `vault:`) ;
+  - `sandbox.deny_read` refusé ;
+  - 15 Mo au plus, lus par un seul descripteur ;
+  - une carte est **toujours** demandée, même pour un outil en lecture ou couvert par une
+    règle « Toujours », puisque le fichier sort de la machine.
+- Fonctionne dans le chat comme dans un sous-agent.
+
 ### 1.0.74
 
 **OAuth pour un serveur MCP stdio ; l'agenda CalDAV en Bearer : Google Agenda sans mot de
