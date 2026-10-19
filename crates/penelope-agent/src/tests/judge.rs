@@ -214,8 +214,9 @@ async fn explain_enriches_the_card_and_always_writes_a_power_rule() {
     let judged = &card.payload["judged"];
     assert_eq!(judged["verdict"], "sûr");
     assert_eq!(judged["powers"], json!(["lecture"]));
-    let tmp = b.e.ws.join("tmp").to_string_lossy().into_owned();
-    assert_eq!(judged["grant"]["paths"], json!([tmp]));
+    // Élargie au workspace (#401), pour resservir hors du sous-dossier du premier appel.
+    let ws = b.e.ws.to_string_lossy().into_owned();
+    assert_eq!(judged["grant"]["paths"], json!([ws]));
     assert_eq!(b.judged().await[0]["outcome"], "carte");
 
     assert!(

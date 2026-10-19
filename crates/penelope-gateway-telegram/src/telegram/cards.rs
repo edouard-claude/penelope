@@ -180,6 +180,34 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
     // « Toujours » la propose.
     if grant && always.is_none() {
         always = Some("ces pouvoirs".into());
+        // La portée réelle de la règle, élargie au workspace (#401) : le propriétaire la
+        // lit avant le clic.
+        let under: Vec<&str> = judged["grant"]["paths"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !under.is_empty() {
+            // Des chemins nommés par le juge : rendus en code, tronqués, comme le reste de
+            // ce qu'un modèle a dit sur la carte.
+            let shown: Vec<String> = under
+                .iter()
+                .take(3)
+                .map(|p| {
+                    let p: String = p.replace('`', "ʼ").chars().take(80).collect();
+                    format!("`{p}`")
+                })
+                .collect();
+            let more = under.len().saturating_sub(3);
+            quals.push(format!(
+                "« Toujours » vaudra sous {}{}",
+                shown.join(", "),
+                if more > 0 {
+                    format!(" (+{more})")
+                } else {
+                    String::new()
+                }
+            ));
+        }
     }
     // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
     // sans créer de règle (#111). La carte le dit avant le clic (#141).

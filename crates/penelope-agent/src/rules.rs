@@ -77,6 +77,12 @@ fn family_of(step: &penelope_hitl::cmdline::Pipeline) -> Option<String> {
         [first, ..] => vec![first.clone()],
         [] => return None,
     };
+    // Un script temporaire écrit par le modèle (`python3 tmp/consign-x7Q.py`) : une famille
+    // à son nom ne resservirait jamais (#401), et aucune règle ne peut le couvrir sans
+    // risque, son contenu changeant à chaque appel. Pas de règle : la carte le dit.
+    if head_words.len() == 2 && is_scratch_script(&head_words[1]) {
+        return None;
+    }
     let head = head_words.join(" ");
     // La famille doit se relire comme elle a été écrite, sinon la règle créée ne
     // couvrirait jamais la commande dont elle vient (régression de #111) : un mot qui
@@ -85,6 +91,29 @@ fn family_of(step: &penelope_hitl::cmdline::Pipeline) -> Option<String> {
         return None;
     }
     Some(head)
+}
+
+/// Un script jetable : sous un dossier `tmp` (relatif ou absolu), ou un fichier `.py`,
+/// `.sh` ou `.js` dont le nom porte un suffixe aléatoire (`consign-r4_CRMXxBEs.py`).
+fn is_scratch_script(word: &str) -> bool {
+    let p = std::path::Path::new(word);
+    let under_tmp = p.parent().is_some_and(|d| {
+        d.components()
+            .any(|c| c.as_os_str() == "tmp" || c.as_os_str() == ".tmp")
+    });
+    let random_suffix = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.rsplit_once(['-', '_']))
+        .is_some_and(|(_, tail)| {
+            tail.len() >= 6
+                && tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && tail.chars().any(|c| c.is_ascii_uppercase())
+                && tail
+                    .chars()
+                    .any(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        });
+    under_tmp || random_suffix
 }
 
 /// Motif d'arguments d'une règle « toujours », dérivé de l'appel : ce qui borne

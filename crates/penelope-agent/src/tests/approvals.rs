@@ -562,3 +562,37 @@ fn pending_calls_ignore_answered_and_abandoned_ones() {
     t.push(ChatMessage::user("laisse tomber"));
     assert!(pending_calls(&t).is_empty());
 }
+
+/// #401 : un script jetable écrit par le modèle n'a pas de famille. Une règle à son nom
+/// aléatoire ne resservirait jamais : la ligne passe par le juge, dont la règle porte sur
+/// les pouvoirs. Un script du projet garde la sienne.
+#[test]
+fn a_scratch_script_has_no_family() {
+    for command in [
+        "python3 tmp/consign-r4_CRMXxBEs.py",
+        "python3 /tmp/extract.py",
+        "python3 consign-ATc5dtUdosY.py",
+        "cd work && python3 tmp/run.py",
+    ] {
+        let args = json!({"command": command});
+        assert!(
+            arg_patterns("shell_exec", Some(&args)).is_empty(),
+            "famille à tort : {command}"
+        );
+    }
+    for (command, family) in [
+        ("python3 scripts/build.py", "python3 scripts/build.py"),
+        (
+            "python3 mentaleco_backup_rules.py",
+            "python3 mentaleco_backup_rules.py",
+        ),
+        ("python3 -m pytest", "python3 -m"),
+    ] {
+        let args = json!({"command": command});
+        assert_eq!(
+            arg_patterns("shell_exec", Some(&args)),
+            [json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: family}})],
+            "{command}"
+        );
+    }
+}

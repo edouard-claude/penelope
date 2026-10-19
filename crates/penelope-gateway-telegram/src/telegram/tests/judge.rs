@@ -76,6 +76,8 @@ async fn the_judged_card_says_what_the_line_does_and_escapes_the_model() {
     assert!(text.contains("{ {details}}"), "{text}");
     // Une règle est possible : la carte ne dit plus le contraire.
     assert!(!text.contains("pas de règle possible"), "{text}");
+    // Sa portée, élargie au workspace, se lit avant le clic (#401).
+    assert!(text.contains("« Toujours » vaudra sous"), "{text}");
 
     let buttons = labels(&card);
     let (_, token) = buttons
