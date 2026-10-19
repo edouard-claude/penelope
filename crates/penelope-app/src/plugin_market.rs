@@ -11,7 +11,7 @@
 //! champs compris, pour qu'un humain ou un outil passe de l'un à l'autre. Installer
 //! n'active rien qui exécute : serveurs et hooks attendent la politique du propriétaire.
 
-use crate::plugin_install::{SOURCE_FILE, fetch, name_of};
+use crate::plugin_install::{SOURCE_FILE, fetch, fetch_remote, name_of};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -124,6 +124,7 @@ pub fn install(data: &Path, spec: &str) -> Result<PathBuf, String> {
         .flatten()
         .find(|p| p["name"] == plugin)
         .ok_or_else(|| format!("aucun plugin `{plugin}` dans la marketplace `{market}`"))?;
+    let mut remote = true;
     let source = match &entry["source"] {
         Value::String(rel) => {
             // Un chemin relatif reste dans la marketplace : `../../.ssh` est refusé.
@@ -133,13 +134,21 @@ pub fn install(data: &Path, spec: &str) -> Result<PathBuf, String> {
             if !path.starts_with(&root) {
                 return Err(format!("source `{rel}` hors de la marketplace"));
             }
+            remote = false;
             path.to_string_lossy().to_string()
         }
         v if v["source"] == "github" => {
-            format!(
-                "https://github.com/{}.git",
-                v["repo"].as_str().unwrap_or_default()
-            )
+            let repo = v["repo"].as_str().unwrap_or_default();
+            let ok = |p: &str| {
+                !p.is_empty()
+                    && p != ".."
+                    && p.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+            };
+            match repo.split_once('/') {
+                Some((o, r)) if ok(o) && ok(r) => format!("https://github.com/{repo}.git"),
+                _ => return Err(format!("dépôt github `{repo}` invalide (propriétaire/nom)")),
+            }
         }
         v if v["source"] == "url" || v["source"] == "git" => {
             v["url"].as_str().unwrap_or_default().to_string()
@@ -152,11 +161,12 @@ pub fn install(data: &Path, spec: &str) -> Result<PathBuf, String> {
             "le plugin `{plugin}` existe déjà : `penelope plugin remove {plugin}` d'abord"
         ));
     }
-    fetch(
-        &source,
-        &dest,
-        &plugins_dir(data).join(format!(".clone-{plugin}")),
-    )?;
+    let tmp = plugins_dir(data).join(format!(".clone-{plugin}"));
+    if remote {
+        fetch_remote(&source, &dest, &tmp)?;
+    } else {
+        fetch(&source, &dest, &tmp)?;
+    }
     std::fs::write(dest.join(SOURCE_FILE), spec).map_err(|e| e.to_string())?;
     let installed_path = plugins_dir(data).join(INSTALLED);
     let mut installed = read_json(&installed_path);
@@ -207,7 +217,10 @@ mod tests {
             m.join(".claude-plugin/marketplace.json"),
             r#"{"name": "atelier", "owner": {"name": "moi"}, "plugins": [
                 {"name": "notes", "source": "./plugins/notes", "version": "1.2.0", "description": "Notes"},
-                {"name": "evade", "source": "../../", "description": "hors champ"}]}"#,
+                {"name": "evade", "source": "../../", "description": "hors champ"},
+                {"name": "local", "source": {"source": "git", "url": "/home/moi/prive.git"}},
+                {"name": "fichier", "source": {"source": "url", "url": "file:///etc/x.git"}},
+                {"name": "gh", "source": {"source": "github", "repo": "../../x"}}]}"#,
         )
         .unwrap();
         m
@@ -243,6 +256,13 @@ mod tests {
         );
         assert!(install(data.path(), "absent@atelier").is_err());
         assert!(install(data.path(), "notes").is_err());
+        for bad in ["local", "fichier", "gh"] {
+            let e = install(data.path(), &format!("{bad}@atelier")).unwrap_err();
+            assert!(
+                e.contains("distant") || e.contains("invalide"),
+                "{bad} : {e}"
+            );
+        }
         forget(data.path(), "notes").unwrap();
         let installed = read_json(&data.path().join("plugins").join(INSTALLED));
         assert!(installed["plugins"].as_object().unwrap().is_empty());

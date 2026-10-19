@@ -46,8 +46,23 @@ pub fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Copie `source` (dossier local, ou dépôt git cloné dans `tmp` puis recopié) vers
 /// `dest`, sans `.git` ni lien symbolique. `dest` est effacé si la copie échoue.
 pub fn fetch(source: &str, dest: &Path, tmp: &Path) -> Result<(), String> {
+    fetch_with(source, dest, tmp, false)
+}
+
+/// [`fetch`] pour une source qu'un tiers a écrite (une marketplace) : un dépôt distant
+/// seulement, `https://` ou `git@`, jamais un chemin ni le protocole `file`.
+pub fn fetch_remote(source: &str, dest: &Path, tmp: &Path) -> Result<(), String> {
+    if !(source.starts_with("https://") || source.starts_with("git@")) {
+        return Err(format!(
+            "source `{source}` : un dépôt distant (https:// ou git@) attendu"
+        ));
+    }
+    fetch_with(source, dest, tmp, true)
+}
+
+fn fetch_with(source: &str, dest: &Path, tmp: &Path, remote_only: bool) -> Result<(), String> {
     let local = Path::new(source);
-    if local.is_dir() {
+    if !remote_only && local.is_dir() {
         return copy_dir(local, dest).map_err(|e| {
             let _ = std::fs::remove_dir_all(dest);
             e.to_string()
@@ -66,7 +81,15 @@ pub fn fetch(source: &str, dest: &Path, tmp: &Path) -> Result<(), String> {
     let git = penelope_platform::which("git").ok_or("`git` est absent du PATH")?;
     let _ = std::fs::remove_dir_all(tmp);
     let out = std::process::Command::new(git)
-        .args(["clone", "--depth", "1", "--", source])
+        .args([
+            "-c",
+            "protocol.file.allow=never",
+            "clone",
+            "--depth",
+            "1",
+            "--",
+            source,
+        ])
         .arg(tmp)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
