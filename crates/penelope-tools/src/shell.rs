@@ -40,39 +40,23 @@ pub fn check_command(command: &str) -> ToolResult<()> {
     Ok(())
 }
 
-/// Le programme interdit lancé par la ligne, s'il y en a un (#400). Chaque segment, coupé
-/// aux enchaînements et aux substitutions, est lu par son premier mot, après les
-/// affectations (`X=1`) et les lanceurs (`env`, `exec`, `nohup`…), chemin ôté ; le texte
-/// d'un `sh -c '…'` est relu comme une ligne. Un mot qui contient le nom
-/// (`server.shutdown()`, `grep shutdown`) passe.
+/// Le programme interdit nommé par la ligne, s'il y en a un (#400). La ligne est coupée
+/// en mots aux blancs, aux opérateurs du shell, aux guillemets et aux `=`, barres
+/// obliques inverses ôtées ; un mot égal au nom d'un programme interdit (chemin ôté,
+/// `mkfs.ext4` compris) le refuse, où qu'il soit. Le refus reste du côté sûr pour les
+/// lanceurs (`nice -n 5 halt`, `bash -lc 'halt'`, `then reboot`) ; seul un mot qui
+/// *contient* le nom (`server.shutdown()`, `shutdown_hook`, `asphalt`) passe.
 fn forbidden_program(line: &str) -> Option<&'static str> {
-    const LAUNCHERS: &[&str] = &["env", "exec", "nohup", "command", "time", "nice", "builtin"];
-    const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
-    let segments = line.split(|c: char| {
-        matches!(
-            c,
-            ';' | '&' | '|' | '(' | ')' | '`' | '$' | '\n' | '{' | '}'
-        )
+    let unescaped = line.replace('\\', "");
+    let words = unescaped.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                ';' | '&' | '|' | '(' | ')' | '`' | '$' | '{' | '}' | '<' | '>' | '\'' | '"' | '='
+            )
     });
-    for segment in segments {
-        let words: Vec<&str> = segment
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c| c == '\'' || c == '"'))
-            .filter(|w| !w.is_empty())
-            .collect();
-        let Some(at) = words
-            .iter()
-            .position(|w| !w.contains('=') && !LAUNCHERS.contains(w) && !w.starts_with('-'))
-        else {
-            continue;
-        };
-        let program = words[at].rsplit('/').next().unwrap_or(words[at]);
-        if SHELLS.contains(&program)
-            && let Some(c) = words.iter().position(|w| *w == "-c")
-            && let Some(f) = forbidden_program(&words[c + 1..].join(" "))
-        {
-            return Some(f);
-        }
+    for word in words.filter(|w| !w.is_empty()) {
+        let program = word.rsplit('/').next().unwrap_or(word);
         if let Some(f) = penelope_platform::process::forbidden_programs()
             .iter()
             .find(|f| program == **f || program.starts_with(&format!("{f}.")))

@@ -25,9 +25,10 @@ pas comme mot (#400).**
   (`approvals_cancelled`). Une session close ne reprend jamais sur une expiration.
 - `shell_exec` refusait `shutdown`, `reboot`, `halt` et `mkfs` comme sous-chaînes, jusque
   dans `server.shutdown()` d'un relais Python, et aucune autorisation ne levait le refus.
-  Ils sont maintenant refusés comme **nom de commande** : premier mot de chaque segment
-  (`;`, `&&`, `|`, substitutions), après les affectations et les lanceurs (`env`, `nohup`…),
-  chemin ôté, `mkfs.ext4` et `sh -c '…'` compris ; `poweroff` s'y ajoute. Les formes
+  Ils sont maintenant refusés comme **mots entiers** (coupés aux blancs, aux opérateurs,
+  aux guillemets, chemin ôté, `mkfs.ext4` compris), où qu'ils soient : derrière `nice -n`,
+  `bash -lc`, `then` ou `xargs`, le refus tient. Seul un mot qui contient le nom passe
+  (`server.shutdown()`, `shutdown_hook`). `poweroff` s'y ajoute ; les formes
   destructrices complètes (`rm -rf /`, `dd … of=/dev/`) restent des motifs.
 
 ### 1.0.70

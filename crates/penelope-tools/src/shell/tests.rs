@@ -413,8 +413,9 @@ fn forbidden_commands_are_refused() {
     assert!(check_command("").is_err());
 }
 
-/// #400 : `shutdown`, `reboot`, `halt` et `mkfs` sont refusés comme commandes, où
-/// qu'elles soient dans la ligne, mais plus comme simples mots.
+/// #400 : `shutdown`, `reboot`, `halt` et `mkfs` sont refusés comme mots entiers, où
+/// qu'ils soient dans la ligne et derrière n'importe quel lanceur, mais plus comme
+/// sous-chaînes d'un autre mot.
 #[cfg(not(windows))]
 #[test]
 fn forbidden_programs_are_read_as_commands_not_words() {
@@ -426,6 +427,12 @@ fn forbidden_programs_are_read_as_commands_not_words() {
         "echo ok; mkfs.ext4 /dev/disk2",
         "nohup shutdown -r +1",
         "a | (halt)",
+        "nice -n 10 shutdown",
+        "bash -lc 'halt'",
+        "if true; then reboot; fi",
+        "timeout 5 sh\\utdown",
+        "echo x | xargs poweroff",
+        "sudo=1 halt",
     ] {
         assert!(check_command(c).is_err(), "acceptée à tort : {c}");
     }
@@ -433,7 +440,6 @@ fn forbidden_programs_are_read_as_commands_not_words() {
         "python3 -c \"server.shutdown()\"",
         "echo asphalt",
         "grep -rn shutdown_hook src/",
-        "grep -rn \"shutdown\" src/",
         "cat docs/reboot-notes.md",
         "curl https://example.com/halt-and-catch-fire",
     ] {
