@@ -52,6 +52,16 @@ La charte et les spécifications sont dans `design/v1/`.
   n'est écrit dans le code.
 - Un jeton rendu sous `authed_user` (`oauth.v2.access`) est lu là.
 - La documentation donne les deux réglages pour Slack.
+### 1.0.75
+
+**Licence : MIT seule, fichier `LICENSE` à la racine (#326).**
+
+- Pénélope est sous licence MIT seule. La double licence Apache-2.0 est retirée et l'AGPL
+  écartée, décision du propriétaire.
+- `Cargo.toml` déclare `license = "MIT"`, dont les crates héritent.
+- Le texte MIT, au nom d'Edouard CLAUDE, est dans `LICENSE`.
+- Les mentions d'Apache-2.0 qui restent concernent des dépendances (`deny.toml`,
+  `roxmltree`).
 
 ### 1.0.74
 
