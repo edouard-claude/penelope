@@ -702,3 +702,91 @@ for line in sys.stdin:
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": mid, "result": res}), flush=True)
 "#;
+
+/// #405 : un serveur stdio déclaré avec `oauth_issuer` reçoit le jeton de son autorisation
+/// par `${OAUTH_ACCESS_TOKEN}` ; une minute avant l'expiration, il repart avec le jeton
+/// suivant au lieu de servir un jeton échu.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn an_oauth_stdio_server_gets_a_fresh_token_and_restarts_before_expiry() {
+    let Some(python) = penelope_platform::which("python3") else {
+        eprintln!("python3 absent : test stdio réel ignoré");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let clock = TestClock::new(1_789_516_800_000);
+    let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), shared)
+            .await
+            .unwrap(),
+    );
+    let grant = |token: &str, expires_at_ms: i64| {
+        json!({
+            "issuer": "https://auth.exemple.org", "token_endpoint": "https://auth.exemple.org/token",
+            "client_id": "client-bureau", "resource": "",
+            "tokens": {"access_token": token, "refresh_token": "rt", "token_type": "Bearer",
+                       "expires_at_ms": expires_at_ms}
+        })
+        .to_string()
+    };
+    let now = 1_789_516_800_000;
+    s.platform
+        .secrets
+        .set("mcp.pyoauth.oauth", &grant("jeton-1", now + 10 * 60_000))
+        .unwrap();
+    let script = dir.path().join("fake_mcp.py");
+    std::fs::write(&script, FAKE_PY).unwrap();
+    let sup = McpSupervisor::new(s.clone(), Arc::new(ProcessConnector::new(s.clone())));
+    std::fs::create_dir_all(sup.dir()).unwrap();
+    std::fs::write(
+        sup.dir().join("pyoauth.toml"),
+        format!(
+            "command = \"{}\"\nargs = [\"{}\"]\ntimeout = \"10s\"\n\
+             oauth_issuer = \"https://auth.exemple.org\"\nclient_id = \"client-bureau\"\n\
+             [env]\nFAKE_GREETING = \"${{OAUTH_ACCESS_TOKEN}}\"\n",
+            python.display(),
+            script.display()
+        ),
+    )
+    .unwrap();
+    sup.reload().await;
+    let echo = || async {
+        sup.call(
+            "mcp__pyoauth__echo",
+            &json!({"text": "salut"}),
+            Default::default(),
+        )
+        .await
+        .unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(echo().await, "jeton-1 salut");
+
+    s.platform
+        .secrets
+        .set("mcp.pyoauth.oauth", &grant("jeton-2", now + 3 * 3_600_000))
+        .unwrap();
+    assert_eq!(
+        echo().await,
+        "jeton-1 salut",
+        "jeton encore valable : même processus"
+    );
+    clock.advance_ms(9 * 60_000 + 1);
+    assert_eq!(echo().await, "jeton-2 salut", "relancé avant l'expiration");
+    sup.stop_all().await;
+
+    // Sans autorisation, l'appel dit d'autoriser le serveur au lieu d'un échec opaque.
+    s.platform.secrets.delete("mcp.pyoauth.oauth").unwrap();
+    let err = sup
+        .call(
+            "mcp__pyoauth__echo",
+            &json!({"text": "salut"}),
+            Default::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.contains("mcp auth"), "{err}");
+}

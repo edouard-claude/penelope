@@ -215,13 +215,16 @@ impl McpSupervisor {
         let mut live = slot.live.lock().await;
         let keychain = keychain_open(&self.services, &slot.config());
         if let Some(l) = live.as_ref() {
-            if l.keychain == keychain {
+            // Un jeton OAuth injecté au lancement (#405) ne se renouvelle pas dans le
+            // processus : une minute avant son expiration, le serveur repart avec un neuf.
+            let expired = l.expires_ms.is_some_and(|e| self.now_ms() + 60_000 >= e);
+            if l.keychain == keychain && !expired {
                 return Ok(l.client.clone());
             }
             // L'accès au trousseau a changé depuis le lancement (réglage posé ou retiré) :
             // le processus repart sous le profil en vigueur (issue #122).
             if let Some(old) = live.take() {
-                tracing::info!(server = %slot.name, keychain, "trousseau modifié, relance");
+                tracing::info!(server = %slot.name, keychain, "trousseau modifié ou jeton OAuth échu, relance");
                 let _ = old.client.close().await;
                 old.pump.abort();
             }
@@ -269,10 +272,15 @@ impl McpSupervisor {
                     i.capabilities =
                         serde_json::to_value(client.capabilities()).unwrap_or(Value::Null);
                 });
+                let expires_ms = (!cfg.oauth_issuer.is_empty())
+                    .then(|| crate::auth::expiry(&self.services, &cfg.name))
+                    .flatten()
+                    .filter(|e| *e != i64::MAX);
                 *live = Some(Live {
                     client: client.clone(),
                     pump,
                     keychain,
+                    expires_ms,
                     subscriptions: std::sync::Mutex::new(Default::default()),
                 });
                 drop(live);
@@ -323,11 +331,10 @@ impl McpSupervisor {
         } else {
             cfg.protocol_version()
         };
-        let transport = self
-            .connector
-            .open(cfg)
-            .await
-            .map_err(|e| (e, Vec::new(), false))?;
+        let transport = self.connector.open(cfg).await.map_err(|e| {
+            let auth = e.starts_with(crate::auth::AUTH_REQUIRED);
+            (e, Vec::new(), auth)
+        })?;
         // L'élicitation n'est annoncée que si un propriétaire peut y répondre (issue #12).
         let features = ClientFeatures {
             elicitation: self.services.elicitations.reachable(),

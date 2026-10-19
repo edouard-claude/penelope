@@ -199,3 +199,20 @@ fn multistatus_without_an_href_or_with_failed_propstats_is_skipped() {
         Err(Error::Xml { .. })
     ));
 }
+
+/// #405 : un jeton OAuth remplace le mot de passe, envoyé en `Bearer` ; un jeton refusé
+/// est une erreur d'identifiants qui nomme l'autorisation OAuth.
+#[tokio::test]
+async fn a_bearer_token_replaces_basic_auth() {
+    let fake = FakeCalDav::start().await;
+    fake.add_calendar("perso", "Perso", &[]);
+    let c = Client::new(&fake.url, USER, "", Duration::from_secs(5))
+        .unwrap()
+        .with_token(super::fake::TOKEN);
+    assert_eq!(c.discover().await.unwrap().len(), 1);
+    let bad = Client::new(&fake.url, USER, "", Duration::from_secs(5))
+        .unwrap()
+        .with_token("ya29.perime");
+    let e = bad.discover().await.unwrap_err();
+    assert!(e.to_string().contains("mcp auth"), "{e}");
+}

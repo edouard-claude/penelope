@@ -12,6 +12,23 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.74
+
+**OAuth pour un serveur MCP stdio ; l'agenda CalDAV en Bearer : Google Agenda sans mot de
+passe d'application (#405).**
+
+- Un serveur stdio peut déclarer `oauth_issuer` (avec `client_id`, `client_secret`,
+  `scopes`). `penelope mcp auth` y mène le parcours OAuth existant (PKCE, lien sur
+  Telegram, retour collé). Sans ressource, aucun indicateur `resource` n'est envoyé.
+  `oauth_params` ajoute des paramètres à l'URL d'autorisation (`access_type=offline`),
+  sans jamais remplacer ceux du protocole.
+- `${OAUTH_ACCESS_TOKEN}` dans `env` reçoit un jeton rafraîchi à chaque lancement,
+  enregistré pour le masquage. Le processus est relancé une minute avant l'expiration du
+  jeton. Sans autorisation, l'appel nomme `penelope mcp auth <serveur>`.
+- `penelope-agenda-mcp` : `AGENDA_TOKEN` remplace le mot de passe, en `Bearer`. Une
+  déclaration par compte Google, sur le même client « Application de bureau » ;
+  configuration dans `docs/mcp.md`.
+
 ### 1.0.73
 
 **Agenda : créer, modifier et supprimer des événements en CalDAV (#403).**

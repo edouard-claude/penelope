@@ -151,6 +151,25 @@ impl Connector for ProcessConnector {
             .map_err(|e| format!("{e} (poser le secret : `penelope secret set <nom>`)"))?;
         match resolved.effective_transport() {
             "stdio" => {
+                let mut resolved = resolved;
+                // Serveur stdio autorisé par OAuth (#405) : un jeton frais à chaque
+                // lancement, jamais écrit dans `mcp.d` ni dans un journal.
+                if !cfg.oauth_issuer.is_empty() {
+                    let (token, _) = crate::auth::access_token(s, &cfg.name, &cfg.oauth_issuer)
+                        .await?
+                        .ok_or_else(|| {
+                            format!(
+                                "{} : `penelope mcp auth {}` ou `/mcp auth {}` sur Telegram",
+                                crate::auth::AUTH_REQUIRED,
+                                cfg.name,
+                                cfg.name
+                            )
+                        })?;
+                    penelope_observe::register_secret(&token);
+                    for v in resolved.env.values_mut() {
+                        *v = v.replace("${OAUTH_ACCESS_TOKEN}", &token);
+                    }
+                }
                 let spec = stdio_spec(s.platform.dirs.as_ref(), &resolved);
                 let profile = self.profile(cfg)?;
                 let t =

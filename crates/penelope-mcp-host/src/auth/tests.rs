@@ -729,3 +729,77 @@ async fn a_failed_reconnection_after_authorization_is_reported() {
         "{texts:?}"
     );
 }
+
+/// #405 : un serveur stdio s'autorise auprès de l'issuer qu'il déclare, sans ressource
+/// (RFC 8707 n'a rien à désigner), avec les paramètres d'autorisation déclarés ; le jeton
+/// obtenu est lu avec son expiration pour être injecté au lancement.
+#[tokio::test]
+async fn a_stdio_server_is_authorized_against_its_declared_issuer() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = TestClock::new(1_789_516_800_000);
+    let shared: penelope_kernel::clock::SharedClock = Arc::new(clock.clone());
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), shared)
+            .await
+            .unwrap(),
+    );
+    let (base, seen) = fake_authorization_server().await;
+    let mut cfg = ServerConfig {
+        name: "agenda-google".into(),
+        transport: "stdio".into(),
+        command: "penelope".into(),
+        oauth_issuer: base.clone(),
+        client_id: "client-bureau".into(),
+        scopes: vec!["calendar".into()],
+        ..Default::default()
+    };
+    cfg.oauth_params
+        .insert("access_type".into(), "offline".into());
+    cfg.oauth_params
+        .insert("client_id".into(), "détourné".into());
+
+    let start = start(&s, &cfg, None).await.unwrap();
+    assert!(
+        start.url.starts_with(&format!("{base}/authorize?")),
+        "{}",
+        start.url
+    );
+    assert_eq!(param(&start.url, "client_id"), "client-bureau");
+    assert_eq!(param(&start.url, "access_type"), "offline");
+    assert!(!start.url.contains("d%C3%A9tourn%C3%A9"), "{}", start.url);
+    assert!(!start.url.contains("resource="), "{}", start.url);
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|(_, p, _)| !p.contains("oauth-protected-resource")),
+        "pas de découverte de ressource"
+    );
+
+    let state = param(&start.url, "state");
+    let callback = format!("{}?code=abc&state={state}", start.redirect_uri);
+    assert_eq!(complete(&s, &callback).await.unwrap(), "agenda-google");
+    let exchange = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, p, b)| p == "/token" && b.contains("authorization_code"))
+        .cloned()
+        .unwrap();
+    assert!(!exchange.2.contains("resource="), "{}", exchange.2);
+
+    let (token, expires) = access_token(&s, "agenda-google", &base)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(token, "at-1");
+    assert_eq!(expires, 1_789_516_800_000 + 3_600_000);
+
+    // Sans `oauth_issuer`, un serveur stdio ne s'autorise pas.
+    cfg.oauth_issuer.clear();
+    assert!(start_err(&s, &cfg).await.contains("stdio"));
+}
+
+async fn start_err(s: &Services, cfg: &ServerConfig) -> String {
+    super::start(s, cfg, None).await.unwrap_err()
+}

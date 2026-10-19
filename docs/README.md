@@ -107,3 +107,4 @@ daemon par la socket locale.
 - [0021](decisions/0021-profils-de-modeles.md) : un modèle principal par profil, une résolution unique pour tous les rôles, la voix à part ; la garde Codex devient un réglage, tout écart de modèle est annoncé.
 - [0022](decisions/0022-secrets-colles-hors-modele.md) : un secret entre par la conversation par un seul chemin, `/secrets <projet>`, intercepté avant toute écriture et sans modèle ; il s'injecte par son nom dans n'importe quelle commande (`shell_exec` avec `secrets`, 1.0.54).
 - [0023](decisions/0023-hooks-de-cycle-de-vie.md) : des hooks de cycle de vie déclarés par le propriétaire dans `hooks.d/`, en forme exec sans shell, qui ne peuvent que resserrer (pas de verdict `allow`).
+- [0024](decisions/0024-oauth-pour-serveurs-stdio.md) : un serveur MCP stdio peut s'autoriser par OAuth (`oauth_issuer`) ; le jeton est injecté au lancement par `${OAUTH_ACCESS_TOKEN}` et le serveur est relancé avant son expiration.

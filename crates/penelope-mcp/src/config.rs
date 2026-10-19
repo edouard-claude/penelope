@@ -27,6 +27,12 @@ pub struct ServerConfig {
     /// Référence au magasin de secrets pour un client OAuth confidentiel.
     pub client_secret: String,
     pub scopes: Vec<String>,
+    /// Serveur d'autorisation d'un serveur **stdio** (#405) : `penelope mcp auth` y mène
+    /// l'autorisation OAuth, et `${OAUTH_ACCESS_TOKEN}` dans `env` reçoit un jeton frais à
+    /// chaque lancement. Vide : pas d'OAuth pour un serveur stdio.
+    pub oauth_issuer: String,
+    /// Paramètres de plus pour l'URL d'autorisation (`access_type = "offline"`).
+    pub oauth_params: BTreeMap<String, String>,
 
     // --- comportement ---
     pub lazy_start: bool,
@@ -66,6 +72,8 @@ impl Default for ServerConfig {
             client_id: String::new(),
             client_secret: String::new(),
             scopes: Vec::new(),
+            oauth_issuer: String::new(),
+            oauth_params: BTreeMap::new(),
             lazy_start: true,
             idle_timeout: "10m".into(),
             timeout: "30s".into(),
@@ -135,8 +143,25 @@ impl ServerConfig {
                 if self.command.is_empty() {
                     return Err(bad("`command` est obligatoire en transport stdio"));
                 }
+                if !self.oauth_issuer.is_empty() {
+                    let local = ["http://127.0.0.1", "http://localhost"]
+                        .iter()
+                        .any(|p| self.oauth_issuer.starts_with(p));
+                    if !self.oauth_issuer.starts_with("https://") && !local {
+                        return Err(bad("`oauth_issuer` doit être une URL https://"));
+                    }
+                    if self.client_id.is_empty() {
+                        return Err(bad("`client_id` est obligatoire avec `oauth_issuer`"));
+                    }
+                }
             }
             "http" | "sse" => {
+                if !self.oauth_issuer.is_empty() {
+                    return Err(bad(
+                        "`oauth_issuer` ne vaut que pour un serveur stdio : un serveur HTTP \
+                         découvre le sien",
+                    ));
+                }
                 if self.url.is_empty() {
                     return Err(bad("`url` est obligatoire en transport HTTP"));
                 }
@@ -394,6 +419,30 @@ mod tests {
         c.validate().unwrap();
         c.protocol = "2030-01-01".into();
         assert!(c.validate().is_err());
+    }
+
+    /// #405 : `oauth_issuer` vaut pour un serveur stdio, en https (ou en boucle locale),
+    /// avec un client nommé ; un serveur HTTP découvre le sien.
+    #[test]
+    fn an_oauth_issuer_needs_stdio_https_and_a_client() {
+        let mut c = ServerConfig::stdio("agenda-google", "penelope", &["agenda-mcp"]);
+        c.oauth_issuer = "https://accounts.google.com".into();
+        assert!(c.validate().unwrap_err().to_string().contains("client_id"));
+        c.client_id = "client-bureau".into();
+        c.validate().unwrap();
+        c.oauth_issuer = "http://accounts.google.com".into();
+        assert!(c.validate().is_err(), "jamais en clair");
+        c.oauth_issuer = "http://127.0.0.1:9000".into();
+        c.validate().unwrap();
+        let mut h = ServerConfig {
+            name: "distant".into(),
+            url: "https://mcp.exemple.org/mcp".into(),
+            oauth_issuer: "https://auth.exemple.org".into(),
+            ..Default::default()
+        };
+        assert!(h.validate().unwrap_err().to_string().contains("stdio"));
+        h.oauth_issuer.clear();
+        h.validate().unwrap();
     }
 
     #[test]

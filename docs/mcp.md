@@ -191,6 +191,7 @@ ne le répète (« identifiants refusés par le serveur CalDAV (HTTP 401) : vér
 | `AGENDA_URL` | Adresse de découverte : `https://caldav.icloud.com`, `https://caldav.fastmail.com/dav/`, `https://cloud.exemple.fr/remote.php/dav` ; sans identifiants dedans |
 | `AGENDA_USER` | Le compte (l'adresse e-mail chez iCloud et Fastmail) |
 | `AGENDA_PASSWORD` | Le mot de passe d'application, par `${SECRET:nom}` |
+| `AGENDA_TOKEN` | Un jeton OAuth (`${OAUTH_ACCESS_TOKEN}`), envoyé en `Bearer` à la place du mot de passe (1.0.74, #405) |
 | `AGENDA_TIMEZONE` | Fuseau par défaut des réponses, et celui des heures sans fuseau et des dates ; `UTC` sinon |
 | `AGENDA_CALENDARS` | Noms des calendriers servis, séparés par des virgules ; tous les calendriers d'événements sinon |
 | `AGENDA_TIMEOUT` | Délai d'une requête CalDAV, en secondes (20) |
@@ -248,7 +249,7 @@ connu du registre ; sinon, ou si le serveur répond en erreur, le digest le dit 
 en mémoire durable : un calendrier partagé contient des rendez-vous de tiers.
 
 **Pas encore là.** La modification d'une série récurrente ou d'une seule occurrence,
-Google Agenda (son point CalDAV exige OAuth 2, pas un mot de passe d'application), les
+les
 fréquences infra-journalières et `BYSETPOS` des règles de récurrence, la relecture
 mémoire qui proposerait une entrée d'agenda, et l'avertissement de cohérence quand une
 planification double un événement.
@@ -398,6 +399,47 @@ Pénélope suit `token_endpoint_auth_methods_supported` et prend en charge
 rafraîchissement. Sans `client_secret`, le client public PKCE reste le comportement par
 défaut. Si la propriété de métadonnées manque pour un client confidentiel,
 `client_secret_basic` est utilisé conformément à RFC 8414.
+
+### Serveur stdio autorisé par OAuth (1.0.74, #405)
+
+Un serveur stdio peut parler à un service qui n'accepte qu'OAuth : il déclare le serveur
+d'autorisation (`oauth_issuer`) et son client, et reçoit le jeton dans son environnement
+par `${OAUTH_ACCESS_TOKEN}`. `penelope mcp auth <serveur>` (ou `/mcp auth` sur Telegram)
+mène le même parcours que pour un serveur HTTP : métadonnées de l'issuer (RFC 8414 puis
+OpenID), PKCE S256, lien sur Telegram, retour collé. L'issuer est donné : pas de
+découverte RFC 9728, et pas d'indicateur `resource`, puisqu'il n'y a pas de ressource à
+désigner.
+
+```toml
+# mcp.d/agenda-pro.toml
+command = "penelope"
+args = ["agenda-mcp"]
+oauth_issuer = "https://accounts.google.com"
+client_id = "…apps.googleusercontent.com"
+client_secret = "${SECRET:google_agenda_client_secret}"
+scopes = ["https://www.googleapis.com/auth/calendar"]
+
+[oauth_params]
+access_type = "offline"   # sans lui, pas de jeton de rafraîchissement
+prompt = "consent"
+
+[env]
+AGENDA_URL = "https://apidata.googleusercontent.com/caldav/v2/"
+AGENDA_USER = "prenom@exemple.fr"
+AGENDA_TOKEN = "${OAUTH_ACCESS_TOKEN}"
+AGENDA_TIMEZONE = "Indian/Reunion"
+```
+
+- Le jeton est rafraîchi avant chaque lancement et n'est écrit ni dans `mcp.d`, ni dans un
+  journal, ni dans une erreur.
+- Comme il ne se renouvelle pas dans le processus, le serveur est relancé une minute avant
+  son expiration, au prochain appel.
+- Sans autorisation, l'appel dit d'exécuter `penelope mcp auth <serveur>`, au lieu
+  d'échouer en silence.
+- `oauth_params` ajoute des paramètres à l'URL d'autorisation, mais ne remplace aucun
+  paramètre du protocole (`client_id`, `state`, `scope`…).
+- Plusieurs comptes chez un même fournisseur : une déclaration par compte, chacune avec
+  son autorisation, sur le même client.
 
 ### Client pré-enregistré : Slack
 

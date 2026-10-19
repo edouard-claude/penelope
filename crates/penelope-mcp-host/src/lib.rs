@@ -64,6 +64,8 @@ struct Live {
     /// Accès au trousseau accordé au lancement : s'il change, le processus repart sous
     /// le nouveau profil (issue #122).
     keychain: bool,
+    /// Expiration du jeton OAuth injecté au lancement d'un serveur stdio (#405).
+    expires_ms: Option<i64>,
     /// URI des ressources abonnées **sur cette connexion** (#293) : une connexion neuve
     /// repart sans, et l'appel suivant de `subscribe_resource` repose l'abonnement.
     subscriptions: std::sync::Mutex<std::collections::BTreeSet<String>>,
