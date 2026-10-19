@@ -361,16 +361,105 @@ pub fn delivery_text(job: &ToolJob, now_ms: i64) -> String {
             }
         })
         .unwrap_or_else(|| "sans résultat".into());
+    // La note d'un sous-agent est bornée (#396) : 400 caractères cités comme donnée, le
+    // reste par `job_status`. Un job shell garde sa sortie, déjà tronquée par l'outil.
+    let corps = if job.tool == "sub_agent_spawn" {
+        let total = corps.chars().count();
+        let head: String = corps.chars().take(CHILD_NOTE_CHARS).collect();
+        let cut = if total > CHILD_NOTE_CHARS {
+            format!(
+                "\n({CHILD_NOTE_CHARS} premiers caractères sur {total} ; la suite par \
+                 `job_status` avec `job: {}`)",
+                job.id
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "{}{cut}",
+            penelope_observe::injection::wrap_untrusted("note du sous-agent", &head)
+        )
+    } else {
+        corps.chars().take(6_000).collect::<String>()
+    };
     format!(
         "Résultat du job `{}` lancé plus tôt dans cette conversation : `{}` — {}, \
-         après {} s.\n\nDemande d'origine : {demande}\n\nRésultat :\n{}\n\n\
+         après {} s.\n\nDemande d'origine : {demande}\n\nRésultat :\n{corps}\n\n\
          Reprends la suite si elle a encore un sens, ou dis-le si le sujet a changé.",
         job.id,
         job.tool,
         job.state.as_str(),
         job.age_s(now_ms),
-        corps.chars().take(6_000).collect::<String>()
     )
+}
+
+/// Caractères d'une note de sous-agent remise au parent (#396).
+pub const CHILD_NOTE_CHARS: usize = 400;
+
+/// Réveils consécutifs du parent par des résultats de jobs, sans message du propriétaire
+/// entre eux, au-delà desquels les résultats attendent son prochain message (#396).
+pub const MAX_WAKES_WITHOUT_OWNER: usize = 10;
+
+/// Ce que la boucle de livraison fait d'un résultat prêt (#396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeGate {
+    /// Réveiller le parent maintenant.
+    Go,
+    /// Un tour est en cours ou en file, ou une carte attend : plus tard.
+    Wait,
+    /// Dix réveils déjà sans message du propriétaire : jusqu'à son prochain message.
+    Capped,
+}
+
+/// Le parent peut-il être réveillé ? Seulement si rien n'est en cours ni en file, si
+/// aucune carte n'attend, et s'il n'a pas déjà été réveillé dix fois de suite par des
+/// résultats sans que le propriétaire écrive.
+pub async fn wake_gate(s: &Services, session_id: &str) -> anyhow::Result<WakeGate> {
+    if s.turns.queued_for(session_id).await? > 0 {
+        return Ok(WakeGate::Wait);
+    }
+    if s.approvals
+        .pending(200)
+        .await?
+        .iter()
+        .any(|a| a.session_id.as_deref() == Some(session_id))
+    {
+        return Ok(WakeGate::Wait);
+    }
+    Ok(
+        if consecutive_wakes(s, session_id).await? >= MAX_WAKES_WITHOUT_OWNER {
+            WakeGate::Capped
+        } else {
+            WakeGate::Go
+        },
+    )
+}
+
+/// Les réveils par résultat de job depuis le dernier message du propriétaire.
+pub async fn consecutive_wakes(s: &Services, session_id: &str) -> anyhow::Result<usize> {
+    let sid = session_id.to_string();
+    Ok(s.store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT kind, coalesce(dedup_key, '') FROM turn_queue WHERE session_id = ?1
+                 ORDER BY enqueued_at DESC, rowid DESC LIMIT 200",
+            )?;
+            let rows = st.query_map([&sid], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut n = 0;
+            for row in rows {
+                let (kind, dedup) = row?;
+                if kind == "message" {
+                    break;
+                }
+                if kind == "nudge" && dedup.starts_with("job:") {
+                    n += 1;
+                }
+            }
+            Ok(n)
+        })
+        .await?)
 }
 
 // ---------------------------------------------------------------- outils du modèle
@@ -501,3 +590,6 @@ fn row_to_job(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqlite
         updated_at: r.get(12)?,
     })
 }
+
+#[cfg(test)]
+mod tests;

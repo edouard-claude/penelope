@@ -262,6 +262,12 @@ pub async fn status(
                 "in_this_process": s.jobs.len(),
                 "max_per_session": cfg.tools.jobs_per_session,
                 "max_total": cfg.tools.jobs_total,
+                // #396 : au-delà de dix réveils de suite sans message du propriétaire, les
+                // résultats attendent son message suivant.
+                "wakes_since_owner": crate::jobs::consecutive_wakes(s, session_id).await.unwrap_or(0),
+                "max_wakes_without_owner": crate::jobs::MAX_WAKES_WITHOUT_OWNER,
+                "held_until_owner_message": crate::jobs::consecutive_wakes(s, session_id).await.unwrap_or(0)
+                    >= crate::jobs::MAX_WAKES_WITHOUT_OWNER,
             }),
         );
     }
