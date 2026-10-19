@@ -27,7 +27,11 @@ La charte et les spécifications sont dans `design/v1/`.
   (`PreToolUse`, `UserPromptSubmit`, `Stop`) échoue fermé : son code 2 ou un résultat
   non compris refuse l'action. Un hook de `hooks.d` garde son nom face à celui d'un
   plugin.
-- Pas encore : installation depuis une marketplace, `installed_plugins.json`.
+- `penelope plugin add <dossier|dépôt git> [--name]` dépose un plugin dans
+  `{data}/plugins` (copie sans `.git` ni lien symbolique, ou clone superficiel), et
+  `remove` le retire. Déposer n'active rien qui exécute : serveurs et hooks attendent la
+  politique.
+- Pas encore : les marketplaces, `installed_plugins.json` au format du CLI.
 
 ### 1.0.79
 
