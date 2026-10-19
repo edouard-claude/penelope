@@ -234,6 +234,7 @@ async fn run_story(story: &Story, timeout: Duration) -> Measure {
         hook: Some("cargo fmt -- {file}".into()),
         budget_usd: Some(10.0),
         hours: Some(timeout.as_secs_f64() / 3600.0),
+        worktree: false,
     };
     let (_, text) = mission::start(&s, &session, request, &Origin::Cli)
         .await
