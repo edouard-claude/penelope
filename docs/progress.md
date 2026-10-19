@@ -38,6 +38,12 @@ serveurs MCP des plugins (#395, #396, #393).**
   deux reprises, le run s'arrête sur la carte. Commentaires cités comme données, 20 de
   1 200 caractères au plus, vus une fois ; un seul run lit une PR. Jamais de fusion ni de
   déploiement.
+- **Suivre un job en direct (#397, point 3).** Un `shell_exec` lancé en arrière-plan
+  copie sa sortie brute au fil de l'eau dans `{state}/jobs/<id>.log` (16 Mio au plus,
+  effacé après un jour) ; `penelope job attach <id>` la suit en lecture seule jusqu'à la
+  fin de la commande, et `job_status` rend au modèle les vingt dernières lignes de
+  l'écran tant que le job tourne. Une commande qui reçoit un secret collé n'est pas
+  copiée. Pas encore : la prise de contrôle, `penelope term`.
 - **Serveurs MCP des plugins (#393, lot 2).** Le `.mcp.json` d'un plugin donne des
   serveurs `<plugin>-<serveur>`, jamais écrits dans `mcp.d`. Aucun ne démarre sans la
   politique du propriétaire : nouvelle section `[plugins]`, `allowed_mcp_servers =

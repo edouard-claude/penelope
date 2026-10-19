@@ -523,3 +523,42 @@ async fn the_default_caps_refuse_the_fourth_job_of_a_session_and_the_eleventh_ov
     );
     d.services.jobs.cancel_all();
 }
+
+/// #397 : la sortie d'un `shell_exec` en arrière-plan se suit en direct, et `job_status`
+/// en rend les dernières lignes pendant qu'il tourne.
+#[tokio::test]
+async fn a_background_shell_job_can_be_followed_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, p) = daemon_at(dir.path()).await;
+    let sid = session(&d).await;
+    background_shell(&d, &p, &sid, "echo compile-1; sleep 2; echo compile-2").await;
+    let job = only_job(&d, &sid).await;
+    let state = d.services.platform.dirs.state();
+    let log = penelope_executor::jobs::live::log_path(&state, &job.id).unwrap();
+    let mut screen = String::new();
+    for _ in 0..100 {
+        screen = penelope_executor::jobs::live::screen(&state, &job.id, 20).unwrap_or_default();
+        if screen.contains("compile-1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        screen.contains("compile-1"),
+        "sortie en direct : {screen:?}"
+    );
+    let status =
+        penelope_executor::jobs::tool(&d.services, &sid, "job_status", &json!({"job": job.id}))
+            .await
+            .unwrap();
+    assert!(
+        status["screen"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("compile-1"),
+        "{status}"
+    );
+    settled(&d, &job.id).await;
+    assert!(std::fs::read_to_string(&log).unwrap().contains("compile-2"));
+    assert!(penelope_executor::jobs::live::done_path(&log).exists());
+}

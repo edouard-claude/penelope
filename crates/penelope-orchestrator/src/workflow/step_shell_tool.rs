@@ -65,6 +65,7 @@ pub(super) async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                     shell: penelope_executor::executor::shell_override(&cfg.tools.shell),
                     cancel: Some(ctx.cancel),
                     env: Vec::new(),
+                    tee: None,
                 },
             )
             .await

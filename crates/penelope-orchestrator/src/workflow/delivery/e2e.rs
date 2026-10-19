@@ -138,6 +138,7 @@ async fn command(ctx: &StepCtx<'_>, plan: &E2ePlan, check: &Check, dir: &Path) -
             shell: penelope_executor::executor::shell_override(&cfg.tools.shell),
             cancel: Some(ctx.cancel),
             env: Vec::new(),
+            tee: None,
         },
     )
     .await

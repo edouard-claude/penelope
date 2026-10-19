@@ -521,7 +521,15 @@ pub async fn tool(
                 .await
                 .map_err(fail)?
                 .ok_or_else(|| missing(&id))?;
-            Ok(job.view(now))
+            let mut v = job.view(now);
+            // L'écran d'un job qui tourne encore (#397) : ses dernières lignes.
+            if !job.state.is_terminal()
+                && let Some(screen) =
+                    live::screen(&s.platform.dirs.state(), &id, live::SCREEN_LINES)
+            {
+                v["screen"] = json!(screen);
+            }
+            Ok(v)
         }
         "job_wait" => {
             let id = id_of(args)?;
@@ -590,6 +598,8 @@ fn row_to_job(r: &penelope_store::rusqlite::Row<'_>) -> penelope_store::rusqlite
         updated_at: r.get(12)?,
     })
 }
+
+pub mod live;
 
 #[cfg(test)]
 mod tests;

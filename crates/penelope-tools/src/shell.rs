@@ -274,7 +274,13 @@ pub struct ExecOptions<'a> {
     /// Variables ajoutées à l'environnement de la commande : les secrets collés que
     /// l'appel demande (#352), jamais écrits dans la commande elle-même.
     pub env: Vec<(String, String)>,
+    /// Copie brute de la sortie, au fil de l'eau, pour qui la suit (`penelope job attach`,
+    /// #397) ; bornée à [`TEE_MAX_BYTES`].
+    pub tee: Option<std::path::PathBuf>,
 }
+
+/// Octets au plus copiés dans le fichier de suivi d'une commande.
+pub const TEE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 impl Default for ExecOptions<'_> {
     fn default() -> Self {
@@ -286,6 +292,7 @@ impl Default for ExecOptions<'_> {
             shell: None,
             cancel: None,
             env: Vec::new(),
+            tee: None,
         }
     }
 }
@@ -303,6 +310,7 @@ pub async fn exec(
         shell,
         cancel,
         env,
+        tee,
     } = opts;
 
     check_command(command)?;
@@ -320,6 +328,7 @@ pub async fn exec(
             cancel,
             env,
             input: None,
+            tee,
         },
     )
     .await
@@ -353,6 +362,7 @@ pub async fn exec_argv_with_input(
         max_output_bytes,
         cancel,
         env,
+        tee,
         ..
     } = opts;
     spawn_and_wait(
@@ -367,6 +377,7 @@ pub async fn exec_argv_with_input(
             cancel,
             env,
             input,
+            tee,
         },
     )
     .await
@@ -382,6 +393,7 @@ struct Run<'a> {
     env: Vec<(String, String)>,
     /// Écrit sur l'entrée standard, puis fermée ; `None` : pas d'entrée.
     input: Option<Vec<u8>>,
+    tee: Option<std::path::PathBuf>,
 }
 
 async fn spawn_and_wait(
@@ -399,6 +411,7 @@ async fn spawn_and_wait(
         cancel,
         env,
         input,
+        tee,
     } = run;
     let mut spec = penelope_platform::ProcessSpec::new(program).args(args.iter().cloned());
     spec.inherit_env
@@ -435,8 +448,8 @@ async fn spawn_and_wait(
     // mémoire du daemon de la taille de sa sortie (issue #65).
     let out_pipe = child.inner.stdout.take();
     let err_pipe = child.inner.stderr.take();
-    let out_task = tokio::spawn(read_capped(out_pipe, max_output_bytes));
-    let err_task = tokio::spawn(read_capped(err_pipe, max_output_bytes / 4));
+    let out_task = tokio::spawn(read_capped(out_pipe, max_output_bytes, tee.clone()));
+    let err_task = tokio::spawn(read_capped(err_pipe, max_output_bytes / 4, tee));
 
     let pid = child.pid;
     let deadline = tokio::time::Instant::now() + timeout;
@@ -508,14 +521,29 @@ impl Capped {
 
 /// Lit un tuyau jusqu'à sa fermeture en ne gardant que la tête et la queue : le reste est
 /// compté puis jeté, sans jamais tenir en mémoire (issue #65).
-async fn read_capped<R>(pipe: Option<R>, max_bytes: usize) -> Capped
+///
+/// `tee` : chaque morceau est aussi ajouté à ce fichier, jusqu'à [`TEE_MAX_BYTES`].
+async fn read_capped<R>(
+    pipe: Option<R>,
+    max_bytes: usize,
+    tee: Option<std::path::PathBuf>,
+) -> Capped
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut out = Capped::default();
     let Some(mut pipe) = pipe else {
         return out;
+    };
+    let mut tee = match tee {
+        Some(path) => tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .ok(),
+        None => None,
     };
     let head_cap = (max_bytes * 6 / 10).max(1);
     let tail_cap = max_bytes.saturating_sub(head_cap).max(1);
@@ -526,6 +554,12 @@ where
             Ok(n) => n,
         };
         out.total += n;
+        if let Some(f) = tee.as_mut() {
+            let written = f.metadata().await.map(|m| m.len()).unwrap_or(u64::MAX);
+            if written < TEE_MAX_BYTES {
+                let _ = f.write_all(&buf[..n]).await;
+            }
+        }
         let mut rest = &buf[..n];
         if out.head.len() < head_cap {
             let take = (head_cap - out.head.len()).min(rest.len());

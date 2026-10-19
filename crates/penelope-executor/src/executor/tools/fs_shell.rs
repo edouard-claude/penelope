@@ -281,7 +281,7 @@ impl NativeToolExecutor {
                 } else {
                     command.clone()
                 };
-                let mut out = penelope_tools::shell::exec(
+                let out = penelope_tools::shell::exec(
                     &s.platform.processes,
                     &run,
                     penelope_tools::shell::ExecOptions {
@@ -292,9 +292,16 @@ impl NativeToolExecutor {
                         shell,
                         cancel: Some(cancel),
                         env,
+                        // La sortie d'un job se suit en direct, sauf si un secret collé
+                        // y passe : il ne doit jamais atterrir en clair sur le disque.
+                        tee: crate::jobs::live::current().filter(|_| masked.is_empty()),
                     },
                 )
-                .await?;
+                .await;
+                if let Some(log) = crate::jobs::live::current() {
+                    crate::jobs::live::mark_done(&log);
+                }
+                let mut out = out?;
                 if tty {
                     out.stdout = penelope_tools::shell::strip_ansi(&out.stdout);
                     out.stderr = penelope_tools::shell::strip_ansi(&out.stderr);

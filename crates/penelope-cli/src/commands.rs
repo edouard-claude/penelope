@@ -16,6 +16,7 @@ pub use cli::{
 };
 use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
+use job_attach::JobCmd;
 #[cfg(test)]
 use logs::filter_log_lines;
 use logs::logs;
@@ -61,6 +62,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         } => return approval_stats::run(&cli, *days),
         Command::Dataset(cmd) => return dataset::run(&cli, cmd),
         Command::Plugin { cmd } => return plugin::run(&cli, cmd),
+        Command::Job { cmd } => return job_attach::run(&cli, cmd).await,
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -298,6 +300,7 @@ mod cli;
 mod console;
 mod dataset;
 mod interactive;
+mod job_attach;
 mod local;
 mod logs;
 mod offline;

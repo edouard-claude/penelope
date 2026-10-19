@@ -149,6 +149,12 @@ pub enum Command {
         all: bool,
     },
 
+    /// Un job d'outil : `attach` suit en direct la sortie d'un `shell_exec` en arrière-plan.
+    Job {
+        #[command(subcommand)]
+        cmd: JobCmd,
+    },
+
     /// Plugins au format Claude Code déposés dans `{data}/plugins` (#393), sans daemon.
     Plugin {
         #[command(subcommand)]
