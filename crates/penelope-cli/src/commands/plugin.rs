@@ -20,6 +20,19 @@ pub enum PluginCmd {
     },
     /// Retire un plugin.
     Remove { name: String },
+    /// Installe `<plugin>@<marketplace>` depuis une marketplace inscrite.
+    Install { spec: String },
+    /// Marketplaces au format Claude Code (`.claude-plugin/marketplace.json`).
+    #[command(subcommand)]
+    Marketplace(MarketCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MarketCmd {
+    /// Inscrit une marketplace : un dossier, ou un dépôt git.
+    Add { source: String },
+    /// Les marketplaces inscrites et leurs plugins.
+    List,
 }
 
 pub(super) fn run(cli: &Cli, cmd: &PluginCmd) -> CliResult<()> {
@@ -44,14 +57,49 @@ pub(super) fn run(cli: &Cli, cmd: &PluginCmd) -> CliResult<()> {
         }
         PluginCmd::Remove { name } => {
             penelope_app::plugin_install::remove(&dirs.data(), name).map_err(CliError::Usage)?;
+            penelope_app::plugin_market::forget(&dirs.data(), name).map_err(CliError::Usage)?;
             println!("Plugin `{name}` retiré.");
+            return Ok(());
+        }
+        PluginCmd::Install { spec } => {
+            let dest = penelope_app::plugin_market::install(&dirs.data(), spec)
+                .map_err(CliError::Usage)?;
+            println!(
+                "Plugin `{spec}` installé dans {}. Serveurs MCP et hooks attendent la \
+                 politique (`penelope plugin show`).",
+                dest.display()
+            );
+            return Ok(());
+        }
+        PluginCmd::Marketplace(MarketCmd::Add { source }) => {
+            let name = penelope_app::plugin_market::add_marketplace(&dirs.data(), source)
+                .map_err(CliError::Usage)?;
+            println!("Marketplace `{name}` inscrite : `penelope plugin marketplace list`.");
+            return Ok(());
+        }
+        PluginCmd::Marketplace(MarketCmd::List) => {
+            let all = penelope_app::plugin_market::list(&dirs.data());
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+                return Ok(());
+            }
+            for m in all.as_array().into_iter().flatten() {
+                let name = m["name"].as_str().unwrap_or_default();
+                println!("{name}");
+                for p in m["plugins"].as_array().into_iter().flatten() {
+                    println!(
+                        "  {}@{name}  {}",
+                        p["name"].as_str().unwrap_or_default(),
+                        p["description"].as_str().unwrap_or_default()
+                    );
+                }
+            }
             return Ok(());
         }
         _ => {}
     }
     let report = penelope_app::plugin_report::report(&dirs.data(), &policy);
     let picked: Vec<serde_json::Value> = match cmd {
-        PluginCmd::List | PluginCmd::Add { .. } | PluginCmd::Remove { .. } => report,
         PluginCmd::Show { name } => {
             let one: Vec<_> = report.into_iter().filter(|p| p["name"] == *name).collect();
             if one.is_empty() {
@@ -62,6 +110,7 @@ pub(super) fn run(cli: &Cli, cmd: &PluginCmd) -> CliResult<()> {
             }
             one
         }
+        _ => report,
     };
     if cli.json || matches!(cmd, PluginCmd::Show { .. }) {
         println!(

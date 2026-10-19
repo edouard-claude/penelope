@@ -50,4 +50,27 @@ fn plugin_list_and_show_read_the_plugins_without_a_daemon() {
     assert!(run(&["plugin", "list"]).1.contains("lecteur"));
     assert!(run(&["plugin", "remove", "lecteur"]).0);
     assert!(!run(&["plugin", "list"]).1.contains("lecteur "));
+
+    // Une marketplace au format Claude Code, puis un plugin installé depuis elle.
+    let market = home.path().join("place");
+    std::fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+    std::fs::create_dir_all(market.join("p/outil/skills/o")).unwrap();
+    std::fs::write(
+        market.join("p/outil/skills/o/SKILL.md"),
+        "---\nname: o\ndescription: d\n---\nb\n",
+    )
+    .unwrap();
+    std::fs::write(
+        market.join(".claude-plugin/marketplace.json"),
+        r#"{"name":"atelier","plugins":[{"name":"outil","source":"./p/outil","description":"Un outil"}]}"#,
+    )
+    .unwrap();
+    assert!(run(&["plugin", "marketplace", "add", market.to_str().unwrap()]).0);
+    assert!(
+        run(&["plugin", "marketplace", "list"])
+            .1
+            .contains("outil@atelier")
+    );
+    assert!(run(&["plugin", "install", "outil@atelier"]).0);
+    assert!(run(&["plugin", "list"]).1.contains("outil"));
 }
