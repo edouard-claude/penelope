@@ -18,6 +18,7 @@ pub mod credits;
 pub mod elicitation;
 pub mod engine;
 pub mod environment;
+pub mod expiry;
 pub mod frozen_tools;
 pub mod gateway;
 pub mod helpers;

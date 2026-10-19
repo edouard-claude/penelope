@@ -690,6 +690,8 @@ pub async fn shutdown_signal() -> &'static str {
     }
 }
 
+/// Motifs refusés où qu'ils apparaissent dans la ligne : des formes destructrices
+/// complètes, qu'aucun usage légitime n'écrit.
 pub fn forbidden_commands() -> &'static [&'static str] {
     #[cfg(windows)]
     {
@@ -707,15 +709,25 @@ const FORBIDDEN_UNIX: &[&str] = &[
     "rm -rf /*",
     "rm -fr /",
     ":(){:|:&};:",
-    "mkfs",
     "dd if=/dev/zero of=/dev/",
-    "shutdown",
-    "reboot",
-    "halt",
     "diskutil erasedisk",
     "chmod -r 777 /",
     "> /dev/sda",
 ];
+
+/// Programmes refusés **comme nom de commande** (premier mot d'un segment, chemin ôté,
+/// `mkfs.ext4` compris), pas comme simple mot : `server.shutdown()` ou `echo asphalt`
+/// passent (#400).
+pub fn forbidden_programs() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &[]
+    }
+    #[cfg(not(windows))]
+    {
+        &["shutdown", "reboot", "halt", "poweroff", "mkfs"]
+    }
+}
 
 #[cfg_attr(not(windows), allow(dead_code))]
 const FORBIDDEN_WINDOWS: &[&str] = &[

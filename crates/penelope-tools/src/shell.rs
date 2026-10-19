@@ -34,7 +34,53 @@ pub fn check_command(command: &str) -> ToolResult<()> {
             return Err(ToolError::Denied(format!("commande interdite : `{f}`")));
         }
     }
+    if let Some(p) = forbidden_program(&normalised) {
+        return Err(ToolError::Denied(format!("commande interdite : `{p}`")));
+    }
     Ok(())
+}
+
+/// Le programme interdit lancé par la ligne, s'il y en a un (#400). Chaque segment, coupé
+/// aux enchaînements et aux substitutions, est lu par son premier mot, après les
+/// affectations (`X=1`) et les lanceurs (`env`, `exec`, `nohup`…), chemin ôté ; le texte
+/// d'un `sh -c '…'` est relu comme une ligne. Un mot qui contient le nom
+/// (`server.shutdown()`, `grep shutdown`) passe.
+fn forbidden_program(line: &str) -> Option<&'static str> {
+    const LAUNCHERS: &[&str] = &["env", "exec", "nohup", "command", "time", "nice", "builtin"];
+    const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
+    let segments = line.split(|c: char| {
+        matches!(
+            c,
+            ';' | '&' | '|' | '(' | ')' | '`' | '$' | '\n' | '{' | '}'
+        )
+    });
+    for segment in segments {
+        let words: Vec<&str> = segment
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c| c == '\'' || c == '"'))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let Some(at) = words
+            .iter()
+            .position(|w| !w.contains('=') && !LAUNCHERS.contains(w) && !w.starts_with('-'))
+        else {
+            continue;
+        };
+        let program = words[at].rsplit('/').next().unwrap_or(words[at]);
+        if SHELLS.contains(&program)
+            && let Some(c) = words.iter().position(|w| *w == "-c")
+            && let Some(f) = forbidden_program(&words[c + 1..].join(" "))
+        {
+            return Some(f);
+        }
+        if let Some(f) = penelope_platform::process::forbidden_programs()
+            .iter()
+            .find(|f| program == **f || program.starts_with(&format!("{f}.")))
+        {
+            return Some(f);
+        }
+    }
+    None
 }
 
 /// Sortie d'une exécution.

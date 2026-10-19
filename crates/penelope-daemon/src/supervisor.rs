@@ -13,7 +13,6 @@
 
 use crate::runtime::Daemon;
 use penelope_app::bus::Origin;
-use penelope_app::engine::TurnIntake;
 use penelope_app::gateway::Gateway;
 use penelope_workflow::RunState;
 use std::path::{Path, PathBuf};
@@ -476,19 +475,20 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
     for a in s.approvals.expire_due().await? {
         // Une question de contradiction sans réponse est rangée, pas reposée (issue #145).
         penelope_dream::dream::file_unanswered_clash(s, &a).await;
-        let Some(sid) = &a.session_id else { continue };
-        if a.payload.get("call_id").is_none() {
-            continue;
-        }
-        let origin = match s.sessions.get(sid).await? {
-            Some(sess) if sess.tg_chat_id.is_some() => Origin::Telegram {
-                chat_id: sess.tg_chat_id.unwrap_or_default(),
-                topic_id: sess.tg_topic_id,
-                message_id: None,
+        let origin = match &a.session_id {
+            Some(sid) => match s.sessions.get(sid).await? {
+                Some(sess) if sess.tg_chat_id.is_some() => Origin::Telegram {
+                    chat_id: sess.tg_chat_id.unwrap_or_default(),
+                    topic_id: sess.tg_topic_id,
+                    message_id: None,
+                },
+                _ => Origin::Cli,
             },
-            _ => Origin::Cli,
+            None => Origin::Cli,
         };
-        d.enqueue_resume(sid, a.id.as_str(), &origin).await?;
+        // Reprise unique, rien pour une session close (#399).
+        let messenger = d.slots.messenger();
+        penelope_app::expiry::settle(s, &*d.core, messenger.as_deref(), &a, &origin).await?;
     }
     // Une demande restée sans réponse est rappelée à T+1 h puis T+6 h, avec une carte
     // neuve, dans la conversation d'origine (§9.2, issue #97). Sans canal de message

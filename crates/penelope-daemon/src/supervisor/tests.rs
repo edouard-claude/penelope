@@ -2,6 +2,7 @@
 //! skills déposées (#63).
 
 use super::*;
+use penelope_app::engine::TurnIntake;
 use penelope_app::testing::RecordingMessenger;
 use penelope_kernel::clock::TestClock;
 
