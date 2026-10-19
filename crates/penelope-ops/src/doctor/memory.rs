@@ -90,6 +90,8 @@ pub async fn recall_misses_check(s: &Services) -> DoctorCheck {
                 .into(),
         ),
     )
+}
+
 /// #410 : des relectures d'épisode en échec ne laissaient qu'une ligne de journal, et la
 /// mémoire cessait d'apprendre en silence.
 pub async fn memory_review_check(s: &Services) -> DoctorCheck {
