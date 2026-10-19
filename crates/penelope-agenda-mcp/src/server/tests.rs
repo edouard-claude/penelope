@@ -115,8 +115,9 @@ async fn discover_is_unknown_notifications_are_silent_and_garbage_is_a_parse_err
     assert_eq!(r["result"], json!({}));
 }
 
+/// Quatre lectures, puis trois écritures (#403) : seule la suppression est destructrice.
 #[tokio::test]
-async fn tools_list_has_four_read_only_tools() {
+async fn tools_list_has_four_reads_and_three_writes() {
     let fake = FakeCalDav::start().await;
     let s = server(&fake, "").await;
     let r = call(&s, 1, "tools/list", json!({})).await;
@@ -128,14 +129,25 @@ async fn tools_list_has_four_read_only_tools() {
             "calendar_list",
             "events_today",
             "events_range",
-            "event_search"
+            "event_search",
+            "event_create",
+            "event_update",
+            "event_delete"
         ]
     );
     for t in tools {
-        assert_eq!(t["annotations"]["readOnlyHint"], true, "{}", t["name"]);
-        assert_eq!(t["annotations"]["destructiveHint"], false);
+        let name = t["name"].as_str().unwrap();
+        let reads = !name.starts_with("event_") || name == "event_search";
+        assert_eq!(t["annotations"]["readOnlyHint"], reads, "{name}");
+        assert_eq!(
+            t["annotations"]["destructiveHint"],
+            name == "event_delete",
+            "{name}"
+        );
         assert!(t["inputSchema"]["type"] == "object");
-        assert!(t["outputSchema"].is_object());
+        if reads {
+            assert!(t["outputSchema"].is_object());
+        }
         assert!(t["description"].as_str().unwrap().len() > 20);
     }
     assert_eq!(

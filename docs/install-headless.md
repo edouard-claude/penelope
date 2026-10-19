@@ -2068,8 +2068,9 @@ configuré, Pénélope n'annonce pas cette capacité. Le sampling reste refusé.
 
 ### Agenda CalDAV
 
-Pénélope lit l'agenda du propriétaire par CalDAV, en lecture seule, sans permission à
-cliquer sur la machine (1.0.37, #295) : un serveur MCP livré dans le binaire, `penelope
+Pénélope lit l'agenda du propriétaire par CalDAV, sans permission à cliquer sur la
+machine (1.0.37, #295), et y crée, modifie ou supprime des événements sous approbation
+(1.0.73, #403) : un serveur MCP livré dans le binaire, `penelope
 agenda-mcp`, que `mcp.d/agenda.toml` déclare. Chez iCloud, créer un mot de passe
 d'application (appleid.apple.com, « Mots de passe d'application ») ; chez Fastmail ou
 Nextcloud, un mot de passe d'application de même. Puis :
@@ -2094,7 +2095,8 @@ penelope config set digest.agenda mcp__agenda__events_today
 `penelope mcp test agenda` découvre le compte, liste les calendriers et appelle un outil
 en lecture ; une erreur nomme l'étape (« identifiants refusés par le serveur CalDAV (HTTP
 401) ») sans jamais répéter le mot de passe. Le modèle atteint ensuite `calendar_list`,
-`events_today`, `events_range` et `event_search` par `tool_call`, comme tout serveur MCP ;
+`events_today`, `events_range`, `event_search`, `event_create`, `event_update` et
+`event_delete` par `tool_call`, comme tout serveur MCP ;
 `AGENDA_CALENDARS = "Perso, Famille"` restreint les calendriers servis. Avec
 `digest.agenda`, l'« Aujourd'hui » du digest mêle les rendez-vous du jour aux
 planifications, dans `owner.timezone` ; un agenda injoignable est dit en une ligne, sans
