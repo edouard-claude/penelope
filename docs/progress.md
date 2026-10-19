@@ -12,6 +12,17 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.75
+
+**Licence : MIT seule, fichier `LICENSE` à la racine (#326).**
+
+- Pénélope est sous licence MIT seule. La double licence Apache-2.0 est retirée et l'AGPL
+  écartée, décision du propriétaire.
+- `Cargo.toml` déclare `license = "MIT"`, dont les crates héritent.
+- Le texte MIT, au nom d'Edouard CLAUDE, est dans `LICENSE`.
+- Les mentions d'Apache-2.0 qui restent concernent des dépendances (`deny.toml`,
+  `roxmltree`).
+
 ### 1.0.74
 
 **OAuth pour un serveur MCP stdio ; l'agenda CalDAV en Bearer : Google Agenda sans mot de

@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "1.0.74"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 authors = ["Penelope"]
 repository = "https://github.com/edouard-claude/penelope"
 
