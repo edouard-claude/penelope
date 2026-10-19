@@ -298,7 +298,7 @@ dans `mcp.d` sans lui. Voir
 ## Fichiers locaux en base64
 
 Un outil qui attend un fichier encodé (`content_base64`) le reçoit sans que son contenu
-passe par le modèle (1.0.77, #310). Dans les arguments, la valeur est remplacée par une
+passe par le modèle (1.0.76, #310). Dans les arguments, la valeur est remplacée par une
 référence :
 
 ```json
@@ -515,7 +515,7 @@ réclame un `client_secret`), `is_mcp_enabled` (sinon `HTTP 400 — App is not e
 Slack MCP server access`), et le bot user (sinon « doesn't have a bot user to install »).
 Si l'espace de travail restreint les installations, un administrateur doit approuver l'app.
 
-**Sélecteur d'espace de travail (1.0.78, #378).** Slack annonce `/oauth/v2_user/authorize`.
+**Sélecteur d'espace de travail (1.0.76, #378).** Slack annonce `/oauth/v2_user/authorize`.
 Ce point d'entrée passe par un sélecteur d'espace de travail qui reconstruit l'URL sans
 `code_challenge_method` ni `state`, et sans les portées : « code_challenge and
 code_challenge_method must be provided together ». Deux réglages génériques ouvrent à la

@@ -25,7 +25,6 @@ La charte et les spécifications sont dans `design/v1/`.
   l'autre, des événements lus.
 - `AGENDA_TRACE=<fichier>` ajoute chaque réponse WebDAV au fichier, sans les en-têtes,
   pour diagnostiquer un serveur qui ne rend rien.
-### 1.0.77
 
 **MCP : un fichier local passe à un outil en base64 sans traverser le modèle (#310).**
 
@@ -40,7 +39,6 @@ La charte et les spécifications sont dans `design/v1/`.
   - une carte est **toujours** demandée, même pour un outil en lecture ou couvert par une
     règle « Toujours », puisque le fichier sort de la machine.
 - Fonctionne dans le chat comme dans un sous-agent.
-### 1.0.78
 
 **OAuth : point d'autorisation et paramètre des portées réglables, pour le parcours Slack
 (#378).**
@@ -52,6 +50,21 @@ La charte et les spécifications sont dans `design/v1/`.
   n'est écrit dans le code.
 - Un jeton rendu sous `authed_user` (`oauth.v2.access`) est lu là.
 - La documentation donne les deux réglages pour Slack.
+
+**Relecture mémoire : l'effort de raisonnement respecte la liste du modèle Codex (#410).**
+
+- Depuis le 15/10, la relecture d'épisode demandait l'effort `none` au modèle Codex du
+  rôle `memory_review`, qui le refuse. Plus aucun candidat n'arrivait à la consolidation,
+  et seul le journal le disait.
+- Le catalogue Codex rend le raisonnement obligatoire quand sa liste d'efforts ne contient
+  pas `none`.
+- `lightest_effort` prend le plus faible de la liste par rang : un `rev()` sur une liste
+  croissante rendait `max`.
+- Le chemin OpenRouter de #152 (`none` traduit en `enabled: false`) ne change pas.
+- Un échec de relecture est compté. `doctor` le dit dans un nouveau contrôle,
+  `memory.review` (« N relecture(s) en échec depuis … »).
+- La passe de nuit rattrape au plus dix épisodes non relus des quatorze derniers jours.
+
 ### 1.0.75
 
 **Licence : MIT seule, fichier `LICENSE` à la racine (#326).**
