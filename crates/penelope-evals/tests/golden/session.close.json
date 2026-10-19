@@ -7,7 +7,8 @@
     "result": {
       "session": "string",
       "title": "string",
-      "cancelled": "integer"
+      "cancelled": "integer",
+      "approvals_cancelled": "integer"
     }
   }
 }
