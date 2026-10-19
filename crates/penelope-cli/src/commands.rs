@@ -43,6 +43,18 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 .await
                 .map_err(CliError::Usage);
         }
+        Command::Run { stdio } => {
+            if !stdio {
+                return Err(CliError::Usage(
+                    "`penelope run` ne parle que `--stdio`".into(),
+                ));
+            }
+            return penelope_app::child::serve_stdio(std::sync::Arc::new(
+                penelope_app::child::Probe,
+            ))
+            .await
+            .map_err(CliError::Usage);
+        }
         Command::Approvals {
             cmd: Some(ApprovalsCmd::Stats { days }),
         } => return approval_stats::run(&cli, *days),

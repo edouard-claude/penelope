@@ -48,10 +48,12 @@ penelope-hitl.workspace = true
 # dans la release, la déclaration `mcp.d/agenda.toml` lance `penelope` lui-même.
 penelope-agenda-mcp.workspace = true
 
+# `penelope run --stdio` (#395) sert le protocole du run enfant, qui vit dans
+# `penelope-app` à côté de son superviseur ; aussi `Services` et `Origin` des tests.
+penelope-app.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 # Fournisseur simulé : un vrai tour du daemon écrit les lignes que `logs --turn` relit
 # (tests/logs_turn.rs, #206).
 penelope-llm.workspace = true
-# `Services` et `Origin`, nommés à leur crate depuis T30.
-penelope-app.workspace = true

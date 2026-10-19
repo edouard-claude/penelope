@@ -645,6 +645,17 @@ impl Child {
     }
 }
 
+/// Mémoire résidente d'un processus, en kio (`ps -o rss=`, même forme sous macOS et
+/// Linux) ; `None` s'il n'existe plus (#395, borne mémoire d'un run).
+pub fn rss_kb(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 /// Vrai si le PID existe encore (`kill -0`).
 pub fn process_exists(pid: u32) -> bool {
     std::process::Command::new("/bin/kill")
