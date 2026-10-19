@@ -54,19 +54,34 @@ pub async fn open(
     session_id: &str,
 ) -> Result<(PathBuf, String), String> {
     let top = git(s, repo, &["rev-parse", "--show-toplevel"]).await?;
-    let top = PathBuf::from(top.trim());
+    // Le dépôt entier doit être dans un workspace autorisé : un dossier de mission au
+    // fond d'un dépôt plus large ne doit pas ouvrir un worktree hors du périmètre.
+    let top = crate::mission::dir_of(s, top.trim()).ok_or_else(|| {
+        format!(
+            "la racine du dépôt `{}` n'est dans aucun workspace autorisé",
+            top.trim()
+        )
+    })?;
     let name = short(session_id);
     let branch = format!("penelope/mission-{name}");
     let path = top.join(DIR).join(&name);
     let git_dir = git(s, &top, &["rev-parse", "--git-common-dir"]).await?;
-    let git_dir = top.join(git_dir.trim());
-    let exclude = git_dir.join("info").join("exclude");
+    // L'exclusion ne s'écrit que dans un `.git` lui aussi dans le périmètre.
+    let git_dir = crate::mission::dir_of(s, &top.join(git_dir.trim()).to_string_lossy());
+    let exclude = git_dir.map(|g| g.join("info").join("exclude"));
     let line = format!("/{DIR}/");
-    let current = std::fs::read_to_string(&exclude).unwrap_or_default();
-    if !current.lines().any(|l| l.trim() == line) {
-        let _ = std::fs::create_dir_all(git_dir.join("info"));
+    let current = exclude
+        .as_ref()
+        .and_then(|e| std::fs::read_to_string(e).ok())
+        .unwrap_or_default();
+    if let Some(exclude) = &exclude
+        && !current.lines().any(|l| l.trim() == line)
+    {
+        if let Some(info) = exclude.parent() {
+            let _ = std::fs::create_dir_all(info);
+        }
         let _ = std::fs::write(
-            &exclude,
+            exclude,
             format!(
                 "{current}{}{line}\n",
                 if current.ends_with('\n') || current.is_empty() {
@@ -79,6 +94,10 @@ pub async fn open(
     }
     let p = path.to_string_lossy().to_string();
     git(s, &top, &["worktree", "add", "-b", &branch, &p, "HEAD"]).await?;
+    // Le worktree créé est revérifié : un lien dans `.penelope` ne l'a pas sorti du
+    // périmètre.
+    let path = crate::mission::dir_of(s, &p)
+        .ok_or_else(|| format!("le worktree `{p}` n'est dans aucun workspace autorisé"))?;
     Ok((path, branch))
 }
 
