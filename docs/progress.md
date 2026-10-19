@@ -12,6 +12,20 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.76
+
+**Agenda : les calendriers Google sont trouvés (#409).**
+
+- Google sert son principal (`…/caldav/v2/<compte>/user`) sans `current-user-principal`,
+  mais avec `calendar-home-set`. La découverte prenait le principal pour le dossier des
+  calendriers, qui n'en contient aucun : « Aucun calendrier d'événements lisible ».
+- Une adresse qui ne nomme pas de principal est maintenant interrogée sur
+  `calendar-home-set` avant d'être prise pour le dossier.
+- Vérifié sur l'instance du propriétaire : 4 calendriers sur un compte Google, 2 sur
+  l'autre, des événements lus.
+- `AGENDA_TRACE=<fichier>` ajoute chaque réponse WebDAV au fichier, sans les en-têtes,
+  pour diagnostiquer un serveur qui ne rend rien.
+
 ### 1.0.74
 
 **OAuth pour un serveur MCP stdio ; l'agenda CalDAV en Bearer : Google Agenda sans mot de
