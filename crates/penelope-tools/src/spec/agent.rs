@@ -196,7 +196,8 @@ pub(super) fn agent() -> Vec<ToolSpec> {
             "sub_agent_spawn",
             RiskClass::Write,
             "Sub-agent à contexte neuf, retour dans ce tour. `kind` : explore, review (verdict \
-             sur un diff), verifier ou libre ; `budget` : appels ; `background` : retour différé.",
+             sur un diff), verifier, un sous-agent déclaré (`{data}/agents`, plugins) ou libre ; \
+             `budget` : appels ; `background` : retour différé.",
             obj(
                 json!({
                     "kind": {"type":"string"},

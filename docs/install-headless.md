@@ -2103,6 +2103,27 @@ planifications, dans `owner.timezone` ; un agenda injoignable est dit en une lig
 retenir le digest. Le détail des variables, des outils, des récurrences servies et de ce
 qui n'est pas encore là est dans [mcp.md](mcp.md#lagenda-caldav-un-serveur-livré).
 
+### Déposer un plugin ou un sous-agent
+
+Un plugin au format Claude Code se dépose tel quel dans `{data}/plugins/<nom>/` (1.0.79,
+#393). Il contient `.claude-plugin/plugin.json`, `skills/<n>/SKILL.md`, `commands/*.md` et
+`agents/*.md`.
+
+- **Skills :** elles rejoignent le registre sans redémarrage (portée `plugin`). À nom
+  égal, une skill du propriétaire l'emporte sur celle d'un plugin.
+- **Commandes :** chacune devient une skill `<plugin>-<commande>`.
+- **Sous-agents :** ils servent `sub_agent_spawn` par leur nom (`kind: "relecteur"`), en
+  plus des rôles câblés.
+  - Un sous-agent hors plugin se dépose dans `{data}/agents/<nom>.md`.
+  - Frontmatter : `name`, `description`, `model`, `tools`. Les noms d'outils de Claude
+    Code sont traduits (`Read` → `fs_read`, `Bash` → `shell_exec`…) et un nom inconnu est
+    écarté.
+  - Le corps du fichier est sa consigne. Un sous-agent ne lance toujours pas de
+    sous-agent.
+
+Pas encore servis : les hooks et le `.mcp.json` d'un plugin, qui attendent la politique
+du propriétaire, ni les marketplaces.
+
 ### Déposer une skill
 
 Une skill est un dossier avec un `SKILL.md` dans `{data}/skills/` : il suffit de le
