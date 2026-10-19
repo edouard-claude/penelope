@@ -12,6 +12,25 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.71
+
+**Approbation expirée : une seule reprise par tour (#399) ; `shutdown` lu comme commande,
+pas comme mot (#400).**
+
+- Une approbation sans réponse reprend son tour une fois, comme avant (§9.2). Si le tour
+  repris redemande et que cette seconde carte expire aussi, il s'arrête (événement
+  `approval.abandoned`) et le dit dans sa conversation ; avant, il redemandait chaque
+  jour sans fin. Constaté sur un tri de mails planifié, quatre nuits de suite.
+- `penelope session close` annule les approbations en attente de la session
+  (`approvals_cancelled`). Une session close ne reprend jamais sur une expiration.
+- `shell_exec` refusait `shutdown`, `reboot`, `halt` et `mkfs` comme sous-chaînes, jusque
+  dans `server.shutdown()` d'un relais Python, et aucune autorisation ne levait le refus.
+  Ils sont maintenant refusés comme **mots entiers** (coupés aux blancs, aux opérateurs,
+  aux guillemets, chemin ôté, `mkfs.ext4` compris), où qu'ils soient : derrière `nice -n`,
+  `bash -lc`, `then` ou `xargs`, le refus tient. Seul un mot qui contient le nom passe
+  (`server.shutdown()`, `shutdown_hook`). `poweroff` s'y ajoute ; les formes
+  destructrices complètes (`rm -rf /`, `dd … of=/dev/`) restent des motifs.
+
 ### 1.0.70
 
 **Compaction sur préfixe : le fournisseur du dernier appel est gardé (#391).**

@@ -102,6 +102,11 @@ pub async fn close(
     let sess = s.sessions.require(session_id).await?;
     let cancelled = silence(s, bus, session_id, "session fermée").await?;
     s.sessions.set_state(session_id, "closed").await?;
+    // Une carte restée ouverte relancerait la session close à son expiration (#399).
+    let approvals = s
+        .approvals
+        .cancel_for_session(session_id, "session fermée")
+        .await?;
     s.sessions.unbind_telegram(session_id).await?;
     crate::episodes::spawn_ingest(
         s.clone(),
@@ -113,13 +118,18 @@ pub async fn close(
     let _ = s
         .events
         .append(
-            EventDraft::new("session.closed", json!({"cancelled": cancelled})).session(session_id),
+            EventDraft::new(
+                "session.closed",
+                json!({"cancelled": cancelled, "approvals_cancelled": approvals}),
+            )
+            .session(session_id),
         )
         .await;
     Ok(json!({
         "session": session_id,
         "title": sess.title,
         "cancelled": cancelled,
+        "approvals_cancelled": approvals,
     }))
 }
 

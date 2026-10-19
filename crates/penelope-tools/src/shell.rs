@@ -34,7 +34,37 @@ pub fn check_command(command: &str) -> ToolResult<()> {
             return Err(ToolError::Denied(format!("commande interdite : `{f}`")));
         }
     }
+    if let Some(p) = forbidden_program(&normalised) {
+        return Err(ToolError::Denied(format!("commande interdite : `{p}`")));
+    }
     Ok(())
+}
+
+/// Le programme interdit nommé par la ligne, s'il y en a un (#400). La ligne est coupée
+/// en mots aux blancs, aux opérateurs du shell, aux guillemets et aux `=`, barres
+/// obliques inverses ôtées ; un mot égal au nom d'un programme interdit (chemin ôté,
+/// `mkfs.ext4` compris) le refuse, où qu'il soit. Le refus reste du côté sûr pour les
+/// lanceurs (`nice -n 5 halt`, `bash -lc 'halt'`, `then reboot`) ; seul un mot qui
+/// *contient* le nom (`server.shutdown()`, `shutdown_hook`, `asphalt`) passe.
+fn forbidden_program(line: &str) -> Option<&'static str> {
+    let unescaped = line.replace('\\', "");
+    let words = unescaped.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                ';' | '&' | '|' | '(' | ')' | '`' | '$' | '{' | '}' | '<' | '>' | '\'' | '"' | '='
+            )
+    });
+    for word in words.filter(|w| !w.is_empty()) {
+        let program = word.rsplit('/').next().unwrap_or(word);
+        if let Some(f) = penelope_platform::process::forbidden_programs()
+            .iter()
+            .find(|f| program == **f || program.starts_with(&format!("{f}.")))
+        {
+            return Some(f);
+        }
+    }
+    None
 }
 
 /// Sortie d'une exécution.

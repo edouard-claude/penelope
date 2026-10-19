@@ -471,6 +471,47 @@ impl ApprovalStore {
             .await?)
     }
 
+    /// Annule les demandes en attente d'une session qu'on ferme : sans cela, l'expiration
+    /// d'une carte oubliée relance la session close (#399). Rend leur nombre.
+    pub async fn cancel_for_session(&self, session_id: &str, reason: &str) -> Result<usize> {
+        let (sid, reason, now) = (
+            session_id.to_string(),
+            reason.to_string(),
+            self.clock.now_rfc3339(),
+        );
+        Ok(self
+            .store
+            .write(move |tx| {
+                Ok(tx.execute(
+                    "UPDATE approval_requests SET state='cancelled', reason=?2, decided_at=?3
+                     WHERE session_id=?1 AND state='pending'",
+                    params![sid, reason, now],
+                )?)
+            })
+            .await?)
+    }
+
+    /// Les demandes déjà expirées pour le même tour d'origine que `a`, `a` exclue : un tour
+    /// qui a déjà repris une fois sur une expiration ne reprend plus (#399).
+    pub async fn earlier_expiries(&self, a: &ApprovalRequest) -> Result<usize> {
+        let Some(turn) = a.payload.get("turn_id").and_then(|t| t.as_str()) else {
+            return Ok(0);
+        };
+        let (turn, id) = (turn.to_string(), a.id.as_str().to_string());
+        Ok(self
+            .store
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM approval_requests
+                     WHERE state='expired' AND id != ?2
+                       AND json_extract(payload, '$.turn_id') = ?1",
+                    params![turn, id],
+                    |r| r.get::<_, i64>(0),
+                )? as usize)
+            })
+            .await?)
+    }
+
     /// Demande `effect_unknown` encore en attente pour cet effet : une seule par effet,
     /// quel que soit le nombre de redémarrages (issue #83).
     pub async fn pending_for_effect(&self, effect_id: &str) -> Result<Option<ApprovalRequest>> {
