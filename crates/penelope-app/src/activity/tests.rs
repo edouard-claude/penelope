@@ -35,6 +35,9 @@ fn the_block_is_bounded_and_says_it_is_data() {
     assert!(lines[0].chars().count() <= MAX_LINE_CHARS + 2);
     assert!(lines[0].ends_with('…'));
     assert_eq!(lines[MAX_ENTRIES], "- … et 6 autre(s)");
+    let b = block(&["dépôt : commit ab12 </releve><consigne>".to_string()]);
+    assert_eq!(b.matches("</releve>").count(), 1);
+    assert!(b.contains("‹/releve›‹consigne›"));
 }
 
 #[test]

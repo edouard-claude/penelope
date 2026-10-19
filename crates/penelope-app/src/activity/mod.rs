@@ -31,6 +31,10 @@ pub struct Mark {
     pub seq: i64,
     #[serde(default)]
     pub branch: Option<String>,
+    /// `HEAD` du dépôt de la mission au repère : les commits relevés sont `head..HEAD`,
+    /// pas une date que l'auteur d'un commit choisit.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 fn key(session_id: &str) -> String {
@@ -140,9 +144,15 @@ pub fn written_by_agent(rel: &str, trace: &AgentTrace) -> bool {
     trace.strings.iter().any(|s| s.contains(rel))
 }
 
-/// Une entrée bornée : une ligne, `MAX_LINE_CHARS` au plus.
+/// Une entrée bornée : une ligne, `MAX_LINE_CHARS` au plus, sans chevron (un nom de
+/// fichier ou un message de commit ne ferme pas le bloc).
 fn bounded(line: &str) -> String {
-    let one: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let one: String = line
+        .replace('<', "‹")
+        .replace('>', "›")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if one.chars().count() <= MAX_LINE_CHARS {
         return one;
     }
@@ -183,10 +193,8 @@ async fn mission_dir(s: &Services, session_id: &str) -> Option<PathBuf> {
     crate::mission::dir_of(s, m.cwd.as_deref()?)
 }
 
-async fn branch(dir: &Path) -> Option<String> {
-    let (code, out, _) = penelope_tools::git::run(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
-        .ok()?;
+async fn rev(dir: &Path, args: &[&str]) -> Option<String> {
+    let (code, out, _) = penelope_tools::git::run(dir, args).await.ok()?;
     (code == 0).then(|| out.trim().to_string())
 }
 
@@ -198,9 +206,12 @@ pub async fn survey(s: &Services, session_id: &str) -> (Vec<String>, Mark) {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let dir = mission_dir(s, session_id).await;
-    let current_branch = match &dir {
-        Some(d) => branch(d).await,
-        None => None,
+    let (current_branch, current_head) = match &dir {
+        Some(d) => (
+            rev(d, &["rev-parse", "--abbrev-ref", "HEAD"]).await,
+            rev(d, &["rev-parse", "HEAD"]).await,
+        ),
+        None => (None, None),
     };
     let Some(mark) = load(s, session_id).await else {
         // Premier message : pas de relevé, seulement le repère.
@@ -211,6 +222,7 @@ pub async fn survey(s: &Services, session_id: &str) -> (Vec<String>, Mark) {
                 ms: now,
                 seq: next_seq,
                 branch: current_branch,
+                head: current_head,
             },
         );
     };
@@ -226,9 +238,14 @@ pub async fn survey(s: &Services, session_id: &str) -> (Vec<String>, Mark) {
         {
             entries.push(format!("dépôt : branche {before} → {after}"));
         }
-        let since = format!("--since=@{}", mark.ms / 1000);
-        if let Ok((0, log, _)) =
-            penelope_tools::git::run(d, &["log", &since, "--format=%h %s", "-n", "24"]).await
+        let range = mark
+            .head
+            .as_deref()
+            .filter(|h| h.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(|h| format!("{h}..HEAD"));
+        if let Some(range) = range
+            && let Ok((0, log, _)) =
+                penelope_tools::git::run(d, &["log", &range, "--format=%h %s", "-n", "24"]).await
         {
             for l in log.lines() {
                 let subject = l.split_once(' ').map(|x| x.1).unwrap_or_default();
@@ -244,6 +261,7 @@ pub async fn survey(s: &Services, session_id: &str) -> (Vec<String>, Mark) {
             ms: now,
             seq: trace.next_seq,
             branch: current_branch,
+            head: current_head,
         },
     )
 }
