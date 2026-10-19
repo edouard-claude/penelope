@@ -17,12 +17,13 @@ La charte et les spécifications sont dans `design/v1/`.
 **Exécution : des chemins masqués au processus et un vrai terminal à la demande (#394,
 #397, épopée #398).**
 
-- **Chemins masqués (#394, lot 1).** `sandbox.hide` liste des motifs (par défaut `.env`,
-  `.netrc`, `.npmrc`, `.pypirc`, clés SSH, `*.pem`, `*.key`) que ni les outils de fichiers
-  ni `shell_exec` ne lisent : le profil du bac à sable refuse lecture, écriture et lien
-  physique sur ces chemins, sous leur forme écrite comme sous leur forme réelle (un lien
-  symbolique ou un `/private` de macOS ne les contourne pas). `sandbox.hide = []` lève le
-  masque. Pas encore : le proxy d'egress qui porte les jetons.
+- **Chemins masqués (#394, lot 1).** `sandbox.hide` liste des motifs que ni les outils
+  de fichiers ni `shell_exec` ne lisent : le profil du bac à sable refuse lecture,
+  écriture et lien physique sur ces chemins, sous leur forme écrite comme sous leur forme
+  réelle (un lien symbolique ou un `/private` de macOS ne les contourne pas). Par défaut :
+  les clés privées SSH et `.netrc` ; `.env` n'y est pas, y écrire un secret collé reste un
+  usage du propriétaire (#352), `sandbox.hide` l'ajoute. Pas encore : le proxy d'egress
+  qui porte les jetons.
 - **Terminal (#397, lot 2).** `shell_exec` prend `tty: true` : la commande tourne dans un
   pseudo-terminal (`script`), `TERM` posé ; la sortie revient sans séquences ANSI, une
   ligne réécrite par `\r` réduite à son dernier état. Un programme qui exige un terminal

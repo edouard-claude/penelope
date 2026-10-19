@@ -31,21 +31,13 @@ pub struct Sandbox {
     pub hide: Vec<String>,
 }
 
-/// Motifs masqués par défaut : fichiers d'environnement, identifiants, clés (#394).
+/// Motifs masqués par défaut : les clés privées SSH et `.netrc`, que rien de légitime ne
+/// fait lire ou écrire à l'agent dans un dossier accordé (#394). `.env` n'y est pas : y
+/// écrire un secret collé est un usage du propriétaire (#352) ; `sandbox.hide` l'ajoute.
 pub fn default_hide() -> Vec<String> {
-    [
-        "**/.env",
-        "**/.env.*",
-        "**/.netrc",
-        "**/.npmrc",
-        "**/.pypirc",
-        "**/id_rsa",
-        "**/id_ed25519",
-        "**/*.pem",
-        "**/*.key",
-    ]
-    .map(String::from)
-    .to_vec()
+    ["**/id_rsa", "**/id_ed25519", "**/id_ecdsa", "**/.netrc"]
+        .map(String::from)
+        .to_vec()
 }
 
 /// Lectures refusées par défaut : ce qu'une consigne cachée dans un résultat d'outil

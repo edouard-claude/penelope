@@ -540,7 +540,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
 | `sandbox.shell_network` | `false` | Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux : une commande n'a le réseau que si son appel le demande (`network: true`, carte d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son étape de workflow le déclare. Une configuration qui porte `true` le garde. |
 | `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{data}/hooks.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
-| `sandbox.hide` | `["**/.env","**/.env.*","**/.netrc","**/.npmrc","**/.pypirc","**/id_rsa","**/id_ed25519","**/*.pem","**/*.key"]` | Motifs masqués dans les dossiers accordés (workspaces, vault) : `**/.env`, `.git/config`, `secrets/`. Refusés aux outils de fichiers et, sous macOS, aux commandes du shell, comme `deny_read` (#394). |
+| `sandbox.hide` | `["**/id_rsa","**/id_ed25519","**/id_ecdsa","**/.netrc"]` | Motifs masqués dans les dossiers accordés (workspaces, vault) : `**/.env`, `.git/config`, `secrets/`. Refusés aux outils de fichiers et, sous macOS, aux commandes du shell, comme `deny_read` (#394). |
 
 **[observability]**
 
@@ -1953,7 +1953,7 @@ et `/stop` interrompt tout le lot.
 | `skill_propose` | write | Propose une nouvelle skill. (à la demande) |
 | `skill_search` | read | Cherche une skill par mots-clés. (à la demande) |
 | `step_done` | read | Déclare l'étape de workflow terminée. (dans un workflow) |
-| `sub_agent_spawn` | write | Sub-agent à contexte neuf, retour dans ce tour. |
+| `sub_agent_spawn` | write | Sub-agent à contexte neuf. |
 | `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
 | `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). (à la demande) |
 | `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape ; `autonomous` (plus aucune approbation pour ce run et ses sous-runs) ou `supervised`, à la demande du propriétaire seulement. (à la demande) |
