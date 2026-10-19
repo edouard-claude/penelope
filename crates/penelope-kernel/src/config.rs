@@ -41,12 +41,14 @@ pub struct Config {
     pub backup: Backup,
     pub approval: Approval,
     pub webhooks: Webhooks,
+    pub plugins: Plugins,
 }
 
 mod approval;
 mod channel;
 mod duration;
 mod edit;
+mod plugins;
 mod profiles;
 mod providers;
 mod sandbox;
@@ -59,6 +61,7 @@ pub use channel::*;
 pub use duration::*;
 pub use edit::edit_toml;
 use edit::{SAMPLE_HEADER, unknown_keys};
+pub use plugins::*;
 pub use profiles::*;
 pub use providers::*;
 pub use sandbox::*;

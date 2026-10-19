@@ -10,6 +10,7 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod oauth;
+pub mod plugins;
 pub mod protocol;
 pub mod registry;
 pub mod supervisor;

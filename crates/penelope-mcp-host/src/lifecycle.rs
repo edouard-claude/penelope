@@ -61,7 +61,14 @@ impl McpSupervisor {
     /// découverte de ceux dont les outils sont inconnus. Attend la fin des découvertes.
     pub async fn reload(&self) -> ReloadReport {
         *self.fingerprint.lock().unwrap_or_else(|p| p.into_inner()) = self.dir_fingerprint();
-        let (configs, mut invalid) = penelope_mcp::config::load_dir(&self.dir);
+        let (mut configs, mut invalid) = penelope_mcp::config::load_dir(&self.dir);
+        // Les serveurs des plugins (#393), dérivés de leur `.mcp.json` sous la politique
+        // du propriétaire ; un refusé reste visible avec sa raison.
+        let policy = self.services.config.config().plugins.clone();
+        let (derived, refused) =
+            penelope_mcp::plugins::load(&self.plugins_dir(), |p, n| policy.allows_mcp(p, n));
+        configs.extend(derived);
+        invalid.extend(refused);
         let mut wanted: BTreeMap<String, ServerConfig> = BTreeMap::new();
         for c in configs {
             if wanted.contains_key(&c.name) {
@@ -201,7 +208,16 @@ impl McpSupervisor {
             })
             .collect();
         parts.sort();
+        parts.push(penelope_mcp::plugins::fingerprint(&self.plugins_dir()));
         parts.join("|")
+    }
+
+    /// `{data}/plugins`, à côté de `mcp.d`.
+    pub(super) fn plugins_dir(&self) -> std::path::PathBuf {
+        self.dir
+            .parent()
+            .map(|d| d.join("plugins"))
+            .unwrap_or_default()
     }
 
     // -------------------------------------------------------------- connexion
