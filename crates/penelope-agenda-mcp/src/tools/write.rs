@@ -98,7 +98,11 @@ fn escape(s: &str) -> String {
         .replace(';', "\\;")
         .replace(',', "\\,")
         .replace("\r\n", "\\n")
-        .replace('\n', "\\n")
+        .replace(['\r', '\n'], "\\n")
+        // Tout autre caractère de contrôle romprait la ligne ou la valeur : ôté.
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\t')
+        .collect()
 }
 
 /// Les lignes pliées à 75 octets (§3.1), sans couper un caractère.

@@ -225,3 +225,26 @@ fn a_patch_leaves_nested_alarms_alone() {
         "{out}"
     );
 }
+
+/// Un titre ne peut pas injecter de propriété : retour chariot seul et caractères de
+/// contrôle sont neutralisés.
+#[test]
+fn text_values_cannot_inject_properties() {
+    let e = escape("Rdv\rATTENDEE:mailto:x@y\u{0}\u{b}fin");
+    assert!(
+        !e.contains('\r') && !e.chars().any(|c| c.is_control()),
+        "{e:?}"
+    );
+    assert_eq!(e, "Rdv\\nATTENDEE:mailto:x@yfin");
+}
+
+/// L'UID cherché doit être exact : un UID qui en contient un autre ne le désigne pas.
+#[tokio::test]
+async fn a_uid_matches_exactly_never_by_substring() {
+    let (fake, a) = agenda().await;
+    let uid = uid_of(SIMPLE);
+    let prefix: String = uid.chars().take(uid.len() - 2).collect();
+    let r = a.call(EVENT_DELETE, &json!({"uid": prefix})).await.unwrap();
+    assert_eq!(r["isError"], true, "{r}");
+    assert_eq!(fake.objects("perso").len(), 2, "rien de supprimé");
+}

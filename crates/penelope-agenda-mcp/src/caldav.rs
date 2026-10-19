@@ -304,14 +304,31 @@ impl Client {
         );
         let xml = self.dav("REPORT", calendar, "1", &body, what).await?;
         let doc = parse_xml(&xml, what)?;
-        Ok(ok_props(&doc).into_iter().find_map(|(href, prop)| {
-            let ics = descendant(prop, NS_CALDAV, "calendar-data").map(text)?;
-            Some(Resource {
-                href: calendar.join(&href).ok()?,
-                etag: descendant(prop, NS_DAV, "getetag").map(|e| text(e).trim().to_string()),
-                ics,
+        // `text-match` cherche une sous-chaîne : seul un objet dont l'`UID` est exactement
+        // celui demandé compte, et deux objets pour un même `UID` refusent l'écriture
+        // plutôt que d'en toucher un au hasard.
+        let mut found: Vec<Resource> = ok_props(&doc)
+            .into_iter()
+            .filter_map(|(href, prop)| {
+                let ics = descendant(prop, NS_CALDAV, "calendar-data").map(text)?;
+                crate::ical::events(&ics)
+                    .iter()
+                    .any(|e| e.uid == uid)
+                    .then_some(())?;
+                Some(Resource {
+                    href: calendar.join(&href).ok()?,
+                    etag: descendant(prop, NS_DAV, "getetag").map(|e| text(e).trim().to_string()),
+                    ics,
+                })
             })
-        }))
+            .collect();
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            n => Err(Error::Discovery(format!(
+                "{n} objets portent l'UID « {uid} »"
+            ))),
+        }
     }
 
     /// Écrit un objet : création (`etag` absent, `If-None-Match: *`) ou remplacement de la
