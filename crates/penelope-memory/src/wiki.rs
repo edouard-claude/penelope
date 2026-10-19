@@ -217,6 +217,16 @@ pub fn wiki_links(raw: &str) -> Vec<WikiLink> {
     out
 }
 
+/// Fichiers en ajout seul à la racine du vault, hors du lint (#413), comme ils sont hors
+/// de l'index (#282).
+pub const APPEND_ONLY: &[&str] = &["log.md", "DREAMS.md"];
+
+/// Un lien cité dans un rapport, sans ses crochets : écrit dans `log.md` ou `DREAMS.md`,
+/// il ne redevient pas un lien (#413).
+fn plain(link: &str) -> String {
+    link.replace("[[", "").replace("]]", "")
+}
+
 /// Fichiers du vault, relatifs, hors dossiers cachés (dont les dossiers cachés de
 /// configuration d'éditeur, jamais touchés) et hors `archive/`.
 pub fn vault_files(vault: &Path) -> Vec<String> {
@@ -227,7 +237,12 @@ pub fn vault_files(vault: &Path) -> Vec<String> {
         for e in entries.flatten() {
             let p = e.path();
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || name == "archive" {
+            // Les journaux en ajout seul citent des liens pour mémoire : relus, le lint
+            // comptait ses propres copies comme de nouveaux liens morts (#413).
+            if name.starts_with('.')
+                || name == "archive"
+                || (dir == root && APPEND_ONLY.contains(&name.as_str()))
+            {
                 continue;
             }
             if p.is_dir() {
@@ -509,14 +524,14 @@ impl LintReport {
             "lien(s) non résolu(s)",
             self.unresolved
                 .first()
-                .map(|(f, l)| format!("{l} dans {f}")),
+                .map(|(f, l)| format!("{} dans {f}", plain(l))),
         );
         push(
             self.broken_blocks.len(),
             "renvoi(s) vers un bloc absent",
             self.broken_blocks
                 .first()
-                .map(|(f, l)| format!("{l} dans {f}")),
+                .map(|(f, l)| format!("{} dans {f}", plain(l))),
         );
         push(
             self.name_collisions.len(),
@@ -569,9 +584,15 @@ impl LintReport {
 
 /// Notes dont le lien entrant ou sortant est attendu.
 fn graph_note(rel: &str) -> bool {
-    ["sources/", "concepts/", "entites/", "pratiques/"]
-        .iter()
-        .any(|p| rel.starts_with(p))
+    [
+        "sources/",
+        "concepts/",
+        "entites/",
+        "pratiques/",
+        "projets/",
+    ]
+    .iter()
+    .any(|p| rel.starts_with(p))
         && !stem(rel).starts_with('_')
 }
 

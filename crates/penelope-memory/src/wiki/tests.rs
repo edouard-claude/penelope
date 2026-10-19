@@ -249,3 +249,32 @@ fn a_vault_shaped_file_is_told_from_a_draft() {
     assert!(!vault_shaped("export.json", note));
     assert!(!vault_shaped("src/sources.rs", ""));
 }
+
+/// #413 : `log.md` et `DREAMS.md` sont en ajout seul et citent des liens pour mémoire ; le
+/// lint ne les relit pas, et son résumé cite la cible sans crochets. Deux passes sans
+/// nouveau document ne font pas monter le compte.
+#[test]
+fn the_lint_does_not_feed_on_its_own_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    let v = dir.path();
+    write(
+        v,
+        "sources/a.md",
+        "---\ntype: source\ncreated: 2026-10-01\n---\n- voir [[fantome]] ^a1\n",
+    );
+    let first = lint(v);
+    assert_eq!(first.unresolved.len(), 1);
+    let summary = first.summary().join("\n");
+    assert!(
+        summary.contains("fantome") && !summary.contains("[["),
+        "{summary}"
+    );
+    // Le rapport part dans les journaux, comme chaque nuit.
+    write(v, "log.md", &format!("- lint : {summary}\n- [[fantome]]\n"));
+    write(
+        v,
+        "DREAMS.md",
+        &format!("## Rêve\n{summary}\n[[fantome]]\n"),
+    );
+    assert_eq!(lint(v).unresolved.len(), 1, "le compte ne monte pas");
+}

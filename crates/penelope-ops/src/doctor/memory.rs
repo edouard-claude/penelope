@@ -165,7 +165,9 @@ fn dead_zone(ws: &std::path::Path, vault: &std::path::Path) -> Vec<String> {
             }
             let Ok(meta) = e.metadata() else { continue };
             if meta.is_dir() {
-                if depth < MAX_DEPTH && !p.starts_with(vault) {
+                // Un dépôt git imbriqué (un clone du vault) est une copie, pas une zone
+                // morte : la recopier ressusciterait des notes supprimées depuis (#413).
+                if depth < MAX_DEPTH && !p.starts_with(vault) && !p.join(".git").exists() {
                     stack.push((p, depth + 1));
                 }
                 continue;
