@@ -292,7 +292,9 @@ pub async fn deliver_due(d: &Core) -> anyhow::Result<usize> {
             s.sessions.get(&job.session_id).await,
             Ok(Some(ref sess)) if sess.state == "active"
         );
-        if !open {
+        // Pas de réveil pendant un tour, avec une carte en attente, ni au-delà de dix de
+        // suite sans message du propriétaire (#396).
+        if !open || wake_gate(s, &job.session_id).await? != WakeGate::Go {
             continue;
         }
         if !store(s).mark_delivered(&job.id).await? {
