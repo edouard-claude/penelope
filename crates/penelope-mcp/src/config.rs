@@ -33,6 +33,12 @@ pub struct ServerConfig {
     pub oauth_issuer: String,
     /// Paramètres de plus pour l'URL d'autorisation (`access_type = "offline"`).
     pub oauth_params: BTreeMap<String, String>,
+    /// Point d'autorisation à la place de celui que le serveur annonce : Slack annonce
+    /// `/oauth/v2_user/authorize`, que son sélecteur d'espace de travail ne transporte plus
+    /// intact (#378). Vide : celui des métadonnées.
+    pub oauth_authorize_endpoint: String,
+    /// Nom du paramètre qui porte les portées : `scope` par défaut, `user_scope` chez Slack.
+    pub oauth_scope_param: String,
 
     // --- comportement ---
     pub lazy_start: bool,
@@ -74,6 +80,8 @@ impl Default for ServerConfig {
             scopes: Vec::new(),
             oauth_issuer: String::new(),
             oauth_params: BTreeMap::new(),
+            oauth_authorize_endpoint: String::new(),
+            oauth_scope_param: String::new(),
             lazy_start: true,
             idle_timeout: "10m".into(),
             timeout: "30s".into(),
@@ -184,6 +192,13 @@ impl ServerConfig {
             if self.client_id.is_empty() {
                 return Err(bad("`client_id` est obligatoire avec `client_secret`"));
             }
+        }
+        if !self
+            .oauth_scope_param
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b == b'_')
+        {
+            return Err(bad("`oauth_scope_param` : un nom de paramètre en [a-z_]"));
         }
         if crate::protocol::ProtocolVersion::parse(&self.protocol).is_none() {
             return Err(bad(&format!(

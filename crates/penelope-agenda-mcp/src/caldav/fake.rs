@@ -21,6 +21,9 @@ pub enum Mode {
     RedirectBase,
     /// Aucun `current-user-principal` : l'adresse donnée est déjà le dossier.
     NoPrincipal,
+    /// Comme Google : l'adresse est le principal, sans `current-user-principal` mais avec
+    /// `calendar-home-set`.
+    PrincipalWithoutSelf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,6 +349,19 @@ fn answer(state: &mut State, req: &Request) -> (u16, Vec<(String, String)>, Stri
             String::new(),
         ),
         ("PROPFIND", "/") if mode == Mode::NoPrincipal => xml(listing(state)),
+        ("PROPFIND", "/") if mode == Mode::PrincipalWithoutSelf => {
+            if req.body.contains("calendar-home-set") {
+                xml(multistatus(&response(
+                    "/",
+                    "<cal:calendar-home-set><d:href>/calendars/anne/</d:href></cal:calendar-home-set>",
+                )))
+            } else {
+                xml(multistatus(
+                    "<d:response><d:href>/</d:href><d:propstat><d:prop><d:current-user-principal/></d:prop>\
+                     <d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>",
+                ))
+            }
+        }
         ("PROPFIND", "/") | ("PROPFIND", "/dav/") => principal,
         ("PROPFIND", "/principals/anne/") => xml(multistatus(&response(
             "/principals/anne/",

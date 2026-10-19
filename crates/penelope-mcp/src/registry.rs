@@ -644,8 +644,8 @@ impl ToolRegistry {
                         "args":{
                             "type":"object",
                             "additionalProperties":true,
-                            "description":"arguments de l'outil visé, selon son schéma \
-                                           (`tool_describe`) : par exemple {\"issue_id\": 7653}"
+                            "description":"arguments selon le schéma (`tool_describe`) ; un \
+                                           fichier en base64 : {\"$file_base64\": \"<chemin>\"}"
                         },
                         "args_json":{
                             "type":"string",

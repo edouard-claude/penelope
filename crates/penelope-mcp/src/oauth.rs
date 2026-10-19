@@ -283,6 +283,31 @@ pub fn authorize_url(
     resource: &str,
     scopes: &[String],
 ) -> String {
+    authorize_url_with(
+        meta,
+        client_id,
+        redirect_uri,
+        pkce,
+        state,
+        resource,
+        scopes,
+        "scope",
+    )
+}
+
+/// [`authorize_url`], les portées sous un autre nom de paramètre : `user_scope` chez Slack,
+/// qui attend les portées d'un jeton utilisateur là et refuse sinon le parcours (#378).
+#[allow(clippy::too_many_arguments)]
+pub fn authorize_url_with(
+    meta: &AsMetadata,
+    client_id: &str,
+    redirect_uri: &str,
+    pkce: &Pkce,
+    state: &str,
+    resource: &str,
+    scopes: &[String],
+    scope_param: &str,
+) -> String {
     let mut params: Vec<(&str, String)> = vec![
         ("response_type", "code".into()),
         ("client_id", client_id.into()),
@@ -298,7 +323,7 @@ pub fn authorize_url(
         params.push(("resource", resource.into()));
     }
     if !scopes.is_empty() {
-        params.push(("scope", scopes.join(" ")));
+        params.push((scope_param, scopes.join(" ")));
     }
     let query: String = params
         .iter()
@@ -472,6 +497,15 @@ pub struct Tokens {
 
 impl Tokens {
     pub fn parse(v: &Value, now_ms: i64) -> Result<Tokens> {
+        // `oauth.v2.access` de Slack range le jeton utilisateur sous `authed_user` quand
+        // seules des portées utilisateur sont demandées (#378).
+        if v.get("access_token").is_none()
+            && let Some(user) = v
+                .get("authed_user")
+                .filter(|u| u.get("access_token").is_some())
+        {
+            return Tokens::parse(user, now_ms);
+        }
         let access_token = v
             .get("access_token")
             .and_then(|x| x.as_str())

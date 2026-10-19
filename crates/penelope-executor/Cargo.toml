@@ -14,6 +14,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Drapeaux d'ouverture O_NOFOLLOW et O_NONBLOCK d'un fichier joint (#310).
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

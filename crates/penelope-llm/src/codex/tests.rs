@@ -601,6 +601,17 @@ fn the_catalog_has_windows_tools_and_no_price() {
     assert_eq!(fallback.len(), 1);
     assert!(fallback[0].supports_tools());
     assert_eq!(fallback[0].provider, "codex");
+
+    // #410 : une liste sans `none` rend le raisonnement obligatoire ; l'effort le plus
+    // léger est le plus faible déclaré, jamais `none`, que la requête Codex transmettrait
+    // tel quel et que le modèle refuse.
+    assert!(models[0].reasoning_mandatory);
+    assert_eq!(models[0].lightest_effort().as_deref(), Some("low"));
+    assert!(!models[1].reasoning_mandatory, "sans liste : rien d'imposé");
+    assert_eq!(fallback[0].lightest_effort().as_deref(), Some("minimal"));
+    let with_none = parse_codex_models(&json!({"models": [
+        {"slug": "x", "supported_reasoning_levels": ["none", "low"]}]}));
+    assert_eq!(with_none[0].lightest_effort().as_deref(), Some("none"));
 }
 
 /// #291 : au dialecte Responses, la note `developer` est le dernier item de `input`, en

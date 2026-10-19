@@ -157,6 +157,17 @@ async fn run_locked(d: &Context, dry_run: bool) -> anyhow::Result<DreamOutcome> 
         // ---------------------------------------------------------------- Light
         // Décisions des notes de travail : candidats, jamais réécrits (issue #32).
         if !dry_run {
+            // Épisodes qu'une relecture en échec a laissés sans candidats (#410) : rattrapés
+            // ici, dix au plus par nuit, avant de consolider ce qu'ils apportent.
+            match penelope_vault::episodes::catch_up(s, d.providers.as_ref(), 14, 10).await {
+                Ok(0) => {}
+                Ok(n) => report
+                    .warnings
+                    .push(format!("{n} épisode(s) non relu(s) rattrapé(s)")),
+                Err(e) => report
+                    .warnings
+                    .push(format!("rattrapage des relectures : {e}")),
+            }
             harvest_decisions(s).await?;
         }
         let candidates = s.candidates.pending(None).await?;

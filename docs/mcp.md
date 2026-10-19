@@ -195,9 +195,11 @@ ne le répète (« identifiants refusés par le serveur CalDAV (HTTP 401) : vér
 | `AGENDA_TIMEZONE` | Fuseau par défaut des réponses, et celui des heures sans fuseau et des dates ; `UTC` sinon |
 | `AGENDA_CALENDARS` | Noms des calendriers servis, séparés par des virgules ; tous les calendriers d'événements sinon |
 | `AGENDA_TIMEOUT` | Délai d'une requête CalDAV, en secondes (20) |
+| `AGENDA_TRACE` | Un fichier où ajouter chaque réponse WebDAV (sans les en-têtes), pour diagnostiquer un serveur qui ne rend aucun calendrier ; il doit être dans `{data}/mcp-data/<serveur>/`, seul dossier où le bac à sable laisse écrire (1.0.76, #409) |
 
 La découverte suit RFC 6764 : `current-user-principal` sur l'adresse, `calendar-home-set`
-du principal, puis la liste du dossier ; les collections sans `VEVENT` (rappels, boîtes de
+du principal, puis la liste du dossier. Une adresse qui ne nomme pas de principal est
+interrogée elle-même sur `calendar-home-set` (le principal de Google, 1.0.76, #409) ; les collections sans `VEVENT` (rappels, boîtes de
 réception) sont écartées ; une redirection est suivie avec la même méthode. Les événements
 viennent d'un `REPORT calendar-query` borné dans le temps, puis sont développés côté
 serveur MCP : `TZID`, UTC, heures sans fuseau, journées entières, `DURATION`, `RRULE`
@@ -292,6 +294,26 @@ trouvée et non branchée est **proposée une fois** au propriétaire (`machine.
 retient la date : un refus n'est pas redemandé toutes les heures), et rien n'est écrit
 dans `mcp.d` sans lui. Voir
 [La carte de l'environnement](install-headless.md#la-carte-de-lenvironnement).
+
+## Fichiers locaux en base64
+
+Un outil qui attend un fichier encodé (`content_base64`) le reçoit sans que son contenu
+passe par le modèle (1.0.76, #310). Dans les arguments, la valeur est remplacée par une
+référence :
+
+```json
+{"name": "voix", "content_base64": {"$file_base64": "vault:attachments/voix.ogg"}}
+```
+
+- Pénélope lit le fichier au moment de l'appel, après la carte d'approbation. La carte
+  montre le chemin, pas le contenu.
+- Un appel qui joint un fichier demande **toujours** une carte, même vers un outil en
+  lecture ou couvert par une règle « Toujours » : le fichier sort de la machine.
+- Le chemin suit les règles des outils `fs_*` : workspaces et `vault:`.
+- Une lecture interdite (`sandbox.deny_read`) est refusée, comme un fichier de plus de
+  15 Mo.
+- Le mécanisme vaut dans le chat comme dans un sous-agent, puisque les deux passent par
+  `tool_call`.
 
 ## Risque et approbation
 
@@ -424,7 +446,7 @@ access_type = "offline"   # sans lui, pas de jeton de rafraîchissement
 prompt = "consent"
 
 [env]
-AGENDA_URL = "https://apidata.googleusercontent.com/caldav/v2/"
+AGENDA_URL = "https://apidata.googleusercontent.com/caldav/v2/prenom@exemple.fr/user"
 AGENDA_USER = "prenom@exemple.fr"
 AGENDA_TOKEN = "${OAUTH_ACCESS_TOKEN}"
 AGENDA_TIMEZONE = "Indian/Reunion"
@@ -492,6 +514,19 @@ Trois réglages font échouer l'autorisation s'ils manquent : `pkce_enabled` (si
 réclame un `client_secret`), `is_mcp_enabled` (sinon `HTTP 400 — App is not enabled for
 Slack MCP server access`), et le bot user (sinon « doesn't have a bot user to install »).
 Si l'espace de travail restreint les installations, un administrateur doit approuver l'app.
+
+**Sélecteur d'espace de travail (1.0.76, #378).** Slack annonce `/oauth/v2_user/authorize`.
+Ce point d'entrée passe par un sélecteur d'espace de travail qui reconstruit l'URL sans
+`code_challenge_method` ni `state`, et sans les portées : « code_challenge and
+code_challenge_method must be provided together ». Deux réglages génériques ouvrent à la
+place le parcours standard, avec les portées utilisateur dans `user_scope` :
+
+```bash
+penelope mcp edit slack oauth_authorize_endpoint https://slack.com/oauth/v2/authorize
+penelope mcp edit slack oauth_scope_param user_scope
+```
+
+Un jeton rendu sous `authed_user` (réponse de `oauth.v2.access`) est lu là.
 
 ## Supervision
 

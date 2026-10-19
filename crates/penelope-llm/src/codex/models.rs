@@ -61,8 +61,12 @@ fn parse_codex_model(m: &Value) -> Option<ModelInfo> {
         output_modalities: vec!["text".into()],
         supported_parameters: supported,
         price_cache_write: 0.0,
+        // Une liste déclarée sans `none` : le raisonnement ne se coupe pas (#410), et la
+        // requête Codex transmet l'effort tel quel, sans le traduire.
+        reasoning_mandatory: efforts
+            .as_ref()
+            .is_some_and(|e| !e.iter().any(|x| x == "none")),
         reasoning_efforts: efforts,
-        reasoning_mandatory: false,
         window_source: if declared.is_some() {
             crate::catalog::WindowSource::Provider
         } else {
@@ -85,6 +89,7 @@ pub fn fallback_models(models: &[String]) -> Vec<ModelInfo> {
                 "high".into(),
             ]),
             window_source: crate::catalog::WindowSource::Fallback,
+            reasoning_mandatory: true,
             ..ModelInfo::minimal(slug, "codex", DEFAULT_CODEX_WINDOW)
         })
         .collect()
