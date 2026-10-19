@@ -12,6 +12,23 @@ pub fn report(data: &Path, policy: &Plugins) -> Vec<Value> {
     let (skills, skill_errors) = penelope_skills::plugins::skills(&dir);
     let agents = penelope_skills::plugins::agents(data);
     let (servers, refused) = penelope_mcp::plugins::load(&dir, |p, s| policy.allows_mcp(p, s));
+    let (hooks, hooks_refused) = penelope_tools::hooks::plugins::load(&dir, &|p, e| {
+        penelope_tools::hooks::allowed(&policy.allowed_hooks, p, e)
+    });
+    // `<plugin>-<événement>-<n>` : le reste après le plugin commence par un événement.
+    const EVENTS: &[&str] = &[
+        "session_start",
+        "prompt_submit",
+        "pre_tool",
+        "post_tool",
+        "turn_end",
+    ];
+    let hook_of = |plugin: &str, name: &str| {
+        name.strip_prefix(&format!("{plugin}-"))
+            .is_some_and(|rest| EVENTS.iter().any(|e| rest.starts_with(&format!("{e}-"))))
+            || name.starts_with(&format!("{plugin}/"))
+            || name == plugin
+    };
     penelope_skills::plugins::scan(&dir)
         .into_iter()
         .map(|p| {
@@ -29,6 +46,9 @@ pub fn report(data: &Path, policy: &Plugins) -> Vec<Value> {
                 "mcp_servers": servers.iter().filter(|c| names.contains(&c.name))
                     .map(|c| &c.name).collect::<Vec<_>>(),
                 "mcp_refused": refused.iter().filter(|(n, _)| names.contains(n))
+                    .map(|(n, r)| json!({"name": n, "reason": r})).collect::<Vec<_>>(),
+                "hooks": hooks.iter().filter(|h| hook_of(&p.name, &h.name)).map(|h| &h.name).collect::<Vec<_>>(),
+                "hooks_refused": hooks_refused.iter().filter(|(n, _)| hook_of(&p.name, n))
                     .map(|(n, r)| json!({"name": n, "reason": r})).collect::<Vec<_>>(),
             })
         })
@@ -62,6 +82,7 @@ mod tests {
         }
         let policy = Plugins {
             allowed_mcp_servers: vec!["notes/index".into()],
+            ..Default::default()
         };
         let r = report(dir.path(), &policy);
         assert_eq!(r.len(), 1);

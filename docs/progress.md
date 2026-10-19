@@ -12,6 +12,27 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.80
+
+**Plugins : leurs hooks, sous la politique du propriétaire (#393, épopée #398).**
+
+- Les hooks d'un plugin au format Claude Code (`hooks/hooks.json`) deviennent des hooks
+  d'ici, en forme exec sans shell, sous la nouvelle clé `plugins.allowed_hooks`
+  (`"<plugin>/<événement>"` ou `"<plugin>/*"` ; vide : aucun). Événements servis :
+  `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` ; noms
+  d'outils de Claude Code traduits dans le `matcher`. Une commande qui demande un shell
+  (tube, `;`, `$`…), un événement non servi ou un plugin non autorisé : le hook est
+  refusé avec sa raison, visible dans `doctor` et `penelope plugin show`. Un hook qui
+  répond `allow` reste en erreur, jamais appliqué ; un hook qui peut bloquer
+  (`PreToolUse`, `UserPromptSubmit`, `Stop`) échoue fermé : son code 2 ou un résultat
+  non compris refuse l'action. Un hook de `hooks.d` garde son nom face à celui d'un
+  plugin.
+- `penelope plugin add <dossier|dépôt git> [--name]` dépose un plugin dans
+  `{data}/plugins` (copie sans `.git` ni lien symbolique, ou clone superficiel), et
+  `remove` le retire. Déposer n'active rien qui exécute : serveurs et hooks attendent la
+  politique.
+- Pas encore : les marketplaces, `installed_plugins.json` au format du CLI.
+
 ### 1.0.79
 
 **Épopée #398 : un run dans un process enfant, le relevé d'activité du propriétaire, les

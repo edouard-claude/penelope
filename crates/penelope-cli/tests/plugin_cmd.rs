@@ -38,4 +38,16 @@ fn plugin_list_and_show_read_the_plugins_without_a_daemon() {
     assert!(ok);
     assert!(show.contains("notes/index"), "{show}");
     assert!(!run(&["plugin", "show", "absent"]).0);
+    let src = home.path().join("source-plugin");
+    std::fs::create_dir_all(src.join("agents")).unwrap();
+    std::fs::write(
+        src.join("agents/lecteur.md"),
+        "---\nname: lecteur\ndescription: Lit\n---\nTu lis.\n",
+    )
+    .unwrap();
+    let (ok, _) = run(&["plugin", "add", src.to_str().unwrap(), "--name", "lecteur"]);
+    assert!(ok);
+    assert!(run(&["plugin", "list"]).1.contains("lecteur"));
+    assert!(run(&["plugin", "remove", "lecteur"]).0);
+    assert!(!run(&["plugin", "list"]).1.contains("lecteur "));
 }

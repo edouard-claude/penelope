@@ -672,6 +672,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | Clé | Défaut | Rôle |
 |---|---|---|
 | `plugins.allowed_mcp_servers` | `[]` | Serveurs MCP de plugins autorisés à démarrer : `<plugin>/<serveur>`, ou `<plugin>/*` pour tous ceux d'un plugin (le plugin est nommé par son dossier sous `{data}/plugins`). Vide : aucun ; un serveur non autorisé reste visible, en erreur, avec la raison. |
+| `plugins.allowed_hooks` | `[]` | Hooks de plugins autorisés : `<plugin>/<événement>` (`post_tool`, `pre_tool`, `prompt_submit`, `session_start`, `turn_end`) ou `<plugin>/*`. Vide : aucun. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles

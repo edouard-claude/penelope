@@ -393,3 +393,4 @@ prompt_turns_per_hour = 20
 
 [plugins]
 allowed_mcp_servers = []
+allowed_hooks = []

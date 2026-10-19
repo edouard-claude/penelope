@@ -11,6 +11,9 @@ pub struct Plugins {
     /// `{data}/plugins`). Vide : aucun ; un serveur non autorisé reste visible, en erreur,
     /// avec la raison.
     pub allowed_mcp_servers: Vec<String>,
+    /// Hooks de plugins autorisés : `<plugin>/<événement>` (`post_tool`, `pre_tool`,
+    /// `prompt_submit`, `session_start`, `turn_end`) ou `<plugin>/*`. Vide : aucun.
+    pub allowed_hooks: Vec<String>,
 }
 
 impl Plugins {
@@ -33,6 +36,7 @@ mod tests {
     fn the_policy_names_a_plugin_and_a_server_without_ambiguity() {
         let p = Plugins {
             allowed_mcp_servers: vec!["notes/index".into(), "outils/*".into(), "a-b".into()],
+            ..Default::default()
         };
         assert!(p.allows_mcp("notes", "index"));
         assert!(!p.allows_mcp("notes", "web"));

@@ -353,7 +353,8 @@
         "prompt_turns_per_hour": "integer"
       },
       "plugins": {
-        "allowed_mcp_servers": []
+        "allowed_mcp_servers": [],
+        "allowed_hooks": []
       }
     }
   }
