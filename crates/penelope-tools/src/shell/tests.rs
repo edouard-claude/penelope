@@ -604,4 +604,10 @@ async fn the_output_is_teed_to_the_follow_file_as_it_comes() {
     assert_eq!(out.stdout.trim(), "un");
     let copied = std::fs::read_to_string(&tee).unwrap();
     assert!(copied.contains("un") && copied.contains("deux"), "{copied}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&tee).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "lisible du seul propriétaire");
+    }
 }

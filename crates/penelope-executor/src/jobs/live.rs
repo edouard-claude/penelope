@@ -40,6 +40,11 @@ pub async fn scoped<F: std::future::Future>(state: &Path, id: &str, f: F) -> F::
         return f.await;
     };
     let _ = std::fs::create_dir_all(dir(state));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir(state), std::fs::Permissions::from_mode(0o700));
+    }
     prune(&dir(state));
     LOG.scope(path, f).await
 }
@@ -93,5 +98,14 @@ mod tests {
         std::fs::write(&seen, "a\n\x1b[32mb\x1b[0m\nc\n").unwrap();
         assert_eq!(screen(dir.path(), "j1", 2).unwrap(), "b\nc");
         assert!(log_path(dir.path(), "../x").is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("jobs"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
     }
 }

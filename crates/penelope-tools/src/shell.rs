@@ -536,13 +536,16 @@ where
     let Some(mut pipe) = pipe else {
         return out;
     };
+    // Le journal ne se lit que par le propriétaire : une sortie peut porter une donnée
+    // sensible.
     let mut tee = match tee {
-        Some(path) => tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await
-            .ok(),
+        Some(path) => {
+            let mut opts = tokio::fs::OpenOptions::new();
+            opts.create(true).append(true);
+            #[cfg(unix)]
+            opts.mode(0o600);
+            opts.open(path).await.ok()
+        }
         None => None,
     };
     let head_cap = (max_bytes * 6 / 10).max(1);
