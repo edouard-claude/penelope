@@ -12,6 +12,31 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.79
+
+**Épopée #398 : un run dans un process enfant, le relevé d'activité du propriétaire, les
+serveurs MCP des plugins (#395, #396, #393).**
+
+- **Run enfant (#395, lot 1).** Le socle : un protocole JSONL versionné entre le daemon et
+  `penelope run --stdio` (commande cachée), un superviseur qui lance l'enfant dans son
+  groupe de process, transmet `/stop` puis SIGTERM et SIGKILL, l'arrête sur sa durée ou sa
+  mémoire résidente, et rend la cause de sa fin (`oom`, `timeout`, code ou signal) au lieu
+  de faire tomber le daemon ; un enfant mort n'est relancé qu'une fois. Pas encore : les
+  sous-agents, workflows et missions branchés dessus, la reprise après redémarrage,
+  l'exécuteur distant.
+- **Relevé d'activité (#396, point 2).** Ce que le propriétaire a changé hors de la
+  conversation depuis le message précédent (fichiers du vault, et pour une mission la
+  branche et les commits) arrive au message suivant dans un bloc `<releve>` du contexte
+  volatil : une donnée de l'app, pas une consigne, 24 entrées de 320 caractères au plus,
+  jamais dans le préfixe. Ce que l'agent a lui-même écrit en est retiré. Pas encore : les
+  suppressions, les commentaires de PR comme source.
+- **Serveurs MCP des plugins (#393, lot 2).** Le `.mcp.json` d'un plugin donne des
+  serveurs `<plugin>-<serveur>`, jamais écrits dans `mcp.d`. Aucun ne démarre sans la
+  politique du propriétaire : nouvelle section `[plugins]`, `allowed_mcp_servers =
+  ["<plugin>/<serveur>"]` ou `"<plugin>/*"` ; un serveur refusé reste visible avec la
+  raison. Le plugin est nommé par son dossier. Pas encore : hooks de plugin, CLI
+  `penelope plugin`, marketplaces.
+
 ### 1.0.78
 
 **Exécution : des chemins masqués au processus et un vrai terminal à la demande (#394,

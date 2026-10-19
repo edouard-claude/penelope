@@ -666,6 +666,12 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `webhooks.max_body_bytes` | `65536` | Taille maximale d'un corps reçu, en octets ; au-delà, la requête est refusée (413) sans être lue. |
 | `webhooks.rate_per_minute` | `60` | Réceptions admises par minute et par hook ; au-delà, 429 avec `Retry-After`. |
 | `webhooks.prompt_turns_per_hour` | `20` | Tours `prompt` déclenchés par webhook admis par heure, tous hooks confondus : une source bavarde ne fait pas travailler le modèle sans fin. |
+
+**[plugins]**
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `plugins.allowed_mcp_servers` | `[]` | Serveurs MCP de plugins autorisés à démarrer : `<plugin>/<serveur>`, ou `<plugin>/*` pour tous ceux d'un plugin (le plugin est nommé par son dossier sous `{data}/plugins`). Vide : aucun ; un serveur non autorisé reste visible, en erreur, avec la raison. |
 <!-- reference:config:fin -->
 
 ## 6. Modèles
