@@ -12,6 +12,14 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.81
+
+**Plugins dans `self_status` (#393).**
+
+- `self_status --section plugins` (et l'inventaire complet) dit à l'agent ce que chaque
+  plugin déposé apporte : skills, sous-agents, serveurs MCP et hooks, autorisés ou
+  refusés avec la raison. Sans redémarrage : la section relit le disque et la politique.
+
 ### 1.0.80
 
 **Plugins : leurs hooks, sous la politique du propriétaire (#393, épopée #398).**
