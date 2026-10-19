@@ -459,3 +459,30 @@ async fn the_ask_everything_session_mode_keeps_the_card() {
     assert_eq!(card.payload["judged"]["verdict"], "sûr");
     assert_eq!(b.ran(), 0);
 }
+
+/// #310 : un appel qui joint un fichier local (`$file_base64`) demande toujours une carte,
+/// même pour un outil en lecture qui passerait seul : le fichier sort de la machine.
+#[tokio::test]
+async fn a_call_carrying_a_local_file_always_asks() {
+    let j = FakeJudge::says(JudgeVerdict::Safe, &[Power::Read], &["tmp"], &[]);
+    let b = bench(j, JudgeMode::Off).await;
+    assert!(
+        b.ask("fs_read", json!({"path": "a.txt"})).await.is_none(),
+        "lecture seule : sans carte"
+    );
+    let card = b
+        .ask(
+            "fs_read",
+            json!({"path": "a.txt", "joint": {"$file_base64": "secret.pdf"}}),
+        )
+        .await
+        .expect("une carte");
+    assert!(
+        card.payload["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("$file_base64"),
+        "{}",
+        card.payload
+    );
+}

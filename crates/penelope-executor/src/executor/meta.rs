@@ -235,6 +235,10 @@ impl NativeToolExecutor {
                     .as_str()
                     .ok_or_else(|| ToolError::Invalid("`$file_base64` attend un chemin".into()))?;
                 let path = self.resolve_path(raw)?;
+                // Un seul descripteur : le chemin vérifié est celui qu'on lit, sans
+                // fenêtre pour qu'un lien le remplace entre le contrôle et la lecture.
+                let file = std::fs::File::open(&path)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
                 let real = std::fs::canonicalize(&path)
                     .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
                 let denied = denied_reads(&self.services)
@@ -246,19 +250,22 @@ impl NativeToolExecutor {
                         "`{raw}` est sous une lecture interdite (sandbox.deny_read)"
                     )));
                 }
-                let meta = std::fs::metadata(&real)
+                let meta = file
+                    .metadata()
                     .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
                 if !meta.is_file() {
                     return Err(ToolError::Invalid(format!("`{raw}` n'est pas un fichier")));
                 }
-                if meta.len() > MAX_BYTES {
+                let mut bytes = Vec::new();
+                use std::io::Read;
+                file.take(MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                if bytes.len() as u64 > MAX_BYTES {
                     return Err(ToolError::Invalid(format!(
-                        "`{raw}` pèse {} Mo, 15 Mo au plus par fichier",
-                        meta.len() / (1024 * 1024)
+                        "`{raw}` dépasse 15 Mo, la limite par fichier"
                     )));
                 }
-                let bytes = std::fs::read(&real)
-                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
                 Ok(Value::String(
                     base64::engine::general_purpose::STANDARD.encode(bytes),
                 ))

@@ -507,7 +507,10 @@ async fn a_local_file_reaches_an_mcp_tool_as_base64_without_the_model() {
     assert_eq!(calls[0].1["content_base64"], "T2dnUwACc29u", "{calls:?}");
     assert_eq!(calls[0].1["name"], "voix");
 
-    for (path, says) in [("../hors.ogg", "hors des workspaces"), ("absent.ogg", "absent.ogg")] {
+    for (path, says) in [
+        ("../hors.ogg", "hors des workspaces"),
+        ("absent.ogg", "absent.ogg"),
+    ] {
         let e = x
             .execute(
                 "mcp__kelpo__import_reference",

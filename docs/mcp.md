@@ -305,6 +305,8 @@ référence :
 
 - Pénélope lit le fichier au moment de l'appel, après la carte d'approbation. La carte
   montre le chemin, pas le contenu.
+- Un appel qui joint un fichier demande **toujours** une carte, même vers un outil en
+  lecture ou couvert par une règle « Toujours » : le fichier sort de la machine.
 - Le chemin suit les règles des outils `fs_*` : workspaces et `vault:`.
 - Une lecture interdite (`sandbox.deny_read`) est refusée, comme un fichier de plus de
   15 Mo.
