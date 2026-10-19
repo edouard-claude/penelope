@@ -76,7 +76,8 @@ impl Agenda {
             &settings.user,
             &settings.password,
             settings.timeout,
-        )?;
+        )?
+        .with_token(&settings.token);
         Ok(Agenda {
             settings,
             client,

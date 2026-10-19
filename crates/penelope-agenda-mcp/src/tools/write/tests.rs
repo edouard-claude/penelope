@@ -21,6 +21,7 @@ async fn agenda() -> (FakeCalDav, Agenda) {
         url: fake.url.clone(),
         user: USER.into(),
         password: PASSWORD.into(),
+        token: String::new(),
         timezone: chrono_tz::Indian::Reunion,
         calendars: vec![],
         timeout: std::time::Duration::from_secs(5),

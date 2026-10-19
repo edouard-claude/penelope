@@ -290,9 +290,13 @@ pub fn authorize_url(
         ("code_challenge", pkce.challenge.clone()),
         ("code_challenge_method", "S256".into()),
         ("state", state.into()),
-        // RFC 8707 : indicateur de ressource systématique.
-        ("resource", resource.into()),
     ];
+    // RFC 8707 : indicateur de ressource systématique pour un serveur HTTP. Un serveur
+    // stdio autorisé auprès d'un issuer donné (#405) n'a pas de ressource : rien n'est
+    // envoyé, certains serveurs d'autorisation refusant un indicateur inconnu.
+    if !resource.is_empty() {
+        params.push(("resource", resource.into()));
+    }
     if !scopes.is_empty() {
         params.push(("scope", scopes.join(" ")));
     }
@@ -402,7 +406,9 @@ pub fn token_request_body(
     m.insert("redirect_uri".into(), redirect_uri.into());
     m.insert("client_id".into(), client_id.into());
     m.insert("code_verifier".into(), verifier.into());
-    m.insert("resource".into(), resource.into());
+    if !resource.is_empty() {
+        m.insert("resource".into(), resource.into());
+    }
     m
 }
 
@@ -416,8 +422,35 @@ pub fn refresh_request_body(
     m.insert("grant_type".into(), "refresh_token".into());
     m.insert("refresh_token".into(), refresh_token.into());
     m.insert("client_id".into(), client_id.into());
-    m.insert("resource".into(), resource.into());
+    if !resource.is_empty() {
+        m.insert("resource".into(), resource.into());
+    }
     m
+}
+
+/// L'URL d'autorisation avec des paramètres de plus, déclarés par le serveur
+/// (`oauth_params`, #405) : `access_type=offline` chez un fournisseur qui ne rend de jeton
+/// de rafraîchissement qu'ainsi. Les paramètres du protocole ne se remplacent pas.
+pub fn with_params(url: &str, extra: &BTreeMap<String, String>) -> String {
+    const RESERVED: &[&str] = &[
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "code_challenge",
+        "code_challenge_method",
+        "state",
+        "resource",
+        "scope",
+    ];
+    let mut out = url.to_string();
+    for (k, v) in extra
+        .iter()
+        .filter(|(k, _)| !RESERVED.contains(&k.as_str()))
+    {
+        out.push(if out.contains('?') { '&' } else { '?' });
+        out.push_str(&format!("{}={}", urlencode(k), urlencode(v)));
+    }
+    out
 }
 
 /// Jetons reçus.

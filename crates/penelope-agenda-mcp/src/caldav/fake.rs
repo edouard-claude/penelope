@@ -49,6 +49,8 @@ pub struct FakeCalDav {
 
 pub const USER: &str = "anne@exemple.fr";
 pub const PASSWORD: &str = "abcd-efgh-ijkl-mnop";
+/// Le jeton OAuth accepté en `Bearer` (#405).
+pub const TOKEN: &str = "ya29.jeton-de-test";
 
 impl FakeCalDav {
     pub async fn start() -> FakeCalDav {
@@ -175,7 +177,8 @@ fn authorised(req: &Request) -> bool {
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("{USER}:{PASSWORD}"))
     );
-    header(req, "authorization") == Some(expected.as_str())
+    let bearer = format!("Bearer {TOKEN}");
+    header(req, "authorization").is_some_and(|h| h == expected || h == bearer)
 }
 
 fn xml_escape(s: &str) -> String {

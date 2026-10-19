@@ -28,7 +28,7 @@ pub enum Error {
     Url(String),
     #[error(
         "identifiants refusés par le serveur CalDAV (HTTP {0}) : vérifier AGENDA_USER et le \
-         mot de passe d'application"
+         mot de passe d'application, ou l'autorisation OAuth (`penelope mcp auth`)"
     )]
     Auth(u16),
     #[error("serveur CalDAV injoignable : {0}")]
@@ -67,6 +67,8 @@ pub struct Client {
     base: Url,
     user: String,
     password: String,
+    /// Jeton OAuth : présent, il remplace l'authentification Basic.
+    token: Option<String>,
 }
 
 /// Sans le mot de passe : un `{:?}` dans un journal ne doit rien révéler.
@@ -104,7 +106,21 @@ impl Client {
             base,
             user: user.to_string(),
             password: password.to_string(),
+            token: None,
         })
+    }
+
+    /// Le même client, authentifié par un jeton OAuth (`Bearer`) au lieu du mot de passe.
+    pub fn with_token(mut self, token: &str) -> Client {
+        self.token = (!token.is_empty()).then(|| token.to_string());
+        self
+    }
+
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(t) => req.bearer_auth(t),
+            None => req.basic_auth(&self.user, Some(&self.password)),
+        }
     }
 
     pub fn base(&self) -> &Url {
@@ -125,9 +141,7 @@ impl Client {
             let m =
                 Method::from_bytes(method.as_bytes()).map_err(|e| Error::Network(e.to_string()))?;
             let resp = self
-                .http
-                .request(m, url.clone())
-                .basic_auth(&self.user, Some(&self.password))
+                .authed(self.http.request(m, url.clone()))
                 .header("Depth", depth)
                 .header("Content-Type", "application/xml; charset=utf-8")
                 .body(body.to_string())
@@ -367,8 +381,8 @@ impl Client {
         req: reqwest::RequestBuilder,
         what: &str,
     ) -> Result<Option<String>, Error> {
-        let resp = req
-            .basic_auth(&self.user, Some(&self.password))
+        let resp = self
+            .authed(req)
             .send()
             .await
             .map_err(|e| Error::Network(e.to_string()))?;

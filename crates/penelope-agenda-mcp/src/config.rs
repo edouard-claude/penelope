@@ -7,13 +7,17 @@
 use chrono_tz::Tz;
 use std::time::Duration;
 
-/// Variables lues ; les trois premières sont obligatoires.
+/// Variables lues ; les trois premières sont obligatoires (le mot de passe, sauf avec
+/// `AGENDA_TOKEN`).
 pub const URL: &str = "AGENDA_URL";
 pub const USER: &str = "AGENDA_USER";
 pub const PASSWORD: &str = "AGENDA_PASSWORD";
 pub const TIMEZONE: &str = "AGENDA_TIMEZONE";
 pub const CALENDARS: &str = "AGENDA_CALENDARS";
 pub const TIMEOUT: &str = "AGENDA_TIMEOUT";
+/// Jeton OAuth (#405) : remplace le mot de passe, envoyé en `Bearer`. Pénélope le pose par
+/// `${OAUTH_ACCESS_TOKEN}` pour un serveur déclaré avec `oauth_issuer`.
+pub const TOKEN: &str = "AGENDA_TOKEN";
 
 /// Délai d'une requête CalDAV par défaut, en secondes.
 const DEFAULT_TIMEOUT_S: u64 = 20;
@@ -25,6 +29,8 @@ pub struct Settings {
     pub url: String,
     pub user: String,
     pub password: String,
+    /// Jeton OAuth ; présent, il remplace le mot de passe.
+    pub token: String,
     /// Fuseau des réponses quand l'appel n'en donne pas.
     pub timezone: Tz,
     /// Noms des calendriers servis ; vide : tous ceux qui portent des événements.
@@ -45,8 +51,10 @@ impl Settings {
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
+        let with_token = read(TOKEN).is_some();
         let missing: Vec<&str> = [URL, USER, PASSWORD]
             .into_iter()
+            .filter(|k| !(with_token && *k == PASSWORD))
             .filter(|k| read(k).is_none())
             .collect();
         if !missing.is_empty() {
@@ -82,6 +90,7 @@ impl Settings {
             url: read(URL).unwrap_or_default(),
             user: read(USER).unwrap_or_default(),
             password: read(PASSWORD).unwrap_or_default(),
+            token: read(TOKEN).unwrap_or_default(),
             timezone,
             calendars,
             timeout: Duration::from_secs(timeout),
@@ -110,6 +119,18 @@ mod tests {
         let err =
             Settings::from_vars(table(&[(URL, "x"), (USER, " "), (PASSWORD, "p")])).unwrap_err();
         assert!(err.contains("AGENDA_USER"), "{err}");
+    }
+
+    #[test]
+    fn a_token_replaces_the_password() {
+        let s = Settings::from_vars(table(&[
+            (URL, "https://apidata.googleusercontent.com/caldav/v2/"),
+            (USER, "anne@exemple.fr"),
+            (TOKEN, "ya29.jeton"),
+        ]))
+        .unwrap();
+        assert_eq!(s.token, "ya29.jeton");
+        assert!(s.password.is_empty());
     }
 
     #[test]

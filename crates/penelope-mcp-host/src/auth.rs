@@ -180,39 +180,29 @@ fn token_client_auth(
     }
 }
 
-/// Prépare une autorisation : l'URL à ouvrir et la demande mémorisée.
-pub async fn start(
-    s: &Services,
+/// L'issuer, les portées annoncées par la ressource et l'indicateur `resource` d'une
+/// autorisation : découverts depuis la ressource protégée pour un serveur HTTP, déclarés
+/// pour un serveur stdio (#405), qui n'a ni ressource ni portées annoncées.
+async fn issuer_of(
     cfg: &ServerConfig,
-    www_authenticate: Option<&str>,
-) -> Result<AuthStart, String> {
-    cfg.validate().map_err(|e| e.to_string())?;
-    if !matches!(cfg.effective_transport(), "http" | "sse") {
-        return Err(format!(
-            "`{}` n'est pas un serveur HTTP : l'autorisation OAuth ne s'applique pas",
-            cfg.name
-        ));
-    }
-    // Le jeton obtenu partira vers ce serveur : jamais en clair.
-    check_endpoint(&cfg.url).map_err(|_| {
-        format!(
-            "`{}` n'est pas servi en HTTPS : un jeton OAuth ne lui sera pas confié",
-            cfg.name
-        )
-    })?;
-    let client = http()?;
-    let www = www_authenticate.map(oauth::parse_www_authenticate);
-
+    client: &reqwest::Client,
+    www: Option<&oauth::WwwAuthenticate>,
+    stdio: bool,
+) -> Result<(String, Vec<String>, String), String> {
     // 1. Ressource protégée (RFC 9728), sinon l'origine du serveur MCP. Des métadonnées
-    //    lues en clair pourraient détourner l'autorisation : HTTPS là aussi.
-    let prm_url = www
-        .as_ref()
-        .and_then(|w| w.resource_metadata.clone())
-        .filter(|u| check_endpoint(u).is_ok())
-        .unwrap_or_else(|| oauth::protected_resource_url(&cfg.url));
-    let prm = match check_endpoint(&prm_url) {
-        Ok(()) => get_json(&client, &prm_url).await.ok(),
-        Err(_) => None,
+    //    lues en clair pourraient détourner l'autorisation : HTTPS là aussi. Un serveur
+    //    stdio n'a pas de ressource : son issuer est donné.
+    let prm = if stdio {
+        None
+    } else {
+        let prm_url = www
+            .and_then(|w| w.resource_metadata.clone())
+            .filter(|u| check_endpoint(u).is_ok())
+            .unwrap_or_else(|| oauth::protected_resource_url(&cfg.url));
+        match check_endpoint(&prm_url) {
+            Ok(()) => get_json(client, &prm_url).await.ok(),
+            Err(_) => None,
+        }
     };
     let from_prm = prm.as_ref().and_then(|v| {
         v["authorization_servers"]
@@ -233,10 +223,50 @@ pub async fn start(
                 .collect()
         })
         .unwrap_or_default();
-    let issuer = from_prm
-        .or_else(|| origin(&cfg.url))
-        .ok_or_else(|| format!("URL du serveur `{}` illisible", cfg.name))?;
+    let issuer = if stdio {
+        Some(cfg.oauth_issuer.clone())
+    } else {
+        from_prm.or_else(|| origin(&cfg.url))
+    }
+    .ok_or_else(|| format!("URL du serveur `{}` illisible", cfg.name))?;
     check_endpoint(&issuer)?;
+    let resource = if stdio {
+        String::new()
+    } else {
+        cfg.url.clone()
+    };
+    Ok((issuer, prm_scopes, resource))
+}
+
+/// Prépare une autorisation : l'URL à ouvrir et la demande mémorisée.
+pub async fn start(
+    s: &Services,
+    cfg: &ServerConfig,
+    www_authenticate: Option<&str>,
+) -> Result<AuthStart, String> {
+    cfg.validate().map_err(|e| e.to_string())?;
+    // Un serveur stdio s'autorise auprès de l'issuer qu'il déclare (#405) ; un serveur
+    // HTTP découvre le sien.
+    let stdio = cfg.effective_transport() == "stdio";
+    if stdio && cfg.oauth_issuer.is_empty() {
+        return Err(format!(
+            "`{}` est un serveur stdio sans `oauth_issuer` : l'autorisation OAuth ne \
+             s'applique pas",
+            cfg.name
+        ));
+    }
+    // Le jeton obtenu partira vers ce serveur : jamais en clair.
+    if !stdio {
+        check_endpoint(&cfg.url).map_err(|_| {
+            format!(
+                "`{}` n'est pas servi en HTTPS : un jeton OAuth ne lui sera pas confié",
+                cfg.name
+            )
+        })?;
+    }
+    let client = http()?;
+    let www = www_authenticate.map(oauth::parse_www_authenticate);
+    let (issuer, prm_scopes, resource) = issuer_of(cfg, &client, www.as_ref(), stdio).await?;
 
     // 2. Serveur d'autorisation (RFC 8414, puis OpenID Connect Discovery).
     let mut meta: Option<AsMetadata> = None;
@@ -343,14 +373,17 @@ pub async fn start(
     // 5. PKCE, `state`, demande mémorisée.
     let pkce = Pkce::generate();
     let state = oauth::random_state();
-    let url = oauth::authorize_url(
-        &meta,
-        &client_id,
-        &redirect_uri,
-        &pkce,
-        &state,
-        &cfg.url,
-        &scopes,
+    let url = oauth::with_params(
+        &oauth::authorize_url(
+            &meta,
+            &client_id,
+            &redirect_uri,
+            &pkce,
+            &state,
+            &resource,
+            &scopes,
+        ),
+        &cfg.oauth_params,
     );
     let expires_at_ms = s.clock.now_ms() + REQUEST_TTL_MS;
     let pending = Pending {
@@ -360,7 +393,7 @@ pub async fn start(
             state: state.clone(),
             verifier: pkce.verifier,
             redirect_uri: redirect_uri.clone(),
-            resource: cfg.url.clone(),
+            resource,
             scopes: scopes.clone(),
             authorize_url: url.clone(),
             expires_at_ms,
@@ -538,6 +571,39 @@ pub async fn authorization_header(
     }
     Ok(Some(grant.tokens.header_value()))
 }
+
+/// Le jeton d'accès d'un serveur stdio autorisé (#405), rafraîchi au besoin, et son
+/// expiration : de quoi le lancer, et le relancer avant qu'il n'expire. `None` : pas
+/// d'autorisation, ou autorisation expirée sans jeton de rafraîchissement.
+pub async fn access_token(
+    s: &Services,
+    server: &str,
+    issuer: &str,
+) -> Result<Option<(String, i64)>, String> {
+    let Some(header) = authorization_header(s, server, issuer).await? else {
+        return Ok(None);
+    };
+    let token = header
+        .split_once(' ')
+        .map(|(_, t)| t.to_string())
+        .unwrap_or(header);
+    Ok(Some((token, expiry(s, server).unwrap_or(i64::MAX))))
+}
+
+/// L'expiration du jeton d'accès d'un serveur autorisé, s'il en a un.
+pub fn expiry(s: &Services, server: &str) -> Option<i64> {
+    s.platform
+        .secrets
+        .get(&secret_name(server))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Grant>(&raw).ok())
+        .map(|g| g.tokens.expires_at_ms)
+}
+
+/// Ce que dit une erreur de lancement quand l'autorisation manque : le cycle de vie la
+/// reconnaît et range le serveur en « autorisation requise ».
+pub const AUTH_REQUIRED: &str = "autorisation requise";
 
 /// Oublie l'autorisation d'un serveur.
 pub fn forget(s: &Services, server: &str) -> Result<(), String> {

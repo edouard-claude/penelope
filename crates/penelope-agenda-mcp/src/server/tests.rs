@@ -18,6 +18,7 @@ async fn server(fake: &FakeCalDav, calendars: &str) -> Server {
         url: fake.url.clone(),
         user: USER.into(),
         password: PASSWORD.into(),
+        token: String::new(),
         timezone: chrono_tz::Indian::Reunion,
         calendars: calendars
             .split(',')
