@@ -390,6 +390,9 @@ pub enum MissionCmd {
         /// Dossier de travail (et de la vérification).
         #[arg(long)]
         cwd: Option<String>,
+        /// Travailler dans un worktree git à soi, sur une branche `penelope/mission-…`.
+        #[arg(long)]
+        worktree: bool,
         /// Commande relancée après chaque édition de fichier, `{file}` pour le fichier.
         #[arg(long)]
         hook: Option<String>,
