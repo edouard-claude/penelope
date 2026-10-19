@@ -47,9 +47,10 @@ pub fn workflows_inventory(s: &Services) -> Value {
 }
 
 /// Parties de l'inventaire de soi (issue #34).
-pub const INVENTORY: [&str; 8] = [
+pub const INVENTORY: [&str; 9] = [
     "workflows",
     "skills",
+    "plugins",
     "tools",
     "mcp",
     "commands",
@@ -87,6 +88,11 @@ async fn inventory_section(
                 .map(|h| json!({"name": h.name, "on": h.on, "match": h.matcher}))
                 .collect::<Vec<_>>(),
         }),
+        // Ce que chaque plugin déposé apporte, et ce que la politique refuse (#393).
+        "plugins" => json!(penelope_app::plugin_report::report(
+            &s.platform.dirs.data(),
+            &s.config.config().plugins
+        )),
         "mcp" => match admin {
             Some(a) => a.mcp_servers().await,
             None => Value::Null,

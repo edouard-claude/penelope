@@ -359,8 +359,8 @@ pub(super) fn self_knowledge() -> Vec<ToolSpec> {
                 json!({
                     "section": {
                         "type": "string",
-                        "enum": ["all", "model", "config", "costs", "jobs", "machine", "inventory", "workflows", "skills", "tools", "mcp", "commands", "schedules", "install", "limits"],
-                        "description": "Partie voulue ; `all` par défaut. `workflows` : identifiants, rôles et paramètres requis ; `tools` : outils natifs et classe de risque ; `jobs` : jobs d'outils en cours ; `limits` : limites connues de la version ; `inventory` : tout l'inventaire."
+                        "enum": ["all", "model", "config", "costs", "jobs", "machine", "inventory", "workflows", "skills", "plugins", "tools", "mcp", "commands", "schedules", "install", "limits"],
+                        "description": "Partie voulue ; `all` par défaut. `workflows` : identifiants, rôles et paramètres requis ; `tools` : outils natifs et classe de risque ; `limits` : limites connues de la version ; `inventory` : tout l'inventaire."
                     }
                 }),
                 &[],
