@@ -9,7 +9,9 @@
 //! ```
 //!
 //! Une commande qui demande un shell (tube, `;`, `$`, redirection…) est refusée avec sa
-//! raison, comme un événement que la boucle ne sert pas.
+//! raison, comme un événement que la boucle ne sert pas. Un hook qui peut bloquer
+//! (`pre_tool`, `prompt_submit`, `turn_end`) échoue fermé : un code 2 de Claude Code ou
+//! tout résultat non compris refuse l'action.
 
 use super::{Event, Hook, Match};
 use std::path::Path;
@@ -177,7 +179,16 @@ pub fn load(
                                 .unwrap_or(super::DEFAULT_TIMEOUT)
                                 .min(super::DEFAULT_TIMEOUT),
                             sandbox: super::Sandbox::WorkspaceWrite,
-                            on_failure: super::OnFailure::Continue,
+                            // Un hook de garde de Claude Code refuse par le code 2 et
+                            // un motif sur stderr, que la boucle ne lit pas comme un
+                            // verdict : là où il peut bloquer, un résultat non compris
+                            // refuse (défaut fermé) ; ailleurs, il laisse une note.
+                            on_failure: match event {
+                                Event::PreTool | Event::PromptSubmit | Event::TurnEnd => {
+                                    super::OnFailure::Block
+                                }
+                                Event::PostTool | Event::SessionStart => super::OnFailure::Continue,
+                            },
                             deliver: super::Deliver::Note,
                             env: Default::default(),
                             input: super::Input::None,
@@ -228,6 +239,13 @@ mod tests {
         assert_eq!(ok[0].args, ["--fix", "a b"]);
         assert_eq!(ok[0].matcher.tool.as_deref(), Some("fs_write|fs_edit"));
         assert_eq!(ok[0].timeout, Duration::from_secs(30));
+        assert_eq!(ok[0].on_failure, super::super::OnFailure::Continue);
+        let (guards, _) = load(dir.path(), &|_, e| e == "pre_tool");
+        assert_eq!(
+            guards[0].on_failure,
+            super::super::OnFailure::Block,
+            "défaut fermé"
+        );
         let reasons: Vec<String> = refused.iter().map(|(n, r)| format!("{n}: {r}")).collect();
         assert!(
             reasons

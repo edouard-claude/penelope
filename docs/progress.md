@@ -23,8 +23,10 @@ La charte et les spécifications sont dans `design/v1/`.
   d'outils de Claude Code traduits dans le `matcher`. Une commande qui demande un shell
   (tube, `;`, `$`…), un événement non servi ou un plugin non autorisé : le hook est
   refusé avec sa raison, visible dans `doctor` et `penelope plugin show`. Un hook qui
-  répond `allow` reste en erreur, jamais appliqué. Un hook de `hooks.d` garde son nom
-  face à celui d'un plugin.
+  répond `allow` reste en erreur, jamais appliqué ; un hook qui peut bloquer
+  (`PreToolUse`, `UserPromptSubmit`, `Stop`) échoue fermé : son code 2 ou un résultat
+  non compris refuse l'action. Un hook de `hooks.d` garde son nom face à celui d'un
+  plugin.
 - Pas encore : installation depuis une marketplace, `installed_plugins.json`.
 
 ### 1.0.79
