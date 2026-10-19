@@ -22,6 +22,11 @@ pub struct World {
     pub check_runs: Value,
     pub statuses: Value,
     pub pipelines: Value,
+    /// Commentaires de la PR (#396) : GitHub `issues/{n}/comments` et `pulls/{n}/reviews`,
+    /// GitLab `merge_requests/{n}/notes`.
+    pub comments: Value,
+    pub reviews: Value,
+    pub notes: Value,
     /// Toute requête d'API rend 503.
     pub down: bool,
     /// Environnement de dev : chemin → (statut, corps).
@@ -351,8 +356,22 @@ fn route(
             (201, created.to_string())
         }
         ("GET", "/pipelines") => (200, w.pipelines.to_string()),
+        ("GET", r) if r.ends_with("/comments") && r.starts_with("/issues/") => {
+            (200, list(&w.comments))
+        }
+        ("GET", r) if r.ends_with("/reviews") => (200, list(&w.reviews)),
+        ("GET", r) if r.ends_with("/notes") => (200, list(&w.notes)),
         ("GET", r) if r.ends_with("/check-runs") => (200, w.check_runs.to_string()),
         ("GET", r) if r.ends_with("/status") => (200, w.statuses.to_string()),
         _ => (404, json!({"message": "Not Found"}).to_string()),
+    }
+}
+
+/// Une liste JSON, vide par défaut.
+fn list(v: &Value) -> String {
+    if v.is_null() {
+        "[]".into()
+    } else {
+        v.to_string()
     }
 }

@@ -40,6 +40,13 @@ pub enum Command {
     /// Serveur MCP d'agenda CalDAV, en lecture et écriture, sur stdio : la commande que déclare
     /// `mcp.d/agenda.toml` (`AGENDA_URL`, `AGENDA_USER`, `AGENDA_PASSWORD` dans son `env`).
     AgendaMcp,
+    /// Un run dans un process enfant (#395) : lancé par le daemon, protocole JSONL sur
+    /// stdio. Pas une commande pour le propriétaire.
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        stdio: bool,
+    },
     /// Journaux du daemon (JSON du jour et de la veille), filtrés par tour ou par session.
     Logs {
         /// Lignes du tour dont c'est l'identifiant.
@@ -142,6 +149,17 @@ pub enum Command {
         all: bool,
     },
 
+    /// Un job d'outil : `attach` suit en direct la sortie d'un `shell_exec` en arrière-plan.
+    Job {
+        #[command(subcommand)]
+        cmd: JobCmd,
+    },
+
+    /// Plugins au format Claude Code déposés dans `{data}/plugins` (#393), sans daemon.
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
     /// Demandes d'approbation en attente ; `stats` : la mesure préalable au juge (#203).
     Approvals {
         #[command(subcommand)]

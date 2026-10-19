@@ -12,6 +12,47 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.79
+
+**Épopée #398 : un run dans un process enfant, le relevé d'activité du propriétaire, les
+serveurs MCP des plugins (#395, #396, #393).**
+
+- **Run enfant (#395, lot 1).** Le socle : un protocole JSONL versionné entre le daemon et
+  `penelope run --stdio` (commande cachée), un superviseur qui lance l'enfant dans son
+  groupe de process, transmet `/stop` puis SIGTERM et SIGKILL, l'arrête sur sa durée ou sa
+  mémoire résidente, et rend la cause de sa fin (`oom`, `timeout`, code ou signal) au lieu
+  de faire tomber le daemon ; un enfant mort n'est relancé qu'une fois. Pas encore : les
+  sous-agents, workflows et missions branchés dessus, la reprise après redémarrage,
+  l'exécuteur distant.
+- **Relevé d'activité (#396, point 2).** Ce que le propriétaire a changé hors de la
+  conversation depuis le message précédent (fichiers du vault, et pour une mission la
+  branche et les commits) arrive au message suivant dans un bloc `<releve>` du contexte
+  volatil : une donnée de l'app, pas une consigne, 24 entrées de 320 caractères au plus,
+  jamais dans le préfixe. Ce que l'agent a lui-même écrit en est retiré. Pas encore : les
+  suppressions.
+- **Revue de PR comme source (#396, point 3).** Pendant l'attente de la CI, la livraison
+  lit les commentaires et revues de la PR du run. Seuls comptent les auteurs de la section
+  `[review]` de `.penelope/delivery.toml` (rôles GitHub ou logins ; sans section,
+  personne) ; les autres sont ignorés et journalisés. Une demande de changements lance
+  une reprise du code puis sa revue contradictoire, et revient à la même PR ; au-delà de
+  deux reprises, le run s'arrête sur la carte. Commentaires cités comme données, 20 de
+  1 200 caractères au plus, vus une fois ; un seul run lit une PR. Jamais de fusion ni de
+  déploiement.
+- **Suivre un job en direct (#397, point 3).** Un `shell_exec` lancé en arrière-plan
+  copie sa sortie brute au fil de l'eau dans `{state}/jobs/<id>.log` (16 Mio au plus,
+  effacé après un jour) ; `penelope job attach <id>` la suit en lecture seule jusqu'à la
+  fin de la commande, et `job_status` rend au modèle les vingt dernières lignes de
+  l'écran tant que le job tourne. Une commande qui reçoit un secret collé n'est pas
+  copiée. Pas encore : la prise de contrôle, `penelope term`.
+- **Serveurs MCP des plugins (#393, lot 2).** Le `.mcp.json` d'un plugin donne des
+  serveurs `<plugin>-<serveur>`, jamais écrits dans `mcp.d`. Aucun ne démarre sans la
+  politique du propriétaire : nouvelle section `[plugins]`, `allowed_mcp_servers =
+  ["<plugin>/<serveur>"]` ou `"<plugin>/*"` ; un serveur refusé reste visible avec la
+  raison. Le plugin est nommé par son dossier. `penelope plugin list` et `show`
+  disent, sans daemon, ce que chaque plugin apporte : skills, sous-agents, serveurs
+  autorisés et refusés. Pas encore : hooks de plugin, installation depuis une
+  marketplace.
+
 ### 1.0.78
 
 **Exécution : des chemins masqués au processus et un vrai terminal à la demande (#394,

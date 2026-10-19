@@ -43,6 +43,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             shell: Some(("/bin/sh".into(), vec!["-c".into()])),
             cancel: None,
             env: Vec::new(),
+            tee: None,
         },
     )
     .await
@@ -67,6 +68,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             shell: Some(("/bin/sh".into(), vec!["-c".into()])),
             cancel: None,
             env: Vec::new(),
+            tee: None,
         },
     )
     .await
@@ -580,4 +582,32 @@ async fn a_command_runs_in_a_real_terminal_on_demand() {
     let wrapped = with_tty("test -t 1 && echo terminal || echo 'pas d''apostrophe'");
     let tty = exec(&host, &wrapped, opts()).await.unwrap();
     assert_eq!(strip_ansi(&tty.stdout).trim(), "terminal", "{tty:?}");
+}
+
+/// #397 : la sortie d'une commande est copiée au fil de l'eau dans le fichier de suivi,
+/// en plus de ce que le modèle reçoit.
+#[tokio::test]
+async fn the_output_is_teed_to_the_follow_file_as_it_comes() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = penelope_platform::UnixProcessHost::new(dir.path().join("pids"));
+    let tee = dir.path().join("job.log");
+    let out = exec(
+        &host,
+        "echo un; echo deux >&2",
+        ExecOptions {
+            tee: Some(tee.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.stdout.trim(), "un");
+    let copied = std::fs::read_to_string(&tee).unwrap();
+    assert!(copied.contains("un") && copied.contains("deux"), "{copied}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&tee).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "lisible du seul propriétaire");
+    }
 }

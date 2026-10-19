@@ -5,6 +5,7 @@
 //! vient de la configuration résolue ([`ForgeTarget`]).
 
 use penelope_workflow::delivery::config::{ForgeKind, ForgeTarget};
+use penelope_workflow::delivery::review::{self, PrComment};
 use penelope_workflow::delivery::verdicts::{self, CiVerdict};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -276,6 +277,28 @@ impl Forge {
                     )
                     .await?;
                 Ok(verdicts::gitlab_ci(&pipelines))
+            }
+        }
+    }
+
+    /// Les commentaires et revues de la PR `number` (#396).
+    pub async fn comments(&self, number: u64) -> Result<Vec<PrComment>, ForgeError> {
+        let get = |url: String| {
+            self.send(
+                self.request(reqwest::Method::GET, &url)
+                    .query(&[("per_page", "100")]),
+            )
+        };
+        match self.target.kind {
+            ForgeKind::GitHub => {
+                let issue = get(format!("{}/issues/{number}/comments", self.project())).await?;
+                let reviews = get(format!("{}/pulls/{number}/reviews", self.project())).await?;
+                Ok(review::github(&issue, &reviews))
+            }
+            ForgeKind::GitLab => {
+                let notes =
+                    get(format!("{}/merge_requests/{number}/notes", self.project())).await?;
+                Ok(review::gitlab(&notes))
             }
         }
     }

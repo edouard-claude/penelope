@@ -16,6 +16,7 @@ pub use cli::{
 };
 use dataset::DatasetCmd;
 use interactive::{chat, model_auth, onboard};
+use job_attach::JobCmd;
 #[cfg(test)]
 use logs::filter_log_lines;
 use logs::logs;
@@ -23,6 +24,7 @@ use logs::logs;
 use offline::store_secret;
 use offline::{doctor, eval_local, paths, service, set_secret, validate_config, validate_workflow};
 use penelope_kernel::api::method as m;
+use plugin::PluginCmd;
 use render::*;
 #[cfg(test)]
 use route::parse_scalar;
@@ -43,10 +45,24 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 .await
                 .map_err(CliError::Usage);
         }
+        Command::Run { stdio } => {
+            if !stdio {
+                return Err(CliError::Usage(
+                    "`penelope run` ne parle que `--stdio`".into(),
+                ));
+            }
+            return penelope_app::child::serve_stdio(std::sync::Arc::new(
+                penelope_app::child::Probe,
+            ))
+            .await
+            .map_err(CliError::Usage);
+        }
         Command::Approvals {
             cmd: Some(ApprovalsCmd::Stats { days }),
         } => return approval_stats::run(&cli, *days),
         Command::Dataset(cmd) => return dataset::run(&cli, cmd),
+        Command::Plugin { cmd } => return plugin::run(&cli, cmd),
+        Command::Job { cmd } => return job_attach::run(&cli, cmd).await,
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -284,9 +300,11 @@ mod cli;
 mod console;
 mod dataset;
 mod interactive;
+mod job_attach;
 mod local;
 mod logs;
 mod offline;
+mod plugin;
 mod purge;
 mod render;
 mod restore;

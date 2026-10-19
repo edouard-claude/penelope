@@ -23,8 +23,7 @@ pub struct Plugin {
     pub root: PathBuf,
 }
 
-/// Les plugins d'un dossier : chaque sous-dossier, nommé par son `plugin.json` s'il en a
-/// un (champ `name`), sinon par lui-même.
+/// Les plugins d'un dossier : chaque sous-dossier au nom valide, nommé par lui-même.
 pub fn scan(plugins_dir: &Path) -> Vec<Plugin> {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else {
         return Vec::new();
@@ -44,10 +43,10 @@ pub fn scan(plugins_dir: &Path) -> Vec<Plugin> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             let field = |k: &str| manifest[k].as_str().unwrap_or_default().to_string();
+            // Le nom est celui du dossier, que le plugin ne choisit pas : c'est lui que
+            // nomme la politique du propriétaire (`plugins.allowed_mcp_servers`).
             Plugin {
-                name: Some(field("name"))
-                    .filter(|n| penelope_platform::validate_slug(n).is_ok())
-                    .unwrap_or(dir_name),
+                name: dir_name,
                 version: field("version"),
                 description: field("description"),
                 root,

@@ -17,7 +17,7 @@ use penelope_workflow::plan::{Phase, Plan, PlanDraft, PlanStep, PlanStore};
 
 /// Toute la livraison puis le gate, comme un plan compilé les enchaîne.
 fn delivered() -> Vec<penelope_workflow::model::Step> {
-    let mut steps = delivery::tail(gate::REPORT_STEP);
+    let mut steps = delivery::tail(gate::REPORT_STEP, "");
     steps.extend(gate::steps(DONE));
     steps
 }

@@ -28,6 +28,7 @@
 use crate::runtime::Core;
 use penelope_agent::{JobRequest, ToolExecutor};
 use penelope_app::{bus::Origin, services::Services};
+use penelope_executor::jobs::live;
 use penelope_kernel::effects::EffectState;
 use penelope_kernel::event::EventDraft;
 use penelope_kernel::ids::EffectId;
@@ -171,7 +172,9 @@ pub async fn maybe_spawn(
         // Une tâche qui panique s'arrête en silence (#84). Ici, le silence laisserait le
         // job `working` et son effet `dispatching` pour toujours : la panique devient un
         // échec ordinaire, que le ledger et la livraison savent traiter.
-        let run = std::panic::AssertUnwindSafe(detached.execute_cancellable(&name, &args, &cancel));
+        let state = s.platform.dirs.state();
+        let exec = detached.execute_cancellable(&name, &args, &cancel);
+        let run = std::panic::AssertUnwindSafe(live::scoped(&state, &id, exec));
         let outcome = match futures::FutureExt::catch_unwind(run).await {
             Ok(o) => o,
             Err(payload) => {

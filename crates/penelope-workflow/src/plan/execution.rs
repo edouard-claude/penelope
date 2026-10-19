@@ -252,7 +252,7 @@ pub fn compile(draft: &PlanDraft, limits: &Limits) -> Result<Workflow, PlanError
             };
             out = compiler.unfold();
             if delivered {
-                out.extend(delivery::tail(delivery::gate::REPORT_STEP));
+                out.extend(delivery::tail(delivery::gate::REPORT_STEP, &header));
                 out.extend(delivery::gate::steps(DONE));
             }
         }

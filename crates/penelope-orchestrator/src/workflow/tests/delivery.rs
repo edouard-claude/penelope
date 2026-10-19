@@ -95,7 +95,7 @@ impl Bench {
 
     /// Un run dont le plan a été accepté par sa dernière revue : il entre en livraison.
     async fn start(&self) -> String {
-        self.start_with(delivery::tail(DONE)).await
+        self.start_with(delivery::tail(DONE, "")).await
     }
 
     /// Un run qui commence à la livraison et suit `steps`.
