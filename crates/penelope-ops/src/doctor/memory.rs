@@ -55,6 +55,43 @@ pub async fn memory_size_check(s: &Services) -> DoctorCheck {
     DoctorCheck::fail(ID, LABEL, detail.join(" ; "), Some(fix.join(" ; ")))
 }
 
+/// #411 : tours partis sans mémoire faute de temps (budget du rappel), sur sept jours.
+pub async fn recall_misses_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "memory.recall";
+    const LABEL: &str = "Rappel mémoire dans son budget";
+    let now = s.clock.now_ms();
+    let mut total = 0u64;
+    for d in 0..7 {
+        let day = chrono::DateTime::from_timestamp_millis(now - d * 86_400_000)
+            .unwrap_or_default()
+            .format("%Y-%m-%d")
+            .to_string();
+        total += s
+            .kv_get(&format!("memory.recall.misses.{day}"))
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+    }
+    if total < 10 {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{total} tour(s) sans mémoire sur 7 jours"),
+        );
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!("{total} tours partis sans mémoire sur 7 jours (budget du rappel dépassé)"),
+        Some(
+            "`memory.recall_timeout_ms` relève le budget ; `penelope mem audit` mesure l'index"
+                .into(),
+        ),
+    )
+}
+
 /// Contenu du vault hors de l'index (issue #15).
 pub async fn vault_index_check(s: &Services) -> DoctorCheck {
     const ID: &str = "vault_index";

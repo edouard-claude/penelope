@@ -484,10 +484,56 @@ fn age_is_computed_from_dates_and_timestamps() {
     assert_eq!(age_days("pas une date", now), 0.0);
 }
 
+/// #411 : la requête garde les nombres et les sigles, écarte les mots vides et cherche la
+/// racine d'un mot long ; un article reste écarté.
 #[test]
-fn fts_query_drops_short_words() {
-    assert_eq!(fts_query("le déploiement"), "\"déploiement\"*");
+fn fts_query_keeps_numbers_and_acronyms_and_drops_stopwords() {
+    assert_eq!(fts_query("le déploiement"), "\"déplo\"*");
     assert_eq!(fts_query("a b"), "");
+    assert_eq!(
+        fts_query("comment déployer le 14 avec IA"),
+        "\"déplo\"* OR \"14\"* OR \"ia\"*"
+    );
+}
+
+/// #411 : la pertinence est absolue. Deux requêtes sans rapport ne rendent pas les mêmes
+/// scores ; un mot discriminant court (un nombre) trouve l'entrée qui le porte ; une
+/// requête sans entrée pertinente reste sous le seuil.
+#[tokio::test]
+async fn relevance_is_absolute_not_a_rank() {
+    let i = index(TestClock::default());
+    for (uid, text) in [
+        (
+            "d14",
+            "Déploiement du projet 14 : make deploy-api-dev puis vérifier les logs.",
+        ),
+        ("cafe", "Le propriétaire boit son café sans sucre le matin."),
+    ] {
+        i.upsert(&simple_entry(uid, text, Level::Cure, "2026-09-16"), &prov())
+            .await
+            .unwrap();
+    }
+    let search = |q: &'static str| {
+        let i = i.clone();
+        async move {
+            i.search(q, None, &SearchFilter::explicit(), &[])
+                .await
+                .unwrap()
+        }
+    };
+    let deploy = search("comment déployer le 14").await;
+    assert_eq!(deploy[0].entry.uid, "d14");
+    assert!(deploy[0].relevance >= 0.99, "{}", deploy[0].relevance);
+    let coffee = search("café sucre").await;
+    assert_eq!(coffee[0].entry.uid, "cafe");
+    let unrelated = search("facture électricité juillet").await;
+    assert!(
+        unrelated.iter().all(|h| h.relevance < 0.72),
+        "aucune entrée pertinente : {unrelated:?}"
+    );
+    assert!(coverage(&query_terms("déployer 14"), "le déploiement du 14") > 0.99);
+    assert!((vector_relevance(0.2) - 0.0).abs() < 1e-9);
+    assert!((vector_relevance(0.7) - 1.0).abs() < 1e-9);
 }
 
 /// Les entrées d'une fiche se relisent par son slug, dans l'ordre des uid, sans les
