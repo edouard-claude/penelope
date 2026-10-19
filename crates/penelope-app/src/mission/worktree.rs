@@ -64,41 +64,55 @@ pub async fn open(
     })?;
     let name = short(session_id);
     let branch = format!("penelope/mission-{name}");
-    let path = top.join(DIR).join(&name);
     let git_dir = git(s, &top, &["rev-parse", "--git-common-dir"]).await?;
-    // L'exclusion ne s'écrit que dans un `.git` lui aussi dans le périmètre.
-    let git_dir = crate::mission::dir_of(s, &top.join(git_dir.trim()).to_string_lossy());
-    let exclude = git_dir.map(|g| g.join("info").join("exclude"));
-    let line = format!("/{DIR}/");
-    let current = exclude
-        .as_ref()
-        .and_then(|e| std::fs::read_to_string(e).ok())
-        .unwrap_or_default();
-    if let Some(exclude) = &exclude
-        && !current.lines().any(|l| l.trim() == line)
-    {
-        if let Some(info) = exclude.parent() {
-            let _ = std::fs::create_dir_all(info);
-        }
-        let _ = std::fs::write(
-            exclude,
-            format!(
-                "{current}{}{line}\n",
-                if current.ends_with('\n') || current.is_empty() {
-                    ""
-                } else {
-                    "\n"
-                }
-            ),
-        );
-    }
-    let p = path.to_string_lossy().to_string();
+    exclude_worktrees(s, &top.join(git_dir.trim()));
+    // Le dossier parent est créé et vérifié **avant** git : un lien posé dans `.penelope`
+    // ne peut pas envoyer le worktree hors du périmètre.
+    let parent = top.join(DIR);
+    std::fs::create_dir_all(&parent).map_err(|e| format!("{} : {e}", parent.display()))?;
+    let parent = crate::mission::dir_of(s, &parent.to_string_lossy())
+        .ok_or_else(|| format!("`{}` sort des workspaces autorisés", parent.display()))?;
+    let p = parent.join(&name).to_string_lossy().to_string();
     git(s, &top, &["worktree", "add", "-b", &branch, &p, "HEAD"]).await?;
-    // Le worktree créé est revérifié : un lien dans `.penelope` ne l'a pas sorti du
-    // périmètre.
-    let path = crate::mission::dir_of(s, &p)
-        .ok_or_else(|| format!("le worktree `{p}` n'est dans aucun workspace autorisé"))?;
-    Ok((path, branch))
+    match crate::mission::dir_of(s, &p) {
+        Some(path) => Ok((path, branch)),
+        None => {
+            let _ = git(s, &top, &["worktree", "remove", "--force", &p]).await;
+            let _ = git(s, &top, &["branch", "-D", &branch]).await;
+            Err(format!(
+                "le worktree `{p}` n'est dans aucun workspace autorisé"
+            ))
+        }
+    }
+}
+
+/// Ajoute le dossier des worktrees à `.git/info/exclude`, seulement si ce fichier est
+/// dans le périmètre et n'est pas un lien.
+fn exclude_worktrees(s: &Services, git_dir: &Path) {
+    let Some(git_dir) = crate::mission::dir_of(s, &git_dir.to_string_lossy()) else {
+        return;
+    };
+    let info = git_dir.join("info");
+    if std::fs::create_dir_all(&info).is_err()
+        || crate::mission::dir_of(s, &info.to_string_lossy()).as_deref() != Some(info.as_path())
+    {
+        return;
+    }
+    let exclude = info.join("exclude");
+    if std::fs::symlink_metadata(&exclude).is_ok_and(|m| m.file_type().is_symlink()) {
+        return;
+    }
+    let line = format!("/{DIR}/");
+    let current = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if current.lines().any(|l| l.trim() == line) {
+        return;
+    }
+    let sep = if current.ends_with('\n') || current.is_empty() {
+        ""
+    } else {
+        "\n"
+    };
+    let _ = std::fs::write(&exclude, format!("{current}{sep}{line}\n"));
 }
 
 /// Retire le worktree d'une mission finie s'il est propre ; sinon le garde, et le dit.
