@@ -29,7 +29,15 @@ serveurs MCP des plugins (#395, #396, #393).**
   branche et les commits) arrive au message suivant dans un bloc `<releve>` du contexte
   volatil : une donnée de l'app, pas une consigne, 24 entrées de 320 caractères au plus,
   jamais dans le préfixe. Ce que l'agent a lui-même écrit en est retiré. Pas encore : les
-  suppressions, les commentaires de PR comme source.
+  suppressions.
+- **Revue de PR comme source (#396, point 3).** Pendant l'attente de la CI, la livraison
+  lit les commentaires et revues de la PR du run. Seuls comptent les auteurs de la section
+  `[review]` de `.penelope/delivery.toml` (rôles GitHub ou logins ; sans section,
+  personne) ; les autres sont ignorés et journalisés. Une demande de changements lance
+  une reprise du code puis sa revue contradictoire, et revient à la même PR ; au-delà de
+  deux reprises, le run s'arrête sur la carte. Commentaires cités comme données, 20 de
+  1 200 caractères au plus, vus une fois ; un seul run lit une PR. Jamais de fusion ni de
+  déploiement.
 - **Serveurs MCP des plugins (#393, lot 2).** Le `.mcp.json` d'un plugin donne des
   serveurs `<plugin>-<serveur>`, jamais écrits dans `mcp.d`. Aucun ne démarre sans la
   politique du propriétaire : nouvelle section `[plugins]`, `allowed_mcp_servers =

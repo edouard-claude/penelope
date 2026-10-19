@@ -18,6 +18,7 @@ use penelope_workflow::delivery::verdicts::{CI_UNAVAILABLE_LIMIT, CiVerdict, ci_
 use penelope_workflow::delivery::{CI, E2E, PROD_PULL_REQUEST, PROD_REPORT, PULL_REQUEST};
 use std::path::{Path, PathBuf};
 
+mod comments;
 mod e2e;
 mod forge;
 mod git;
@@ -467,6 +468,10 @@ async fn ci(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome> {
         Ok(plan) => plan,
         Err(m) => return Ok(asked(PURPOSE, &p.dir, &m)),
     };
+    // La revue de la PR d'abord : une demande de changements passe avant la CI.
+    if let Some(o) = comments::review_gate(ctx, &p, &forge, &state).await? {
+        return Ok(o);
+    }
     let sha = verified_sha(&state);
     let url = state["pr"]["url"].as_str().unwrap_or_default().to_string();
     if plan.provider.is_none() {

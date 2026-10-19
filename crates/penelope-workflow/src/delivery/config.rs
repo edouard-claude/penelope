@@ -27,6 +27,10 @@
 //!
 //! [prod]
 //! max_age_minutes = 60               # au-delà, le bilan est périmé et se re-vérifie
+//!
+//! [review]                           # commentaires de PR qui comptent (#396)
+//! roles = ["owner", "member", "collaborator"]
+//! logins = ["relectrice"]
 //! ```
 //!
 //! Ce qui manque est rendu en [`Missing`] : la clé, et pourquoi elle compte. Chaque étape
@@ -48,6 +52,16 @@ pub struct FileConfig {
     pub ci: CiSection,
     pub e2e: E2eSection,
     pub prod: ProdSection,
+    pub review: ReviewSection,
+}
+
+/// Auteurs dont les commentaires de PR comptent (#396) : par rôle sur le dépôt (GitHub :
+/// `owner`, `member`, `collaborator`) ou par login. Vide : personne, tout est ignoré.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReviewSection {
+    pub roles: Vec<String>,
+    pub logins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
