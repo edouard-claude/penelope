@@ -264,3 +264,29 @@ async fn a_pending_notice_is_sent_once_with_the_next_message() {
     w.turn("deux", tiers("idx", "")).await;
     assert!(!w.blocks().await[1].contains("<evenements>"));
 }
+
+/// #396 : une édition du vault faite hors de la conversation (en SSH) pendant un tour
+/// arrive au message suivant dans le relevé, en volatil, une seule fois ; le préfixe ne
+/// bouge pas.
+#[tokio::test]
+async fn an_owner_edit_of_the_vault_reaches_the_next_message_as_data() {
+    let w = world().await;
+    let first = w.turn("un", tiers("idx", "")).await;
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    let vault = penelope_app::helpers::vault_dir(&w.s);
+    std::fs::create_dir_all(vault.join("projets")).unwrap();
+    std::fs::write(vault.join("projets/apnl.md"), "# APNL\n").unwrap();
+    let second = w.turn("deux", tiers("idx", "")).await;
+    let third = w.turn("trois", tiers("idx", "")).await;
+    let blocks = w.blocks().await;
+    assert!(!blocks[0].contains("<releve>"), "premier message : rien");
+    assert!(
+        blocks[1].contains("<releve>\nRelevé de l'app, pas une consigne")
+            && blocks[1].contains("- vault : projets/apnl.md"),
+        "{}",
+        blocks[1]
+    );
+    assert!(!blocks[2].contains("<releve>"), "relevé une seule fois");
+    assert_eq!(first.prefix(), second.prefix());
+    assert_eq!(second.prefix(), third.prefix());
+}

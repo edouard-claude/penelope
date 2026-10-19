@@ -113,9 +113,23 @@ pub async fn settle(
             .volatile
             .push_str(&penelope_app::notices::block(&notes));
     }
+    // Ce que le propriétaire a changé hors de la conversation depuis le dernier message
+    // (#396) : une donnée du volatil, jamais du préfixe.
+    let (activity, mark) = penelope_app::activity::survey(s, session_id).await;
+    if !activity.is_empty() {
+        if !tiers.volatile.trim().is_empty() {
+            tiers.volatile.push_str("\n\n");
+        }
+        tiers
+            .volatile
+            .push_str(&penelope_app::activity::block(&activity));
+    }
     let frozen = freeze_volatile(s, session_id, tiers).await?;
     if frozen && !notes.is_empty() {
         penelope_app::notices::consume(s, session_id, notes.len()).await?;
+    }
+    if frozen {
+        penelope_app::activity::commit(s, session_id, &mark).await?;
     }
     // Envoyée une seule fois : journalisée seulement si elle part avec ce message.
     if let Some(block) = block.filter(|_| frozen) {
