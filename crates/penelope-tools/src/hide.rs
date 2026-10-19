@@ -46,20 +46,38 @@ pub fn pattern_regex(root: &Path, pattern: &str) -> String {
     )
 }
 
+/// Chaque racine sous sa forme donnée et sous sa forme réelle (liens résolus, `/var` →
+/// `/private/var` sous macOS) : un chemin résolu ne doit pas échapper au motif.
+fn both_forms(roots: &[impl AsRef<Path>]) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for r in roots {
+        let raw = r.as_ref().to_path_buf();
+        if let Ok(real) = std::fs::canonicalize(&raw)
+            && !out.contains(&real)
+        {
+            out.push(real);
+        }
+        if !out.contains(&raw) {
+            out.push(raw);
+        }
+    }
+    out
+}
+
 /// Les expressions de tous les motifs sous tous les dossiers accordés.
 pub fn regexes(roots: &[impl AsRef<Path>], patterns: &[String]) -> Vec<String> {
-    roots
+    both_forms(roots)
         .iter()
-        .flat_map(|r| patterns.iter().map(move |p| pattern_regex(r.as_ref(), p)))
+        .flat_map(|r| patterns.iter().map(move |p| pattern_regex(r, p)))
         .collect()
 }
 
 /// Le motif qui masque ce chemin, s'il y en a un.
 pub fn hidden(path: &Path, roots: &[impl AsRef<Path>], patterns: &[String]) -> Option<String> {
     let path = path.to_string_lossy();
-    for root in roots {
+    for root in both_forms(roots) {
         for p in patterns {
-            let re = pattern_regex(root.as_ref(), p);
+            let re = pattern_regex(&root, p);
             if regex::Regex::new(&re).is_ok_and(|r| r.is_match(&path)) {
                 return Some(p.clone());
             }

@@ -250,7 +250,7 @@ pub fn seatbelt_profile(p: &Profile) -> String {
     // Motifs masqués (#394) : `.env`, `.netrc`, clés, dans tout dossier accordé.
     for r in &p.hide {
         s.push_str(&format!(
-            "(deny file-read* file-write* (regex #\"{}\"))\n",
+            "(deny file-read* file-write* file-link (regex #\"{}\"))\n",
             r.replace('"', "\\\"")
         ));
     }
@@ -412,7 +412,7 @@ mod tests {
         h.hide = vec!["^/ws/(.*/)?\\.env$".into()];
         let hidden = seatbelt_profile(&h);
         let at = hidden
-            .find("(deny file-read* file-write* (regex #\"^/ws/(.*/)?\\.env$\"))")
+            .find("(deny file-read* file-write* file-link (regex #\"^/ws/(.*/)?\\.env$\"))")
             .expect("motif masqué");
         assert!(at > allow_at, "{hidden}");
         assert!(
