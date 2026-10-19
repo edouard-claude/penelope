@@ -21,6 +21,15 @@ pub const MAX_LINE_CHARS: usize = 320;
 const SKIP_DIRS: &[&str] = &[".git", ".dreams", "archive", ".penelope"];
 /// Fichiers que l'app réécrit elle-même à chaque passe.
 const SKIP_FILES: &[&str] = &["log.md", "DREAMS.md"];
+/// Fichiers que les outils `mem_*` écrivent (`vault_ops::file_for`, index des concepts).
+const MEMORY_FILES: &[&str] = &[
+    "profil.md",
+    "memoire.md",
+    "projets.md",
+    "AGENTS.md",
+    "notes.md",
+    "index.md",
+];
 /// Fichiers parcourus au plus : un vault démesuré ne ralentit pas le tour.
 const MAX_SCAN: usize = 20_000;
 
@@ -138,7 +147,11 @@ pub fn vault_changes(vault: &Path, since_ms: i64) -> Vec<String> {
 /// Vrai si l'agent a nommé ce fichier (chemin relatif, `vault:…` ou absolu) dans ses
 /// appels, ou s'il a écrit en mémoire et que le fichier est de la mémoire.
 pub fn written_by_agent(rel: &str, trace: &AgentTrace) -> bool {
-    if trace.wrote_memory && (rel == "memoire.md" || rel.starts_with("journal/")) {
+    if trace.wrote_memory
+        && (MEMORY_FILES.contains(&rel)
+            || rel.starts_with("journal/")
+            || rel.starts_with("concepts/"))
+    {
         return true;
     }
     trace.strings.iter().any(|s| s.contains(rel))

@@ -17,6 +17,7 @@ fn what_the_agent_named_is_not_the_owners_activity() {
     assert!(written_by_agent("projets/apnl.md", &t));
     assert!(written_by_agent("memoire.md", &t));
     assert!(written_by_agent("journal/2026-10-19.md", &t));
+    assert!(written_by_agent("profil.md", &t));
     assert!(!written_by_agent("projets/mentaleco.md", &t));
     assert!(!written_by_agent("memoire.md", &trace(&[], false)));
 }
