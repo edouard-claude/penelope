@@ -1,7 +1,9 @@
-//! Client CalDAV (RFC 4791) en lecture : découverte du principal et du dossier des
-//! calendriers par `PROPFIND` (RFC 6764), liste des calendriers, `REPORT calendar-query`
-//! sur une plage. Authentification Basic avec un mot de passe d'application ; le mot de
-//! passe ne figure dans aucune erreur ni aucun journal.
+//! Client CalDAV (RFC 4791) : découverte du principal et du dossier des calendriers par
+//! `PROPFIND` (RFC 6764), liste des calendriers, `REPORT calendar-query` sur une plage ou
+//! sur un `UID`, et écriture d'un objet par `PUT` et `DELETE` conditionnels (`If-Match`,
+//! `If-None-Match`) : une modification faite ailleurs entre la lecture et l'écriture
+//! refuse l'écriture au lieu d'être écrasée. Authentification Basic avec un mot de passe
+//! d'application ; le mot de passe ne figure dans aucune erreur ni aucun journal.
 
 #[cfg(test)]
 pub(crate) mod fake;
@@ -37,6 +39,19 @@ pub enum Error {
     Xml { what: String, reason: String },
     #[error("découverte CalDAV : {0}")]
     Discovery(String),
+    #[error(
+        "l'événement a changé sur le serveur depuis sa lecture (HTTP 412) : relire puis \
+         recommencer"
+    )]
+    Conflict,
+}
+
+/// Un objet iCalendar stocké : son adresse, sa version (`ETag`) et son texte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resource {
+    pub href: Url,
+    pub etag: Option<String>,
+    pub ics: String,
 }
 
 /// Un calendrier d'événements.
@@ -272,6 +287,111 @@ impl Client {
             .filter(|s| !s.trim().is_empty())
             .collect())
     }
+}
+
+impl Client {
+    /// L'objet d'un calendrier qui porte ce `UID`, s'il existe.
+    pub async fn find(&self, calendar: &Url, uid: &str) -> Result<Option<Resource>, Error> {
+        let what = "recherche d'un événement";
+        let body = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\">\
+             <d:prop><d:getetag/><c:calendar-data/></d:prop>\
+             <c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\">\
+             <c:prop-filter name=\"UID\"><c:text-match collation=\"i;octet\">{}</c:text-match>\
+             </c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>",
+            xml_escape(uid)
+        );
+        let xml = self.dav("REPORT", calendar, "1", &body, what).await?;
+        let doc = parse_xml(&xml, what)?;
+        // `text-match` cherche une sous-chaîne : seul un objet dont l'`UID` est exactement
+        // celui demandé compte, et deux objets pour un même `UID` refusent l'écriture
+        // plutôt que d'en toucher un au hasard.
+        let mut found: Vec<Resource> = ok_props(&doc)
+            .into_iter()
+            .filter_map(|(href, prop)| {
+                let ics = descendant(prop, NS_CALDAV, "calendar-data").map(text)?;
+                crate::ical::events(&ics)
+                    .iter()
+                    .any(|e| e.uid == uid)
+                    .then_some(())?;
+                Some(Resource {
+                    href: calendar.join(&href).ok()?,
+                    etag: descendant(prop, NS_DAV, "getetag").map(|e| text(e).trim().to_string()),
+                    ics,
+                })
+            })
+            .collect();
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            n => Err(Error::Discovery(format!(
+                "{n} objets portent l'UID « {uid} »"
+            ))),
+        }
+    }
+
+    /// Écrit un objet : création (`etag` absent, `If-None-Match: *`) ou remplacement de la
+    /// version lue (`If-Match`). Rend le nouvel `ETag` s'il est donné.
+    pub async fn put(
+        &self,
+        url: &Url,
+        ics: &str,
+        etag: Option<&str>,
+    ) -> Result<Option<String>, Error> {
+        let req = self
+            .http
+            .put(url.clone())
+            .header("Content-Type", "text/calendar; charset=utf-8")
+            .body(ics.to_string());
+        let req = match etag {
+            Some(e) => req.header("If-Match", e),
+            None => req.header("If-None-Match", "*"),
+        };
+        self.write(req, "écriture d'un événement").await
+    }
+
+    /// Supprime un objet, à la version lue.
+    pub async fn delete(&self, url: &Url, etag: Option<&str>) -> Result<(), Error> {
+        let mut req = self.http.delete(url.clone());
+        if let Some(e) = etag {
+            req = req.header("If-Match", e);
+        }
+        self.write(req, "suppression d'un événement")
+            .await
+            .map(|_| ())
+    }
+
+    async fn write(
+        &self,
+        req: reqwest::RequestBuilder,
+        what: &str,
+    ) -> Result<Option<String>, Error> {
+        let resp = req
+            .basic_auth(&self.user, Some(&self.password))
+            .send()
+            .await
+            .map_err(|e| Error::Network(e.to_string()))?;
+        match resp.status().as_u16() {
+            200 | 201 | 204 => Ok(resp
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)),
+            401 | 403 => Err(Error::Auth(resp.status().as_u16())),
+            412 => Err(Error::Conflict),
+            s => Err(Error::Status {
+                what: what.to_string(),
+                status: s,
+            }),
+        }
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Un corps `PROPFIND` demandant `props`.

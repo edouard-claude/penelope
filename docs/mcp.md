@@ -158,9 +158,9 @@ fermé) : le réglage n'y change rien.
 
 Pénélope livre un serveur MCP d'agenda (1.0.37, #295, décision
 [0018](decisions/0018-agenda-caldav-en-lecture.md)) : la sous-commande `penelope
-agenda-mcp` lit un compte CalDAV en lecture seule (iCloud avec un mot de passe
-d'application, Fastmail, Nextcloud, tout serveur en authentification Basic) et expose
-quatre outils, tous en lecture. Il se déclare comme n'importe quel serveur stdio ; la
+agenda-mcp` lit et écrit un compte CalDAV (iCloud avec un mot de passe d'application,
+Fastmail, Nextcloud, tout serveur en authentification Basic) et expose quatre outils de
+lecture et, depuis 1.0.73 (#403), trois d'écriture. Il se déclare comme n'importe quel serveur stdio ; la
 commande est `penelope` lui-même, donc présent dans chaque release :
 
 ```toml
@@ -221,6 +221,25 @@ reviennent en `isError`, que le modèle peut lire ; un outil inconnu est une err
 protocole. Le serveur parle le protocole 2025-06-18 au plus : la sonde `server/discover`
 de Pénélope reçoit « méthode inconnue » et le `initialize` historique suit.
 
+**L'écriture (1.0.73, #403).** Trois outils, chacun soumis à la politique de Pénélope
+comme tout outil qui écrit (création et modification `write`, suppression `destructive`) :
+
+| Outil | Arguments | Effet |
+|---|---|---|
+| `event_create` | `calendar` (nom), `summary`, `start`, `end`, `location`, `description`, `timezone` | crée l'événement ; sans fin, une heure, ou la journée pour une date |
+| `event_update` | `uid`, `calendar`, puis ce qui change : `summary`, `start`, `end`, `location`, `description` | réécrit l'événement ; un début seul garde la durée |
+| `event_delete` | `uid`, `calendar` | supprime l'événement ; une série récurrente l'est en entier, et le résultat le dit |
+
+Les dates s'écrivent `AAAA-MM-JJ` (journée entière, fin incluse), `AAAA-MM-JJTHH:MM`
+(heure locale du fuseau) ou RFC 3339 ; début et fin sont de même nature. Les heures sont
+écrites en UTC, sans bloc `VTIMEZONE` à fabriquer ; la lecture les rend dans le fuseau
+demandé. Chaque écriture est conditionnelle : `If-None-Match: *` à la création,
+`If-Match` sur l'`ETag` lu sinon. Un événement changé ailleurs entre la lecture et
+l'écriture n'est jamais écrasé (« l'événement a changé sur le serveur depuis sa lecture
+(HTTP 412) »). Une série récurrente ne se modifie pas : il faudrait des `RECURRENCE-ID`.
+Une modification ne touche que les propriétés de l'événement, jamais celles d'une alarme
+(`VALARM`) qu'il contient, et fait avancer `SEQUENCE`.
+
 **Le digest.** `penelope config set digest.agenda mcp__agenda__events_today` : chaque
 matin, l'« Aujourd'hui » du digest mêle les rendez-vous aux planifications, rangés par
 heure, journées entières en tête, dans `owner.timezone`. L'outil doit être en lecture et
@@ -228,7 +247,7 @@ connu du registre ; sinon, ou si le serveur répond en erreur, le digest le dit 
 (« Agenda non lu : … ») et garde ses planifications. Rien de ce que l'agenda rend n'entre
 en mémoire durable : un calendrier partagé contient des rendez-vous de tiers.
 
-**Pas dans ce lot.** L'écriture (créer ou déplacer un événement, soumise à approbation),
+**Pas encore là.** La modification d'une série récurrente ou d'une seule occurrence,
 Google Agenda (son point CalDAV exige OAuth 2, pas un mot de passe d'application), les
 fréquences infra-journalières et `BYSETPOS` des règles de récurrence, la relecture
 mémoire qui proposerait une entrée d'agenda, et l'avertissement de cohérence quand une

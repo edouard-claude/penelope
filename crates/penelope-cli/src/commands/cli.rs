@@ -37,7 +37,7 @@ pub enum Command {
     Uninstall,
     /// Lance le daemon au premier plan.
     Daemon,
-    /// Serveur MCP d'agenda CalDAV, en lecture, sur stdio : la commande que déclare
+    /// Serveur MCP d'agenda CalDAV, en lecture et écriture, sur stdio : la commande que déclare
     /// `mcp.d/agenda.toml` (`AGENDA_URL`, `AGENDA_USER`, `AGENDA_PASSWORD` dans son `env`).
     AgendaMcp,
     /// Journaux du daemon (JSON du jour et de la veille), filtrés par tour ou par session.

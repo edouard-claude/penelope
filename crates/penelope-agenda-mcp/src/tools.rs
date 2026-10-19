@@ -1,4 +1,4 @@
-//! Les quatre outils, tous en lecture, et leur exécution : fenêtre dans le fuseau
+//! Les quatre outils de lecture, les trois d'écriture (`write`), et leur exécution : fenêtre dans le fuseau
 //! demandé, `REPORT` par calendrier, occurrences développées, rendu texte et structuré.
 //!
 //! Un échec de l'outil (identifiants refusés, date illisible) revient en `isError` : c'est
@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+
+mod write;
+pub use write::{EVENT_CREATE, EVENT_DELETE, EVENT_UPDATE};
 
 pub const CALENDAR_LIST: &str = "calendar_list";
 pub const EVENTS_TODAY: &str = "events_today";
@@ -151,6 +154,9 @@ impl Agenda {
                 "annotations": read
             }),
         ]
+        .into_iter()
+        .chain(write::descriptors(date, &tz))
+        .collect()
     }
 
     /// Le résultat d'un `tools/call` : `Ok` même quand l'outil échoue (`isError`), `Err`
@@ -161,12 +167,16 @@ impl Agenda {
             EVENTS_TODAY => self.events_today(args).await,
             EVENTS_RANGE => self.events_range(args).await,
             EVENT_SEARCH => self.event_search(args).await,
+            EVENT_CREATE => self.event_create(args).await,
+            EVENT_UPDATE => self.event_update(args).await,
+            EVENT_DELETE => self.event_delete(args).await,
             other => {
                 return Err(RpcError {
                     code: INVALID_PARAMS,
                     message: format!(
                         "outil inconnu : {other} (outils : {CALENDAR_LIST}, {EVENTS_TODAY}, \
-                         {EVENTS_RANGE}, {EVENT_SEARCH})"
+                         {EVENTS_RANGE}, {EVENT_SEARCH}, {EVENT_CREATE}, {EVENT_UPDATE}, \
+                         {EVENT_DELETE})"
                     ),
                     data: None,
                 });

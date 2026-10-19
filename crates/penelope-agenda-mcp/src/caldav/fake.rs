@@ -1,6 +1,7 @@
 //! Faux serveur CalDAV des tests : un principal, un dossier avec des calendriers
-//! d'événements, un calendrier de rappels (`VTODO` seul) et une boîte de réception, et un
-//! `REPORT` qui rend les objets déposés. Il vérifie l'authentification Basic, journalise
+//! d'événements, un calendrier de rappels (`VTODO` seul) et une boîte de réception, un
+//! `REPORT` qui rend les objets déposés (filtrés par `UID` si demandé), et `PUT`/`DELETE`
+//! conditionnels sur l'`ETag`. Il vérifie l'authentification Basic, journalise
 //! chaque requête (méthode, chemin, `Depth`, corps) et sait tomber en panne.
 
 use base64::Engine;
@@ -30,12 +31,15 @@ pub struct Recorded {
     pub body: String,
 }
 
+/// Les objets d'un calendrier : `fichier -> (objet iCalendar, version)`.
+pub type Objects = BTreeMap<String, (String, u32)>;
+
 #[derive(Default)]
 pub struct State {
     pub requests: Vec<Recorded>,
     pub mode: Mode,
-    /// `slug -> (nom affiché, objets iCalendar)`.
-    pub calendars: BTreeMap<String, (String, Vec<String>)>,
+    /// `slug -> (nom affiché, fichier -> (objet iCalendar, version))`.
+    pub calendars: BTreeMap<String, (String, Objects)>,
 }
 
 pub struct FakeCalDav {
@@ -68,13 +72,40 @@ impl FakeCalDav {
             slug.to_string(),
             (
                 name.to_string(),
-                objects.iter().map(|s| s.to_string()).collect(),
+                objects
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (format!("{i}.ics"), (s.to_string(), 1)))
+                    .collect(),
             ),
         );
     }
 
     pub fn set_mode(&self, mode: Mode) {
         self.state.lock().unwrap().mode = mode;
+    }
+
+    /// Les objets d'un calendrier, par fichier.
+    pub fn objects(&self, slug: &str) -> BTreeMap<String, String> {
+        self.state.lock().unwrap().calendars[slug]
+            .1
+            .iter()
+            .map(|(f, (ics, _))| (f.clone(), ics.clone()))
+            .collect()
+    }
+
+    /// Change un objet comme le ferait une autre application : sa version avance.
+    pub fn touch(&self, slug: &str, file: &str) {
+        if let Some(o) = self
+            .state
+            .lock()
+            .unwrap()
+            .calendars
+            .get_mut(slug)
+            .and_then(|c| c.1.get_mut(file))
+        {
+            o.1 += 1;
+        }
     }
 
     pub fn requests(&self) -> Vec<Recorded> {
@@ -207,21 +238,72 @@ fn listing(state: &State) -> String {
     multistatus(&r)
 }
 
-fn report(state: &State, slug: &str) -> Option<String> {
+fn report(state: &State, slug: &str, body: &str) -> Option<String> {
     let (_, objects) = state.calendars.get(slug)?;
+    // Recherche par `UID` : le texte du `text-match`.
+    let uid = body
+        .split_once("<c:text-match")
+        .and_then(|(_, r)| r.split_once('>'))
+        .and_then(|(_, r)| r.split_once("</c:text-match>"))
+        .map(|(u, _)| {
+            u.replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&")
+        });
     let r: String = objects
         .iter()
-        .enumerate()
-        .map(|(i, ics)| {
+        .filter(|(_, (ics, _))| uid.as_ref().is_none_or(|u| ics.contains(&format!("UID:{u}"))))
+        .map(|(file, (ics, v))| {
             response(
-                &format!("/calendars/anne/{slug}/{i}.ics"),
+                &format!("/calendars/anne/{slug}/{file}"),
                 &format!(
-                    "<d:getetag>\"{i}\"</d:getetag><cal:calendar-data><![CDATA[{ics}]]></cal:calendar-data>"
+                    "<d:getetag>\"{v}\"</d:getetag><cal:calendar-data><![CDATA[{ics}]]></cal:calendar-data>"
                 ),
             )
         })
         .collect();
     Some(multistatus(&r))
+}
+
+/// `PUT` ou `DELETE` d'un objet, conditionnel comme chez un vrai serveur.
+fn write(state: &mut State, req: &Request) -> (u16, Vec<(String, String)>, String) {
+    let Some((slug, file)) = req
+        .path
+        .trim_start_matches("/calendars/anne/")
+        .split_once('/')
+        .map(|(s, f)| (s.to_string(), f.to_string()))
+    else {
+        return (404, vec![], String::new());
+    };
+    let Some((_, objects)) = state.calendars.get_mut(&slug) else {
+        return (404, vec![], String::new());
+    };
+    let current = objects.get(&file).map(|(_, v)| format!("\"{v}\""));
+    let if_match = header(req, "if-match");
+    let if_none = header(req, "if-none-match");
+    let refused = match (&current, if_match, if_none) {
+        (Some(_), _, Some("*")) => true,
+        (Some(c), Some(m), _) => c != m,
+        (None, Some(_), _) => true,
+        _ => false,
+    };
+    if refused {
+        return (412, vec![], String::new());
+    }
+    if req.method == "DELETE" {
+        return match objects.remove(&file) {
+            Some(_) => (204, vec![], String::new()),
+            None => (404, vec![], String::new()),
+        };
+    }
+    let version = objects.get(&file).map_or(1, |(_, v)| v + 1);
+    let created = current.is_none();
+    objects.insert(file, (req.body.clone(), version));
+    (
+        if created { 201 } else { 204 },
+        vec![("ETag".to_string(), format!("\"{version}\""))],
+        String::new(),
+    )
 }
 
 /// `(statut, en-têtes, corps)` d'une requête.
@@ -271,11 +353,12 @@ fn answer(state: &mut State, req: &Request) -> (u16, Vec<(String, String)>, Stri
             let slug = path
                 .trim_start_matches("/calendars/anne/")
                 .trim_end_matches('/');
-            match report(state, slug) {
+            match report(state, slug, &req.body) {
                 Some(body) => xml(body),
                 None => (404, vec![], String::new()),
             }
         }
+        ("PUT" | "DELETE", _) => write(state, req),
         _ => (404, vec![], String::new()),
     }
 }
@@ -295,7 +378,10 @@ async fn handle(mut sock: tokio::net::TcpStream, state: Arc<Mutex<State>>) {
         answer(&mut st, &req)
     };
     let reason = match status {
+        201 => "Created",
+        204 => "No Content",
         207 => "Multi-Status",
+        412 => "Precondition Failed",
         301 => "Moved Permanently",
         401 => "Unauthorized",
         404 => "Not Found",

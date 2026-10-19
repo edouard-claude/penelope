@@ -12,6 +12,26 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.73
+
+**Agenda : créer, modifier et supprimer des événements en CalDAV (#403).**
+
+- `penelope-agenda-mcp` ajoute trois outils, valables pour tout serveur CalDAV (iCloud,
+  Fastmail, Nextcloud) :
+  - `event_create` : calendrier nommé, titre, début, fin facultative, lieu, description ;
+  - `event_update` : par `uid`, un début seul garde la durée ;
+  - `event_delete` : une série récurrente est supprimée en entier, et le résultat le dit.
+- Création et modification sont annoncées `write`, la suppression `destructive` : la
+  politique de Pénélope les soumet à approbation, comme tout outil qui écrit.
+- Écriture conditionnelle (`If-None-Match: *`, puis `If-Match` sur l'`ETag` lu) : un
+  événement changé ailleurs entre-temps n'est jamais écrasé (HTTP 412, message lisible).
+- Heures écrites en UTC. Les lignes sont pliées à 75 octets et les textes échappés.
+- Une modification ne touche jamais une alarme imbriquée, et fait avancer `SEQUENCE`.
+- Une série récurrente ne se modifie pas : l'outil refuse et propose de la supprimer puis
+  de la recréer.
+- Le faux serveur CalDAV des tests apprend `PUT` et `DELETE` conditionnels, ainsi que la
+  recherche par `UID`. Google Agenda viendra par OAuth (#405).
+
 ### 1.0.72
 
 **Règles « Toujours » : celles de lecture resservent, les scripts jetables n'en créent
