@@ -12,6 +12,29 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.72
+
+**Règles « Toujours » : celles de lecture resservent, les scripts jetables n'en créent
+plus de mortes (#401).**
+
+- Sur l'instance du propriétaire, 74 des 150 règles `always` n'avaient jamais resservi.
+- Une règle de pouvoirs **en lecture seule** est élargie au workspace qui contient ses
+  chemins. Avant, elle restait figée sur le sous-dossier du premier appel. La carte affiche
+  cette portée avant le clic (« « Toujours » vaudra sous … »).
+- Une règle qui écrit garde ses chemins exacts. Aucune règle ne s'élargit à la racine, au
+  dossier personnel ni à l'un de ses parents.
+- Un script jetable écrit par le modèle (`python3 tmp/consign-x7Q.py`, nom à suffixe
+  aléatoire) n'a plus de famille. Une règle à son nom ne resservait jamais, et aucune ne
+  peut le couvrir sans risque : la carte dit « pas de règle possible ».
+- Veto déterministe du juge : une ligne qui lance un fichier n'est jamais automatisée,
+  car le juge lit la ligne, pas le script. Sont concernés :
+  - un chemin (`./x`) ;
+  - un interpréteur suivi d'un argument ou de `-m` ;
+  - `npx` et `uv run` ;
+  - les mêmes derrière `timeout`, `nice`, `env` ou dans un `sh -c`.
+
+  Une règle de pouvoirs pouvait jusqu'ici couvrir ces lignes, script changé compris.
+
 ### 1.0.71
 
 **Approbation expirée : une seule reprise par tour (#399) ; `shutdown` lu comme commande,

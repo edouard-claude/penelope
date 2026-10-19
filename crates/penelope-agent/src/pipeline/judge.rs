@@ -137,11 +137,29 @@ fn pure_read(j: &Judgement, reach: &Reach, line: &Line<'_>) -> bool {
         && powers::not_pure_read(line.command).is_none()
 }
 
-/// Règle de pouvoirs proposée au propriétaire, si elle se lit d'un coup d'œil.
-fn grant_of(j: &Judgement, reach: &Reach, command: &str, network: bool) -> Option<PowerGrant> {
+/// Règle de pouvoirs proposée au propriétaire, si elle se lit d'un coup d'œil. Pour une
+/// règle de lecture seule, un chemin dans un workspace est élargi au workspace : figé sur
+/// le sous-dossier du premier appel, la règle ne resservait presque jamais (#401). Une
+/// règle qui écrit garde ses chemins exacts. La carte affiche la portée.
+fn grant_of(j: &Judgement, reach: &Reach, line: &Line<'_>) -> Option<PowerGrant> {
+    let (command, network) = (line.command, line.network);
+    let read_only = j.powers == [Power::Read];
+    let mut paths: Vec<String> = reach
+        .paths
+        .iter()
+        .map(|p| {
+            line.workspaces
+                .iter()
+                .map(|w| w.to_string_lossy().into_owned())
+                .find(|w| read_only && widenable(w) && powers::within(p, w))
+                .unwrap_or_else(|| p.clone())
+        })
+        .collect();
+    paths.sort();
+    paths.dedup();
     let grant = PowerGrant {
         powers: j.powers.clone(),
-        paths: reach.paths.clone(),
+        paths,
         hosts: reach.hosts.clone(),
         judged: None,
     };
@@ -150,6 +168,14 @@ fn grant_of(j: &Judgement, reach: &Reach, command: &str, network: bool) -> Optio
         && (!network || j.powers.contains(&Power::Network))
         && grant.readable())
     .then_some(grant)
+}
+
+/// Un workspace sur lequel élargir une règle : un dossier de projet, jamais la racine, le
+/// dossier personnel ni l'un de ses parents.
+fn widenable(workspace: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let w = workspace.trim_end_matches('/');
+    !w.is_empty() && w != home.trim_end_matches('/') && !powers::within(&home, w)
 }
 
 impl AgentLoop {
@@ -226,21 +252,19 @@ impl AgentLoop {
         };
         let network = args.get("network") == Some(&Value::Bool(true));
         let reach = reach_of(&j, cwd.as_deref());
+        let line = Line {
+            command,
+            network,
+            workspaces: &workspaces,
+        };
         // L'automatisme ne vaut que hors du mode « demander tout » de la session.
         let step = match reach.as_ref() {
             Some(reach) if s.modes.of_session(&spec.session_id).await != ApprovalMode::Ask => {
-                let line = Line {
-                    command,
-                    network,
-                    workspaces: &workspaces,
-                };
                 self.automation(spec, mode, &j, reach, &line).await?
             }
             _ => None,
         };
-        let grant = reach
-            .as_ref()
-            .and_then(|r| grant_of(&j, r, command, network));
+        let grant = reach.as_ref().and_then(|r| grant_of(&j, r, &line));
         let outcome = step.as_ref().map(|a| a.outcome).unwrap_or("carte");
         let powers_list: Vec<&str> = j.powers.iter().map(|p| p.as_str()).collect();
         self.judged_event(

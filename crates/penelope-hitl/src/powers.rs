@@ -330,6 +330,82 @@ pub fn never_automatic(line: &str) -> Option<String> {
     if let (Some(n), Some(i)) = (net, interp) {
         return Some(format!("`{n}` et `{i}` dans la même ligne"));
     }
+    // Un fichier lancé : le juge ne lit que la ligne, pas le script, qui peut changer
+    // d'un appel à l'autre sous le même nom (#401). Repéré par position, pas par
+    // extension : un programme donné par un chemin (`./x`), ou un interpréteur
+    // (`python3.12` compris) suivi d'un argument qui n'est pas une option, ou de `-m`.
+    launched_file(line)
+}
+
+/// Le fichier, ou le code hors ligne, qu'une commande de la ligne lance (#401) : un
+/// programme donné par un chemin (`./x`), un lanceur de paquet (`npx`, `uv run`), ou un
+/// interpréteur (`python3.12` compris) suivi d'un argument qui n'est pas une option, ou
+/// de `-m`. Les enveloppes (`timeout 5`, `nice`, `env A=1`…) sont traversées, et le texte
+/// d'un `sh -c` est relu. Le doute refuse l'automatisme, jamais la carte.
+fn launched_file(line: &str) -> Option<String> {
+    const WRAPPERS: &[&str] = &[
+        "timeout", "nice", "time", "command", "nohup", "stdbuf", "builtin",
+    ];
+    const RUNNERS: &[&str] = &["npx", "bunx", "uvx", "pipx", "dlx"];
+    for head in command_heads(line) {
+        // Enveloppes, leurs options et leurs valeurs (`timeout 5`, `nice -n 10`), et
+        // affectations (`env A=1`).
+        let mut rest = head.as_slice();
+        while let [w, tail @ ..] = rest {
+            let wrapper = WRAPPERS.contains(&w.as_str()) || w == "env";
+            let value = w.starts_with('-') || w.contains('=') || w.parse::<f64>().is_ok();
+            if !(wrapper || value) {
+                break;
+            }
+            rest = tail;
+        }
+        let Some((program, args)) = rest.split_first() else {
+            continue;
+        };
+        if program.contains('/') {
+            return Some(format!(
+                "`{program}` lance un fichier que le jugement ne lit pas"
+            ));
+        }
+        if RUNNERS.contains(&program.as_str())
+            || (matches!(program.as_str(), "uv" | "poetry" | "pnpm" | "yarn" | "bun")
+                && args
+                    .first()
+                    .is_some_and(|a| a == "run" || a == "dlx" || a == "x"))
+        {
+            return Some(format!(
+                "`{program}` lance du code que le jugement ne lit pas"
+            ));
+        }
+        let bare = program.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        if !INTERPRETERS.contains(&program.as_str()) && !INTERPRETERS.contains(&bare) {
+            continue;
+        }
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "-c" | "-e" | "-E" | "--eval" => {
+                    // Le code en ligne se lit ; ce qu'il lance à son tour, non.
+                    if let Some(why) = args.next().and_then(|code| launched_file(code)) {
+                        return Some(why);
+                    }
+                    break;
+                }
+                "-m" => {
+                    return Some(format!(
+                        "`{program} -m` lance un module que le jugement ne lit pas"
+                    ));
+                }
+                "-" => return Some(format!("`{program} -` lit son code sur l'entrée")),
+                a if a.starts_with('-') && !a.contains('/') => continue,
+                a => {
+                    return Some(format!(
+                        "`{program}` lance `{a}`, que le jugement ne lit pas"
+                    ));
+                }
+            }
+        }
+    }
     None
 }
 
