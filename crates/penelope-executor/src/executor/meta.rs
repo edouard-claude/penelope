@@ -222,10 +222,68 @@ impl NativeToolExecutor {
         self.mcp_call(&name, &inner).await
     }
 
+    /// Remplace chaque `{"$file_base64": "<chemin>"}` des arguments par le contenu du
+    /// fichier, encodé en base64 (#310). Le chemin suit les règles des outils `fs_*`
+    /// (workspaces, `vault:`), les lectures interdites (`sandbox.deny_read`) sont refusées,
+    /// et un fichier de plus de 15 Mo aussi.
+    fn with_files(&self, args: &Value) -> ToolResult<Value> {
+        use base64::Engine;
+        const MAX_BYTES: u64 = 15 * 1024 * 1024;
+        match args {
+            Value::Object(o) if o.len() == 1 && o.contains_key("$file_base64") => {
+                let raw = o["$file_base64"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::Invalid("`$file_base64` attend un chemin".into()))?;
+                let path = self.resolve_path(raw)?;
+                let real = std::fs::canonicalize(&path)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                let denied = denied_reads(&self.services)
+                    .into_iter()
+                    .map(|d| std::fs::canonicalize(&d).unwrap_or(d))
+                    .any(|d| real.starts_with(&d));
+                if denied {
+                    return Err(ToolError::Denied(format!(
+                        "`{raw}` est sous une lecture interdite (sandbox.deny_read)"
+                    )));
+                }
+                let meta = std::fs::metadata(&real)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                if !meta.is_file() {
+                    return Err(ToolError::Invalid(format!("`{raw}` n'est pas un fichier")));
+                }
+                if meta.len() > MAX_BYTES {
+                    return Err(ToolError::Invalid(format!(
+                        "`{raw}` pèse {} Mo, 15 Mo au plus par fichier",
+                        meta.len() / (1024 * 1024)
+                    )));
+                }
+                let bytes = std::fs::read(&real)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                Ok(Value::String(
+                    base64::engine::general_purpose::STANDARD.encode(bytes),
+                ))
+            }
+            Value::Object(o) => Ok(Value::Object(
+                o.iter()
+                    .map(|(k, v)| Ok((k.clone(), self.with_files(v)?)))
+                    .collect::<ToolResult<_>>()?,
+            )),
+            Value::Array(a) => Ok(Value::Array(
+                a.iter()
+                    .map(|v| self.with_files(v))
+                    .collect::<ToolResult<_>>()?,
+            )),
+            other => Ok(other.clone()),
+        }
+    }
+
     pub(super) async fn mcp_call(&self, qualified: &str, args: &Value) -> ToolResult<ToolOutcome> {
         let s = &self.services;
         // L'intention est pour la carte, pas pour le serveur (#116).
         let args = &penelope_tools::args::without_intention(args);
+        // Un fichier local passé par référence (#310) : son contenu n'entre qu'ici, après
+        // la carte d'approbation (qui montre le chemin), jamais dans le tour du modèle.
+        let args = &self.with_files(args)?;
         // Refus local, sans aller au serveur : `explain` y joint son schéma (#110).
         s.mcp_tools
             .validate_args(qualified, args)

@@ -466,3 +466,80 @@ async fn an_mcp_image_in_a_workflow_lands_in_the_run_dir() {
     );
     assert!(shown[0].exists());
 }
+
+/// #310 : `{"$file_base64": "<chemin>"}` arrive au serveur MCP en base64, lu au moment de
+/// l'appel ; un chemin hors du workspace, une lecture interdite ou un fichier trop gros
+/// sont refusés sans rien envoyer.
+#[tokio::test]
+async fn a_local_file_reaches_an_mcp_tool_as_base64_without_the_model() {
+    let (_d, mut x) = executor().await;
+    let d = penelope_mcp::protocol::ToolDescriptor::parse(&json!({
+        "name": "import_reference", "description": "Importe une référence",
+        "inputSchema": {"type": "object", "properties": {
+            "name": {"type": "string"}, "content_base64": {"type": "string"}},
+            "required": ["content_base64"]}
+    }))
+    .unwrap();
+    x.services
+        .mcp_tools
+        .replace_server_tools(
+            "kelpo",
+            vec![penelope_mcp::registry::RegisteredTool::from_descriptor(
+                "kelpo", &d,
+            )],
+            "2026-10-19T10:00:00Z",
+        )
+        .await
+        .unwrap();
+    let gw = Arc::new(RecordingGateway::default());
+    x.mcp = Some(gw.clone());
+    let ws = x.workspace();
+    std::fs::write(ws.join("voix.ogg"), b"OggS\x00\x02son").unwrap();
+
+    x.execute(
+        "tool_call",
+        &json!({"name": "mcp__kelpo__import_reference",
+                "args": {"name": "voix", "content_base64": {"$file_base64": "voix.ogg"}}}),
+    )
+    .await
+    .unwrap();
+    let calls = gw.calls.lock().unwrap().clone();
+    assert_eq!(calls[0].1["content_base64"], "T2dnUwACc29u", "{calls:?}");
+    assert_eq!(calls[0].1["name"], "voix");
+
+    for (path, says) in [("../hors.ogg", "hors des workspaces"), ("absent.ogg", "absent.ogg")] {
+        let e = x
+            .execute(
+                "mcp__kelpo__import_reference",
+                &json!({"content_base64": {"$file_base64": path}}),
+            )
+            .await
+            .unwrap_err()
+            .for_model();
+        assert!(e.contains(says), "{path} : {e}");
+    }
+    std::fs::create_dir_all(ws.join("secrets")).unwrap();
+    std::fs::write(ws.join("secrets/cle.txt"), b"x").unwrap();
+    let denied = ws.join("secrets").to_string_lossy().to_string();
+    x.services
+        .config
+        .mutate("test", move |c| {
+            c.sandbox.deny_read = vec![denied];
+            Ok(vec!["sandbox.deny_read".into()])
+        })
+        .unwrap();
+    let e = x
+        .execute(
+            "mcp__kelpo__import_reference",
+            &json!({"content_base64": {"$file_base64": "secrets/cle.txt"}}),
+        )
+        .await
+        .unwrap_err()
+        .for_model();
+    assert!(e.contains("deny_read"), "{e}");
+    assert_eq!(
+        gw.calls.lock().unwrap().len(),
+        1,
+        "rien de plus n'est parti"
+    );
+}
