@@ -109,6 +109,9 @@ struct Page {
     sources: Vec<(String, String, String)>,
     /// Date de création conservée d'une réécriture à l'autre.
     created: String,
+    /// Tout ce que la page porte en plus (lignes et sections écrites à la main) : gardé
+    /// tel quel à chaque réécriture (#412).
+    extra: String,
 }
 
 fn uid() -> String {
@@ -132,26 +135,41 @@ fn read_page(vault: &Path, slug: &str) -> Option<Page> {
         created: fm.string("created"),
         ..Default::default()
     };
-    let mut section = "";
+    // `top` : avant toute section, là où vit la définition ; `sources` ; `other` : une
+    // section écrite à la main, gardée entière (#412).
+    let mut section = "top";
+    let mut extra: Vec<&str> = Vec::new();
     for line in fm.body.lines() {
         if line.starts_with("## ") {
             section = if line.contains("Sources") {
                 "sources"
             } else {
-                ""
+                extra.push(line);
+                "other"
             };
-        } else if let Some((text, id)) = line_uid(line) {
-            if section == "sources" {
-                let slug = penelope_memory::vault::links(&text)
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                page.sources.push((slug, text, id));
-            } else if page.definition.0.is_empty() {
-                page.definition = (text, id);
+            continue;
+        }
+        match section {
+            "sources" => {
+                if let Some((text, id)) = line_uid(line) {
+                    let slug = penelope_memory::vault::links(&text)
+                        .first()
+                        .cloned()
+                        .unwrap_or_default();
+                    page.sources.push((slug, text, id));
+                } else if !line.trim().is_empty() {
+                    extra.push(line);
+                }
             }
+            "top" => match line_uid(line) {
+                Some((text, id)) if page.definition.0.is_empty() => page.definition = (text, id),
+                _ if line.starts_with("# ") || line.trim().is_empty() => {}
+                _ => extra.push(line),
+            },
+            _ => extra.push(line),
         }
     }
+    page.extra = extra.join("\n");
     (!page.nom.is_empty()).then_some(page)
 }
 
@@ -180,6 +198,11 @@ fn render_page(p: &Page) -> String {
     let mut body = format!("\n# {}\n\n", p.nom);
     if !p.definition.0.is_empty() {
         body.push_str(&entry(&p.definition.0, &p.definition.1));
+        body.push('\n');
+    }
+    if !p.extra.trim().is_empty() {
+        body.push('\n');
+        body.push_str(p.extra.trim_end());
         body.push('\n');
     }
     body.push_str("\n## Sources\n\n");
@@ -296,6 +319,9 @@ pub async fn apply(
     undefined: &[String],
 ) -> anyhow::Result<Vec<String>> {
     let s = &*emb.services;
+    // Deux documents reçus ensemble ne lisent plus les pages chacun de leur côté : la
+    // seconde ingestion voit la page que la première vient d'écrire (#412).
+    let _guard = APPLY_LOCK.lock().await;
     let vault = penelope_app::helpers::vault_dir(s);
     std::fs::create_dir_all(vault.join(DIR))?;
     let prov = Provenance {
@@ -324,6 +350,17 @@ pub async fn apply(
         if found.is_none() && !existing.is_empty() {
             found = same_by_meaning(emb, &c.nom, &existing).await;
         }
+        // Une fiche de projet porte déjà ce nom : on la relie, au lieu d'une page
+        // `<nom>-concept` qui doublerait le lien `[[nom]]` (#412).
+        if found.is_none() {
+            let base = penelope_memory::ingest::slugify(&c.nom);
+            if vault.join("projets").join(format!("{base}.md")).is_file() {
+                if !touched.contains(&base) {
+                    touched.push(base);
+                }
+                continue;
+            }
+        }
         let page = match found {
             Some(i) => &mut existing[i],
             None => {
@@ -342,7 +379,10 @@ pub async fn apply(
                 page.alias.push(alias.clone());
             }
         }
-        if page.definition.0.is_empty() && !c.definition.is_empty() {
+        if page.definition.0.is_empty()
+            && !c.definition.is_empty()
+            && !about_the_document(&c.definition)
+        {
             page.definition = (c.definition.clone(), uid());
         }
         if !page.sources.iter().any(|(slug, _, _)| slug == source_slug) {
@@ -372,6 +412,27 @@ pub async fn apply(
     update_to_define(&vault, source_slug, undefined, &existing, &day)?;
     write_index(s, &existing, &day).await?;
     Ok(touched)
+}
+
+/// Un verrou par processus autour de [`apply`] (un seul vault par daemon).
+static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Une « définition » qui parle du document au lieu du terme (« mentionné dans le titre…
+/// sans autre définition ») : écartée, la page attend une vraie définition (#412).
+fn about_the_document(definition: &str) -> bool {
+    let d = definition.to_lowercase();
+    [
+        "mentionné",
+        "mentionnée",
+        "cité dans",
+        "citée dans",
+        "sans définition",
+        "sans autre définition",
+        "le document",
+        "ce document",
+    ]
+    .iter()
+    .any(|m| d.contains(m))
 }
 
 async fn same_by_meaning(emb: &Embedder, nom: &str, pages: &[Page]) -> Option<usize> {
@@ -792,5 +853,46 @@ mod tests {
         }));
         assert_eq!(c[0].alias, vec!["factur x"]);
         assert_eq!(u, vec!["PDP"]);
+    }
+
+    /// #412 : une page enrichie à la main garde son texte et ses sections quand une
+    /// ingestion la réécrit ; seules la définition et les sources sont gérées.
+    #[test]
+    fn a_hand_written_section_survives_a_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(DIR)).unwrap();
+        let raw = "---\ntype: concept\nnom: AP\n---\n\n# AP\n\n- Appel de paiement. ^01AAA\n\nUn paragraphe ajouté à la main.\n\n## Historique\n\n- Créé en 2024, repris en 2026.\n\n## Sources\n\n- [[note-1]] · Note ^01BBB\n";
+        std::fs::write(dir.path().join(DIR).join("ap.md"), raw).unwrap();
+        let mut page = read_page(dir.path(), "ap").unwrap();
+        assert_eq!(page.definition.0, "Appel de paiement.");
+        page.sources
+            .push(("note-2".into(), "[[note-2]] · Autre".into(), "01CCC".into()));
+        let out = render_page(&page);
+        for kept in [
+            "Un paragraphe ajouté à la main.",
+            "## Historique",
+            "Créé en 2024, repris en 2026.",
+            "[[note-1]]",
+            "[[note-2]]",
+        ] {
+            assert!(out.contains(kept), "{kept} perdu :\n{out}");
+        }
+        std::fs::write(dir.path().join(DIR).join("ap.md"), &out).unwrap();
+        assert_eq!(
+            render_page(&read_page(dir.path(), "ap").unwrap()),
+            out,
+            "stable"
+        );
+    }
+
+    /// #412 : une définition qui parle du document n'est pas gardée.
+    #[test]
+    fn a_definition_about_the_document_is_refused() {
+        assert!(about_the_document(
+            "Mentionné dans le titre du document comme un composant, sans autre définition fournie."
+        ));
+        assert!(!about_the_document(
+            "Format de facture électronique hybride PDF et XML."
+        ));
     }
 }

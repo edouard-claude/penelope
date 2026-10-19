@@ -100,8 +100,10 @@ async fn facts(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<F
                                (SELECT 1 FROM mem_entries e WHERE e.slug = l.to_slug)")?,
                 contradictions: n("SELECT COUNT(*) FROM approval_requests WHERE kind = 'memory_proposal'
                                    AND state = 'pending'")?,
+                // Même périmètre que `entries` : sans les passages de sources, sinon
+                // « 5343/3317 vecteurs » alertait sur une base complète (#411).
                 vectors: n("SELECT COUNT(*) FROM mem_vec v JOIN mem_entries e ON e.uid = v.uid
-                            WHERE e.statut != 'retiree'")?,
+                            WHERE e.statut != 'retiree' AND e.file NOT LIKE 'sources/%'")?,
                 ..Default::default()
             })
         })

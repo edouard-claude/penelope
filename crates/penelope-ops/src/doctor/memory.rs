@@ -55,6 +55,43 @@ pub async fn memory_size_check(s: &Services) -> DoctorCheck {
     DoctorCheck::fail(ID, LABEL, detail.join(" ; "), Some(fix.join(" ; ")))
 }
 
+/// #411 : tours partis sans mémoire faute de temps (budget du rappel), sur sept jours.
+pub async fn recall_misses_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "memory.recall";
+    const LABEL: &str = "Rappel mémoire dans son budget";
+    let now = s.clock.now_ms();
+    let mut total = 0u64;
+    for d in 0..7 {
+        let day = chrono::DateTime::from_timestamp_millis(now - d * 86_400_000)
+            .unwrap_or_default()
+            .format("%Y-%m-%d")
+            .to_string();
+        total += s
+            .kv_get(&format!("memory.recall.misses.{day}"))
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+    }
+    if total < 10 {
+        return DoctorCheck::ok(
+            ID,
+            LABEL,
+            format!("{total} tour(s) sans mémoire sur 7 jours"),
+        );
+    }
+    DoctorCheck::fail(
+        ID,
+        LABEL,
+        format!("{total} tours partis sans mémoire sur 7 jours (budget du rappel dépassé)"),
+        Some(
+            "`memory.recall_timeout_ms` relève le budget ; `penelope mem audit` mesure l'index"
+                .into(),
+        ),
+    )
+}
+
 /// #410 : des relectures d'épisode en échec ne laissaient qu'une ligne de journal, et la
 /// mémoire cessait d'apprendre en silence.
 pub async fn memory_review_check(s: &Services) -> DoctorCheck {
@@ -200,7 +237,9 @@ fn dead_zone(ws: &std::path::Path, vault: &std::path::Path) -> Vec<String> {
             }
             let Ok(meta) = e.metadata() else { continue };
             if meta.is_dir() {
-                if depth < MAX_DEPTH && !p.starts_with(vault) {
+                // Un dépôt git imbriqué (un clone du vault) est une copie, pas une zone
+                // morte : la recopier ressusciterait des notes supprimées depuis (#413).
+                if depth < MAX_DEPTH && !p.starts_with(vault) && !p.join(".git").exists() {
                     stack.push((p, depth + 1));
                 }
                 continue;

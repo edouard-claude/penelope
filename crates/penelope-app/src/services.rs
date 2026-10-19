@@ -110,7 +110,7 @@ impl Services {
             });
         let candidates = CandidateStore::new(store.clone(), clock.clone());
         let intents = IntentStore::new(store.clone(), clock.clone());
-        let skills = SkillRegistry::new(store.clone());
+        let skills = SkillRegistry::new(store.clone()).with_plugins(dirs.data().join("plugins"));
         let mcp_tools = ToolRegistry::new(
             store.clone(),
             cfg.mcp.sticky_set_max,
@@ -254,7 +254,8 @@ impl Services {
                 }),
             candidates: CandidateStore::new(store.clone(), clock.clone()),
             intents: IntentStore::new(store.clone(), clock.clone()),
-            skills: SkillRegistry::new(store.clone()),
+            skills: SkillRegistry::new(store.clone())
+                .with_plugins(platform.dirs.data().join("plugins")),
             approvals: ApprovalStore::new(store.clone(), clock.clone()).with_events(events.clone()),
             policies: PolicyEngine::new(store.clone(), clock.clone()),
             channel,

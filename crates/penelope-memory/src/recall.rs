@@ -380,6 +380,9 @@ impl<'a> Recall<'a> {
             }
             Err(_) => {
                 tracing::warn!("rappel : budget de 150 ms dépassé, tour sans mémoire");
+                // Compté par jour pour `doctor` : 118 tours sans mémoire en une semaine
+                // n'apparaissaient que dans le journal (#411).
+                self.index.count_recall_miss().await;
                 Vec::new()
             }
         };

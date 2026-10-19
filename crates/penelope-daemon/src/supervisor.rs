@@ -395,7 +395,11 @@ async fn maintenance_loop(d: Arc<Daemon>) {
 /// d'un Mio, un fichier (image, archive) compte par sa taille et sa date.
 pub(crate) fn skills_fingerprint(s: &penelope_app::services::Services) -> String {
     let mut parts: Vec<String> = Vec::new();
-    for root in [s.platform.dirs.skills(), s.platform.dirs.bundled_skills()] {
+    for root in [
+        s.platform.dirs.skills(),
+        s.platform.dirs.bundled_skills(),
+        s.platform.dirs.data().join("plugins"),
+    ] {
         let mut stack = vec![root];
         while let Some(dir) = stack.pop() {
             let Ok(read) = std::fs::read_dir(&dir) else {

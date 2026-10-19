@@ -268,6 +268,7 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Mémoire : entrées au-delà de la borne, Cœur au-delà de son budget (#145).
     checks.push(memory_size_check(s).await);
+    checks.push(recall_misses_check(s).await);
     checks.push(memory_review_check(s).await);
 
     // Foyer du propriétaire (#143) : là où arrivent les avis sans session.

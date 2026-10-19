@@ -171,9 +171,9 @@ pub struct Memory {
     pub recall_budget_tokens: usize,
     /// Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes.
     pub recall_timeout_ms: u64,
-    /// Pertinence minimale d'une entrée pour être rappelée automatiquement : rang de
-    /// recherche normalisé (1 pour la première d'une liste, 2 pour la première des deux),
-    /// sans la récence ni l'importance, qui ne font qu'ordonner.
+    /// Pertinence minimale d'une entrée pour être rappelée automatiquement, entre 0 et 1 :
+    /// part des termes de la requête retrouvés, ou similarité vectorielle calibrée (#411).
+    /// La récence et l'importance ne font qu'ordonner.
     pub trigger_threshold: f64,
     /// Entrées rappelées automatiquement au plus par tour.
     pub max_injected_per_turn: usize,

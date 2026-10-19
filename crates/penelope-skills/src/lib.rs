@@ -2,11 +2,13 @@
 //! auto-amélioration bornée (§7).
 //!
 //! Emplacements, par ordre de priorité croissante (surcharge par `name`) :
-//! `bundled` < `{data}/skills/` < `<workspace>/.penelope/skills/`.
+//! `bundled` < plugins de `{data}/plugins/` < `{data}/skills/` <
+//! `<workspace>/.penelope/skills/`.
 
 #![forbid(unsafe_code)]
 
 pub mod install;
+pub mod plugins;
 
 use penelope_kernel::frontmatter;
 use penelope_store::{Store, rusqlite::params};
@@ -19,6 +21,8 @@ use std::sync::{Arc, RwLock};
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Bundled,
+    /// Skill ou commande d'un plugin (#393).
+    Plugin,
     User,
     Workspace,
 }
@@ -27,6 +31,7 @@ impl Scope {
     pub fn as_str(&self) -> &'static str {
         match self {
             Scope::Bundled => "bundled",
+            Scope::Plugin => "plugin",
             Scope::User => "user",
             Scope::Workspace => "workspace",
         }
@@ -34,6 +39,7 @@ impl Scope {
     pub fn parse(s: &str) -> Option<Scope> {
         Some(match s {
             "bundled" => Scope::Bundled,
+            "plugin" => Scope::Plugin,
             "user" => Scope::User,
             "workspace" => Scope::Workspace,
             _ => return None,
@@ -43,8 +49,9 @@ impl Scope {
     pub fn priority(&self) -> u8 {
         match self {
             Scope::Bundled => 0,
-            Scope::User => 1,
-            Scope::Workspace => 2,
+            Scope::Plugin => 1,
+            Scope::User => 2,
+            Scope::Workspace => 3,
         }
     }
 }
@@ -193,6 +200,8 @@ pub fn scan_dir(root: &Path, scope: Scope) -> (Vec<Skill>, Vec<SkillError>) {
 pub struct SkillRegistry {
     store: Store,
     state: Arc<RwLock<RegistryState>>,
+    /// `{data}/plugins` : leurs skills et commandes rejoignent le registre (#393).
+    plugins: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -209,7 +218,14 @@ impl SkillRegistry {
         SkillRegistry {
             store,
             state: Arc::new(RwLock::new(RegistryState::default())),
+            plugins: None,
         }
+    }
+
+    /// Le même registre, qui lit aussi les plugins de ce dossier.
+    pub fn with_plugins(mut self, dir: PathBuf) -> Self {
+        self.plugins = Some(dir);
+        self
     }
 
     /// Recharge depuis les trois emplacements, la priorité la plus haute l'emportant.
@@ -222,13 +238,19 @@ impl SkillRegistry {
         let mut merged: BTreeMap<String, Skill> = BTreeMap::new();
         let mut errors = Vec::new();
 
+        let plugins = self.plugins.as_deref();
         for (root, scope) in [
             (bundled, Scope::Bundled),
+            (plugins, Scope::Plugin),
             (Some(user), Scope::User),
             (workspace, Scope::Workspace),
         ] {
             let Some(root) = root else { continue };
-            let (skills, errs) = scan_dir(root, scope);
+            let (skills, errs) = if scope == Scope::Plugin {
+                plugins::skills(root)
+            } else {
+                scan_dir(root, scope)
+            };
             errors.extend(errs);
             for s in skills {
                 match merged.get(&s.name) {

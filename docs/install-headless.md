@@ -459,7 +459,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
 | `memory.recall_budget_tokens` | `1000` | Budget du rappel automatique par tour, en jetons. |
 | `memory.recall_timeout_ms` | `150` | Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes. |
-| `memory.trigger_threshold` | `0.72` | Pertinence minimale d'une entrée pour être rappelée automatiquement : rang de recherche normalisé (1 pour la première d'une liste, 2 pour la première des deux), sans la récence ni l'importance, qui ne font qu'ordonner. |
+| `memory.trigger_threshold` | `0.72` | Pertinence minimale d'une entrée pour être rappelée automatiquement, entre 0 et 1 : part des termes de la requête retrouvés, ou similarité vectorielle calibrée (#411). La récence et l'importance ne font qu'ordonner. |
 | `memory.max_injected_per_turn` | `3` | Entrées rappelées automatiquement au plus par tour. |
 | `memory.half_life_days` | `180.0` | Demi-vie de la récence dans le classement des souvenirs, en jours : un souvenir ancien passe après un récent équivalent, il reste rappelable. |
 | `memory.dedup_cosine` | `0.92` | Similarité cosinus de doublon. Sans effet dans cette version. |
@@ -1952,7 +1952,7 @@ et `/stop` interrompt tout le lot.
 | `skill_propose` | write | Propose une nouvelle skill. (à la demande) |
 | `skill_search` | read | Cherche une skill par mots-clés. (à la demande) |
 | `step_done` | read | Déclare l'étape de workflow terminée. (dans un workflow) |
-| `sub_agent_spawn` | write | Sub-agent à contexte neuf, retour dans ce tour. |
+| `sub_agent_spawn` | write | Sub-agent à contexte neuf. |
 | `time_now` | read | Date et heure courantes dans le fuseau du propriétaire. |
 | `workflow_author` | write | Rédige un workflow (format décrit dans `docs/workflows.md` : lis-le avec `self_docs` avant d'écrire, n'invente aucun type d'étape ni champ). (à la demande) |
 | `workflow_control` | write | Contrôle un run : pause, reprise, annulation, relance d'étape ; `autonomous` (plus aucune approbation pour ce run et ses sous-runs) ou `supervised`, à la demande du propriétaire seulement. (à la demande) |
@@ -2102,6 +2102,27 @@ en lecture ; une erreur nomme l'étape (« identifiants refusés par le serveur 
 planifications, dans `owner.timezone` ; un agenda injoignable est dit en une ligne, sans
 retenir le digest. Le détail des variables, des outils, des récurrences servies et de ce
 qui n'est pas encore là est dans [mcp.md](mcp.md#lagenda-caldav-un-serveur-livré).
+
+### Déposer un plugin ou un sous-agent
+
+Un plugin au format Claude Code se dépose tel quel dans `{data}/plugins/<nom>/` (1.0.77,
+#393). Il contient `.claude-plugin/plugin.json`, `skills/<n>/SKILL.md`, `commands/*.md` et
+`agents/*.md`.
+
+- **Skills :** elles rejoignent le registre sans redémarrage (portée `plugin`). À nom
+  égal, une skill du propriétaire l'emporte sur celle d'un plugin.
+- **Commandes :** chacune devient une skill `<plugin>-<commande>`.
+- **Sous-agents :** ils servent `sub_agent_spawn` par leur nom (`kind: "relecteur"`), en
+  plus des rôles câblés.
+  - Un sous-agent hors plugin se dépose dans `{data}/agents/<nom>.md`.
+  - Frontmatter : `name`, `description`, `model`, `tools`. Les noms d'outils de Claude
+    Code sont traduits (`Read` → `fs_read`, `Bash` → `shell_exec`…) et un nom inconnu est
+    écarté.
+  - Le corps du fichier est sa consigne. Un sous-agent ne lance toujours pas de
+    sous-agent.
+
+Pas encore servis : les hooks et le `.mcp.json` d'un plugin, qui attendent la politique
+du propriétaire, ni les marketplaces.
 
 ### Déposer une skill
 
