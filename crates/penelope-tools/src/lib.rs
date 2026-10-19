@@ -11,6 +11,7 @@ pub mod edit_hooks;
 pub mod error;
 pub mod fs;
 pub mod git;
+pub mod hide;
 pub mod hooks;
 pub mod html;
 pub mod http;

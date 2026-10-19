@@ -282,6 +282,7 @@ deny_read = [
     "{config}",
     "{state}",
 ]
+hide = ["**/id_rsa", "**/id_ed25519", "**/id_ecdsa", "**/.netrc"]
 
 [observability]
 otlp_endpoint = ""

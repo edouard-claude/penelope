@@ -241,3 +241,26 @@ async fn config_set_reports_the_actual_application_time() {
         "au redémarrage"
     );
 }
+
+/// #394 : un fichier masqué (`sandbox.hide`) dans un workspace est refusé à `fs_read`,
+/// le reste du dossier reste lisible.
+#[tokio::test]
+async fn a_hidden_file_in_the_workspace_is_refused() {
+    let (_d, x) = executor().await;
+    let ws = x.workspace();
+    std::fs::create_dir_all(ws.join("api")).unwrap();
+    std::fs::write(ws.join("api/id_ed25519"), "CLE").unwrap();
+    std::fs::write(ws.join("api/main.rs"), "fn main() {}").unwrap();
+    let e = x
+        .execute("fs_read", &json!({"path": "api/id_ed25519"}))
+        .await
+        .unwrap_err()
+        .for_model();
+    assert!(
+        e.contains("sandbox.hide") && e.contains("**/id_ed25519"),
+        "{e}"
+    );
+    x.execute("fs_read", &json!({"path": "api/main.rs"}))
+        .await
+        .unwrap();
+}

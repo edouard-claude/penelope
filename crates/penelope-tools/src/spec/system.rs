@@ -104,7 +104,7 @@ pub(super) fn shell() -> Vec<ToolSpec> {
              npm, pytest, make test) ou une commande en échec à longue sortie rend un résumé et \
              les échecs seulement, la sortie complète en artefact (`artifact_read`) ; \
              `output: \"full\"` rend la sortie brute. Le réseau est coupé sauf `network: true` \
-             (git push/pull/clone, gh, installation de paquets, curl) : l'approbation le dit. \
+             (git push, gh, paquets, curl). `tty: true` : un vrai terminal. \
              Répertoire de travail : `cwd` (dans un workspace), pas de préfixe `cd … &&`. \
              **Une commande par appel** ; plusieurs commandes = plusieurs appels, en \
              parallèle si indépendants. `&&` seulement entre commandes de même nature : \
@@ -121,6 +121,7 @@ pub(super) fn shell() -> Vec<ToolSpec> {
                 "output": {"type":"string","enum":["digest","full"]},
                 "network": {"type":"boolean"},
                 "background": {"type":"boolean"},
+                "tty": {"type":"boolean"},
                 "secrets": {"type":"object"}
             }),
             &["command"],

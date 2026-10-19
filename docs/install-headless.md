@@ -540,6 +540,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `sandbox.workspaces` | `[]` | Répertoires de travail des outils de fichiers et du shell, en plus du défaut. |
 | `sandbox.shell_network` | `false` | Réseau pour **toutes** les commandes de `shell_exec` et des étapes `shell`. Faux : une commande n'a le réseau que si son appel le demande (`network: true`, carte d'approbation qui le dit, « Toujours » borné à la famille de commandes) ou si son étape de workflow le déclare. Une configuration qui porte `true` le garde. |
 | `sandbox.deny_read` | `["~/.ssh","~/.aws","~/.gnupg","~/.config/gh","~/.netrc","~/.kube","~/.docker/config.json","{data}/penelope.db","{data}/secrets.enc","{data}/mcp.d","{data}/hooks.d","{config}","{state}"]` | Chemins dont la lecture est refusée aux commandes sous bac à sable, même quand le profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration. `{data}`, `{config}`, `{state}` et `~` sont développés. |
+| `sandbox.hide` | `["**/id_rsa","**/id_ed25519","**/id_ecdsa","**/.netrc"]` | Motifs masqués dans les dossiers accordés (workspaces, vault) : `**/.env`, `.git/config`, `secrets/`. Refusés aux outils de fichiers et, sous macOS, aux commandes du shell, comme `deny_read` (#394). |
 
 **[observability]**
 

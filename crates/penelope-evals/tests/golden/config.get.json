@@ -246,6 +246,9 @@
         "shell_network": "bool",
         "deny_read": [
           "string"
+        ],
+        "hide": [
+          "string"
         ]
       },
       "observability": {

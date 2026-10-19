@@ -12,6 +12,23 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.78
+
+**Exécution : des chemins masqués au processus et un vrai terminal à la demande (#394,
+#397, épopée #398).**
+
+- **Chemins masqués (#394, lot 1).** `sandbox.hide` liste des motifs que ni les outils
+  de fichiers ni `shell_exec` ne lisent : le profil du bac à sable refuse lecture,
+  écriture et lien physique sur ces chemins, sous leur forme écrite comme sous leur forme
+  réelle (un lien symbolique ou un `/private` de macOS ne les contourne pas). Par défaut :
+  les clés privées SSH et `.netrc` ; `.env` n'y est pas, y écrire un secret collé reste un
+  usage du propriétaire (#352), `sandbox.hide` l'ajoute. Pas encore : le proxy d'egress
+  qui porte les jetons.
+- **Terminal (#397, lot 2).** `shell_exec` prend `tty: true` : la commande tourne dans un
+  pseudo-terminal (`script`), `TERM` posé ; la sortie revient sans séquences ANSI, une
+  ligne réécrite par `\r` réduite à son dernier état. Un programme qui exige un terminal
+  marche enfin. Pas encore : le terminal partagé avec le propriétaire.
+
 ### 1.0.77
 
 **Mémoire : un rappel qui mesure la pertinence, des concepts qui ne se dédoublent plus,

@@ -230,12 +230,17 @@ impl NativeToolExecutor {
                     .min(std::time::Duration::from_secs(1800));
                 // Réseau accordé par appel (#106) : la carte d'approbation l'a dit.
                 let network = cfg.sandbox.shell_network || b_arg(args, "network").unwrap_or(false);
-                let profile = penelope_tools::shell::profile_with_denied_reads(
+                let mut profile = penelope_tools::shell::profile_with_denied_reads(
                     &cfg.sandbox.default_profile,
                     &cwd,
                     network,
                     &denied_reads(s),
                 );
+                // Motifs masqués (#394) sous les workspaces et le vault : Seatbelt les
+                // refuse à la commande comme `deny_read`.
+                let mut roots = self.workspaces();
+                roots.push(penelope_app::helpers::vault_dir(s));
+                profile.hide = penelope_tools::hide::regexes(&roots, &cfg.sandbox.hide);
                 let shell = shell_override(&cfg.tools.shell);
                 // Secrets collés demandés par l'appel (#352) : lus au magasin, caviardés,
                 // passés en variables ; la commande n'en écrit que le nom.
@@ -266,9 +271,19 @@ impl NativeToolExecutor {
                     .map_err(|e| ToolError::Other(e.to_string()))??
                 };
                 let masked: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
+                // Un vrai terminal sur demande (#397) ; la politique et la carte ont lu la
+                // commande telle quelle, l'enveloppe ne change rien à ce qu'elle fait.
+                let tty = b_arg(args, "tty").unwrap_or(false);
+                let mut env = env;
+                let run = if tty {
+                    env.push(("TERM".into(), "xterm-256color".into()));
+                    penelope_tools::shell::with_tty(&command)
+                } else {
+                    command.clone()
+                };
                 let mut out = penelope_tools::shell::exec(
                     &s.platform.processes,
-                    &command,
+                    &run,
                     penelope_tools::shell::ExecOptions {
                         profile: Some(&profile),
                         cwd: Some(&cwd),
@@ -280,6 +295,10 @@ impl NativeToolExecutor {
                     },
                 )
                 .await?;
+                if tty {
+                    out.stdout = penelope_tools::shell::strip_ansi(&out.stdout);
+                    out.stderr = penelope_tools::shell::strip_ansi(&out.stderr);
+                }
                 // Une valeur injectée ne revient jamais au modèle, même affichée par la
                 // commande (#352).
                 for v in &masked {
