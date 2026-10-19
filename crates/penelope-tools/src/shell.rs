@@ -576,6 +576,10 @@ where
             }
         }
     }
+    // Un fichier tokio écrit en tâche de fond : sans `flush`, la fin se perd à la fermeture.
+    if let Some(f) = tee.as_mut() {
+        let _ = f.flush().await;
+    }
     out
 }
 
