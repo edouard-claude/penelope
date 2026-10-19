@@ -12,6 +12,59 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.77
+
+**Mémoire : un rappel qui mesure la pertinence, des concepts qui ne se dédoublent plus,
+un lint qui ne se nourrit plus de ses rapports (#411, #412, #413). Épopée #398 : premiers
+lots des sous-agents, des worktrees et des plugins (#396, #397, #393).**
+
+- **Rappel (#411).**
+  - Le seuil du rappel automatique comparait un rang : les 24 premiers voisins passaient
+    quelle que soit la requête, et l'escalade en voie 2 ne venait jamais. La pertinence
+    est maintenant absolue : la part des termes de la requête retrouvés, ou la similarité
+    vectorielle calibrée (sous 0,25 rien, au-delà de 0,60 tout). Le RRF ne fait plus
+    qu'ordonner.
+  - `fts_query` garde les nombres et les sigles (« 14 », « IA »), écarte une liste de mots
+    vides et cherche la racine d'un mot long (« déployer » trouve « déploiement »).
+  - Une source ou une note du journal passe derrière un fait consolidé à pertinence égale.
+  - L'audit compte les vecteurs au même périmètre que les entrées.
+  - Les tours partis sans mémoire (budget dépassé) sont comptés : nouveau contrôle
+    `memory.recall` dans `doctor`.
+  - Pas encore : la CLI `mem search` par le chemin vectoriel, la purge des vecteurs
+    retirés, la lecture des signaux en une requête.
+- **Concepts (#412).**
+  - Un verrou autour de l'ingestion : deux documents reçus ensemble ne créent plus deux
+    pages.
+  - Un nom déjà porté par une fiche `projets/` est relié au lieu de donner une page
+    `-concept`.
+  - Une « définition » qui parle du document est écartée.
+  - Une page enrichie à la main garde ses lignes et ses sections.
+  - Pas encore : la passe de nuit qui définit les pages vides, la commande de fusion.
+- **Graphe du vault (#413).**
+  - Le lint ne relit plus `log.md` ni `DREAMS.md` et cite ses cibles sans crochets : les
+    liens morts ne montent plus d'une nuit à l'autre.
+  - La ligne des rejets de `DREAMS.md` est plafonnée.
+  - Les `[[…]]` d'un document importé restent du texte dans sa fiche.
+  - Les fiches projets entrent dans la recherche d'orphelines.
+  - `doctor` ne propose plus de recopier un clone git du vault laissé dans le workspace.
+  - Pas encore : la réécriture des liens à la suppression, le renommage des originaux
+    `.md`, l'index des projets, la rotation de `DREAMS.md`.
+- **Sous-agents (#396, lot 1).**
+  - La note d'un sous-agent remise au parent cite ses 400 premiers caractères comme
+    donnée, avec le total et la suite par `job_status`.
+  - Le parent n'est réveillé que si aucun tour n'est en cours ou en file et qu'aucune
+    carte n'attend, et au plus dix fois de suite sans message du propriétaire.
+    `self_status` le dit (`wakes_since_owner`).
+- **Missions (#397, lot 1).** `--worktree` ouvre un worktree git dans le dépôt
+  (`.penelope/worktrees/<mission>`, branche `penelope/mission-…`), vérifié dans les
+  workspaces avant et après sa création. Il est retiré à la fin s'il est propre ; la
+  branche reste pour la PR.
+- **Plugins (#393, lot 1).**
+  - Un plugin au format Claude Code déposé dans `{data}/plugins/<nom>` apporte ses skills
+    et ses commandes (skills `<plugin>-<commande>`), relues à chaud.
+  - Ses `agents/*.md`, comme ceux de `{data}/agents`, servent `sub_agent_spawn` par leur
+    nom, avec les outils de Claude Code traduits.
+
 ### 1.0.75
 
 **Licence : MIT seule, fichier `LICENSE` à la racine (#326).**

@@ -2105,7 +2105,7 @@ qui n'est pas encore là est dans [mcp.md](mcp.md#lagenda-caldav-un-serveur-livr
 
 ### Déposer un plugin ou un sous-agent
 
-Un plugin au format Claude Code se dépose tel quel dans `{data}/plugins/<nom>/` (1.0.79,
+Un plugin au format Claude Code se dépose tel quel dans `{data}/plugins/<nom>/` (1.0.77,
 #393). Il contient `.claude-plugin/plugin.json`, `skills/<n>/SKILL.md`, `commands/*.md` et
 `agents/*.md`.
 
