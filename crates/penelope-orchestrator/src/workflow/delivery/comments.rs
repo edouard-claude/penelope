@@ -1,6 +1,7 @@
 //! Les commentaires de la PR d'un run pendant la livraison (#396, point 3).
 //!
-//! Lus à chaque lecture de la CI : un commentaire n'est vu qu'une fois (ids en kv), un
+//! Lus à chaque lecture de la CI, si la section `[review]` nomme des auteurs (sinon rien
+//! n'est lu) : un commentaire n'est vu qu'une fois (ids en kv), un
 //! auteur hors de la section `[review]` est ignoré et journalisé, un seul run lit une PR
 //! donnée. Une demande de changements d'un auteur autorisé rend `changes_requested` :
 //! la reprise du code, sa revue, puis la même PR ; au-delà de `MAX_REWORKS`, le run
@@ -30,6 +31,10 @@ pub(super) async fn review_gate(
     let Some(number) = state["pr"]["number"].as_u64() else {
         return Ok(None);
     };
+    // Sans section `[review]`, aucun auteur ne compte : rien à lire sur le forgeur.
+    if p.cfg.review.roles.is_empty() && p.cfg.review.logins.is_empty() {
+        return Ok(None);
+    }
     // Un seul run lit une PR : le premier qui la sonde.
     let owner_key = format!(
         "wf.delivery.owner.{}.{}.{number}",

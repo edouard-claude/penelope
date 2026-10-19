@@ -526,6 +526,7 @@ pub async fn tool(
             if !job.state.is_terminal()
                 && let Some(screen) =
                     live::screen(&s.platform.dirs.state(), &id, live::SCREEN_LINES)
+                && !screen.trim().is_empty()
             {
                 v["screen"] = json!(screen);
             }
