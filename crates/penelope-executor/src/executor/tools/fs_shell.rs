@@ -271,9 +271,19 @@ impl NativeToolExecutor {
                     .map_err(|e| ToolError::Other(e.to_string()))??
                 };
                 let masked: Vec<String> = env.iter().map(|(_, v)| v.clone()).collect();
+                // Un vrai terminal sur demande (#397) ; la politique et la carte ont lu la
+                // commande telle quelle, l'enveloppe ne change rien à ce qu'elle fait.
+                let tty = b_arg(args, "tty").unwrap_or(false);
+                let mut env = env;
+                let run = if tty {
+                    env.push(("TERM".into(), "xterm-256color".into()));
+                    penelope_tools::shell::with_tty(&command)
+                } else {
+                    command.clone()
+                };
                 let mut out = penelope_tools::shell::exec(
                     &s.platform.processes,
-                    &command,
+                    &run,
                     penelope_tools::shell::ExecOptions {
                         profile: Some(&profile),
                         cwd: Some(&cwd),
@@ -285,6 +295,10 @@ impl NativeToolExecutor {
                     },
                 )
                 .await?;
+                if tty {
+                    out.stdout = penelope_tools::shell::strip_ansi(&out.stdout);
+                    out.stderr = penelope_tools::shell::strip_ansi(&out.stderr);
+                }
                 // Une valeur injectée ne revient jamais au modèle, même affichée par la
                 // commande (#352).
                 for v in &masked {

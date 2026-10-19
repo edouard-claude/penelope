@@ -549,3 +549,35 @@ async fn exit_code_and_streams_are_reported() {
     assert!(out.stderr.contains("souci"));
     assert_eq!(out.to_json()["success"], false);
 }
+
+/// #397 : la sortie d'un terminal arrive nettoyée : couleurs et curseur ôtés, et d'une
+/// barre de progression réécrite par `\r` seul son dernier état.
+#[test]
+fn terminal_output_is_cleaned_for_the_model() {
+    let raw = "\x1b[32mOK\x1b[0m compilé\r\nprogression 10%\rprogression 50%\rprogression 100%\n\x1b]0;titre\x07fin";
+    assert_eq!(strip_ansi(raw), "OK compilé\nprogression 100%\nfin");
+}
+
+/// #397 : `tty: true` lance la commande dans un vrai terminal ; une apostrophe dans la
+/// commande ne casse pas l'enveloppe.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_command_runs_in_a_real_terminal_on_demand() {
+    if penelope_platform::which("script").is_none() {
+        eprintln!("script absent : test ignoré");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let host = penelope_platform::UnixProcessHost::new(dir.path().join("pids"));
+    let opts = || ExecOptions {
+        timeout: std::time::Duration::from_secs(20),
+        ..Default::default()
+    };
+    let plain = exec(&host, "test -t 1 && echo terminal || echo tube", opts())
+        .await
+        .unwrap();
+    assert_eq!(plain.stdout.trim(), "tube");
+    let wrapped = with_tty("test -t 1 && echo terminal || echo 'pas d''apostrophe'");
+    let tty = exec(&host, &wrapped, opts()).await.unwrap();
+    assert_eq!(strip_ansi(&tty.stdout).trim(), "terminal", "{tty:?}");
+}

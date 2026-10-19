@@ -611,6 +611,48 @@ pub fn profile_with_denied_reads(
     p
 }
 
+/// Une commande lancée dans un vrai terminal (#397) : `script` alloue un pseudo-terminal,
+/// sans code natif. Pour un programme qui exige un TTY (`ssh` avec askpass, une barre de
+/// progression, un outil qui ne colore qu'en terminal).
+pub fn with_tty(command: &str) -> String {
+    let quoted = format!("'{}'", command.replace('\'', "'\\''"));
+    if cfg!(target_os = "macos") {
+        format!("script -q /dev/null /bin/sh -c {quoted}")
+    } else {
+        format!("script -qec {quoted} /dev/null")
+    }
+}
+
+/// Une sortie de terminal lisible par le modèle : séquences ANSI ôtées, et d'une ligne
+/// réécrite par `\r` (barre de progression), seul son dernier état gardé.
+pub fn strip_ansi(text: &str) -> String {
+    static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = ANSI.get_or_init(|| {
+        regex::Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
+            .expect("motif ANSI")
+    });
+    let clean = re.replace_all(text, "");
+    clean
+        .split('\n')
+        .map(|line| {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line.rsplit('\r').next().unwrap_or(line);
+            // Un retour arrière efface le caractère précédent (le `^D` que le terminal
+            // renvoie à la fin de l'entrée, une saisie corrigée).
+            let mut out = String::new();
+            for c in line.chars() {
+                if c == '\u{8}' {
+                    out.pop();
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Workspaces par défaut d'une session.
 pub fn default_workspaces(state_dir: &Path, extra: &[String]) -> Vec<PathBuf> {
     let mut v = vec![state_dir.to_path_buf()];
