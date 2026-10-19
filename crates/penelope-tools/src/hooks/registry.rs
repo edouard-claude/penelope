@@ -15,19 +15,47 @@ pub struct Loaded {
     pub invalid: Vec<(String, String)>,
 }
 
-/// Les hooks du propriétaire, relus quand `hooks.d/` change.
-#[derive(Debug)]
+/// La politique du propriétaire sur les hooks des plugins : la liste
+/// `plugins.allowed_hooks`, lue à chaque consultation (#393).
+pub type PluginPolicy = std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// Les hooks du propriétaire, relus quand `hooks.d/` change, et ceux des plugins qu'il
+/// autorise.
 pub struct Registry {
     dir: PathBuf,
+    plugins: Option<(PathBuf, PluginPolicy)>,
     state: Mutex<Loaded>,
+}
+
+impl std::fmt::Debug for Registry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registry")
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `<plugin>/<élément>` ou `<plugin>/*` dans la liste ?
+pub fn allowed(list: &[String], plugin: &str, item: &str) -> bool {
+    list.iter().any(|a| {
+        a.split_once('/')
+            .is_some_and(|(p, x)| p == plugin && (x == item || x == "*"))
+    })
 }
 
 impl Registry {
     pub fn new(dir: PathBuf) -> Self {
         Registry {
             dir,
+            plugins: None,
             state: Mutex::new(Loaded::default()),
         }
+    }
+
+    /// Avec les hooks des plugins de `plugins_dir`, sous `policy`.
+    pub fn with_plugins(mut self, plugins_dir: PathBuf, policy: PluginPolicy) -> Self {
+        self.plugins = Some((plugins_dir, policy));
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -36,10 +64,26 @@ impl Registry {
 
     /// Les hooks à jour : le dossier est relu seulement si son empreinte a changé.
     pub fn current(&self) -> Loaded {
-        let fp = fingerprint(&self.dir);
+        let mut fp = fingerprint(&self.dir);
+        let policy = self.plugins.as_ref().map(|(d, p)| (d, p()));
+        if let Some((dir, list)) = &policy {
+            fp.push_str(&format!("|{}|{}", plugin_fingerprint(dir), list.join(",")));
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.fingerprint != fp || fp.is_empty() && !state.hooks.is_empty() {
-            let (hooks, invalid) = load_dir(&self.dir);
+            let (mut hooks, mut invalid) = load_dir(&self.dir);
+            if let Some((dir, list)) = &policy {
+                let (more, refused) = super::plugins::load(dir, &|p, e| allowed(list, p, e));
+                // Un hook du propriétaire garde son nom : celui d'un plugin cède.
+                for h in more {
+                    if hooks.iter().any(|o| o.name == h.name) {
+                        invalid.push((h.name, "nom déjà pris dans hooks.d".into()));
+                    } else {
+                        hooks.push(h);
+                    }
+                }
+                invalid.extend(refused);
+            }
             *state = Loaded {
                 fingerprint: fp,
                 hooks,
@@ -53,6 +97,29 @@ impl Registry {
     pub fn get(&self, name: &str) -> Option<Hook> {
         self.current().hooks.into_iter().find(|h| h.name == name)
     }
+}
+
+/// Empreinte des `hooks/hooks.json` des plugins.
+fn plugin_fingerprint(plugins_dir: &Path) -> String {
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let f = e.path().join("hooks").join("hooks.json");
+            let m = std::fs::metadata(&f).ok()?;
+            let ms = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis();
+            Some(format!("{}:{ms}:{}", f.display(), m.len()))
+        })
+        .collect();
+    parts.sort();
+    parts.join("|")
 }
 
 /// `nom:date_ms:taille` des `*.toml`, triés.

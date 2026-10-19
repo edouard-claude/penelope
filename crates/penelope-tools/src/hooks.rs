@@ -18,9 +18,10 @@
 //! `sh -c <ligne rendue>` par [`Hook::mission`] ; un hook déclaré n'a pas cette porte.
 
 mod admin;
+pub mod plugins;
 mod registry;
 pub use admin::{EDITABLE, edit};
-pub use registry::{Loaded, Registry, load_dir, parse, validate};
+pub use registry::{Loaded, PluginPolicy, Registry, allowed, load_dir, parse, validate};
 
 use crate::edit_hooks::safe_path;
 use std::collections::BTreeMap;

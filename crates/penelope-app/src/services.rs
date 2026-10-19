@@ -145,9 +145,7 @@ impl Services {
         let runs = RunStore::new(store.clone(), clock.clone());
         let schedules = ScheduleStore::new(store.clone(), clock.clone(), &cfg.owner.timezone);
 
-        let hooks = Arc::new(penelope_tools::hooks::Registry::new(
-            platform.dirs.hooks_d(),
-        ));
+        let hooks = Arc::new(hooks_registry(&platform, &config));
         Ok(Services {
             platform,
             store,
@@ -228,9 +226,7 @@ impl Services {
         let channel = crate::channel::Channel::default();
         let known = workflow_known(&cfg, &mcp_tools, &channel).await;
 
-        let hooks = Arc::new(penelope_tools::hooks::Registry::new(
-            platform.dirs.hooks_d(),
-        ));
+        let hooks = Arc::new(hooks_registry(&platform, &config));
         Ok(Services {
             events: events.clone(),
             effects: EffectLedger::new(store.clone(), clock.clone()),
@@ -416,6 +412,18 @@ pub const SUBSYSTEMS: &[&str] = &[
 ];
 
 /// Seuils d'une entrée contestée, relus à chaque lecture de l'index (issue #230).
+/// `hooks.d/`, et les hooks des plugins sous `plugins.allowed_hooks` (#393).
+fn hooks_registry(
+    platform: &Platform,
+    config: &Arc<ConfigStore>,
+) -> penelope_tools::hooks::Registry {
+    let config = config.clone();
+    penelope_tools::hooks::Registry::new(platform.dirs.hooks_d()).with_plugins(
+        platform.dirs.data().join("plugins"),
+        Arc::new(move || config.config().plugins.allowed_hooks.clone()),
+    )
+}
+
 fn contested_thresholds(config: &ConfigStore) -> (f64, u32) {
     let p = &config.config().memory.promotion;
     (p.contested_confidence, p.contested_min_observations)

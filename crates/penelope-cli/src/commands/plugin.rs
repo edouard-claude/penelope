@@ -50,12 +50,13 @@ pub(super) fn run(cli: &Cli, cmd: &PluginCmd) -> CliResult<()> {
     let count = |v: &serde_json::Value| v.as_array().map(Vec::len).unwrap_or(0);
     for p in &picked {
         println!(
-            "{:<24} {} skill(s), {} agent(s), {} serveur(s) MCP, {} refusé(s)",
+            "{:<24} {} skill(s), {} agent(s), {} serveur(s) MCP, {} hook(s), {} refusé(s)",
             p["name"].as_str().unwrap_or_default(),
             count(&p["skills"]),
             count(&p["agents"]),
             count(&p["mcp_servers"]),
-            count(&p["mcp_refused"]),
+            count(&p["hooks"]),
+            count(&p["mcp_refused"]) + count(&p["hooks_refused"]),
         );
     }
     Ok(())
