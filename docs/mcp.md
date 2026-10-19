@@ -493,6 +493,19 @@ réclame un `client_secret`), `is_mcp_enabled` (sinon `HTTP 400 — App is not e
 Slack MCP server access`), et le bot user (sinon « doesn't have a bot user to install »).
 Si l'espace de travail restreint les installations, un administrateur doit approuver l'app.
 
+**Sélecteur d'espace de travail (1.0.78, #378).** Slack annonce `/oauth/v2_user/authorize`.
+Ce point d'entrée passe par un sélecteur d'espace de travail qui reconstruit l'URL sans
+`code_challenge_method` ni `state`, et sans les portées : « code_challenge and
+code_challenge_method must be provided together ». Deux réglages génériques ouvrent à la
+place le parcours standard, avec les portées utilisateur dans `user_scope` :
+
+```bash
+penelope mcp edit slack oauth_authorize_endpoint https://slack.com/oauth/v2/authorize
+penelope mcp edit slack oauth_scope_param user_scope
+```
+
+Un jeton rendu sous `authed_user` (réponse de `oauth.v2.access`) est lu là.
+
 ## Supervision
 
 - Démarrage paresseux par défaut, extinction après `idle_timeout`.

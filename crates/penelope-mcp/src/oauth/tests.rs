@@ -271,3 +271,17 @@ fn cimd_document_is_self_describing() {
     assert_eq!(d["client_id"], "https://penelope.example/cimd.json");
     assert_eq!(d["token_endpoint_auth_method"], "none");
 }
+
+/// #378 : `oauth.v2.access` de Slack range le jeton utilisateur sous `authed_user`.
+#[test]
+fn a_user_token_under_authed_user_is_read() {
+    let v = serde_json::json!({
+        "ok": true, "team": {"id": "T1"},
+        "authed_user": {"id": "U1", "access_token": "xoxp-1", "refresh_token": "xoxe-1",
+                        "expires_in": 43200, "token_type": "user", "scope": "chat:write"}
+    });
+    let t = Tokens::parse(&v, 1_000).unwrap();
+    assert_eq!(t.access_token, "xoxp-1");
+    assert_eq!(t.refresh_token.as_deref(), Some("xoxe-1"));
+    assert_eq!(t.expires_at_ms, 1_000 + 43_200_000);
+}
