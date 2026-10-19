@@ -645,7 +645,10 @@ impl ToolRegistry {
                             "type":"object",
                             "additionalProperties":true,
                             "description":"arguments de l'outil visé, selon son schéma \
-                                           (`tool_describe`) : par exemple {\"issue_id\": 7653}"
+                                           (`tool_describe`) : par exemple {\"issue_id\": 7653}. \
+                                           Un champ qui attend un fichier en base64 : \
+                                           {\"$file_base64\": \"vault:attachments/x.jpg\"}, \
+                                           rempli à l'appel sans passer par toi"
                         },
                         "args_json":{
                             "type":"string",

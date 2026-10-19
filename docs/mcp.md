@@ -295,6 +295,26 @@ retient la date : un refus n'est pas redemandé toutes les heures), et rien n'es
 dans `mcp.d` sans lui. Voir
 [La carte de l'environnement](install-headless.md#la-carte-de-lenvironnement).
 
+## Fichiers locaux en base64
+
+Un outil qui attend un fichier encodé (`content_base64`) le reçoit sans que son contenu
+passe par le modèle (1.0.77, #310). Dans les arguments, la valeur est remplacée par une
+référence :
+
+```json
+{"name": "voix", "content_base64": {"$file_base64": "vault:attachments/voix.ogg"}}
+```
+
+- Pénélope lit le fichier au moment de l'appel, après la carte d'approbation. La carte
+  montre le chemin, pas le contenu.
+- Un appel qui joint un fichier demande **toujours** une carte, même vers un outil en
+  lecture ou couvert par une règle « Toujours » : le fichier sort de la machine.
+- Le chemin suit les règles des outils `fs_*` : workspaces et `vault:`.
+- Une lecture interdite (`sandbox.deny_read`) est refusée, comme un fichier de plus de
+  15 Mo.
+- Le mécanisme vaut dans le chat comme dans un sous-agent, puisque les deux passent par
+  `tool_call`.
+
 ## Risque et approbation
 
 Les annotations d'outil (`readOnlyHint`, `destructiveHint`, `openWorldHint`) sont des
