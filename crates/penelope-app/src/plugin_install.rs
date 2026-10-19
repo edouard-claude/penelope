@@ -64,21 +64,30 @@ pub fn add(data: &Path, source: &str, name: Option<&str>) -> Result<PathBuf, Str
         if source.starts_with('-') {
             return Err("source refusée".into());
         }
+        // Cloné à part, puis recopié par la même règle qu'un dossier : un lien symbolique
+        // du dépôt (vers ~/.ssh, par exemple) n'arrive jamais dans le plugin.
         let git = penelope_platform::which("git").ok_or("`git` est absent du PATH")?;
+        let tmp = data.join("plugins").join(format!(".clone-{name}"));
+        let _ = std::fs::remove_dir_all(&tmp);
         let out = std::process::Command::new(git)
             .args(["clone", "--depth", "1", "--", source])
-            .arg(&dest)
+            .arg(&tmp)
             .env("GIT_TERMINAL_PROMPT", "0")
             .output()
-            .map_err(|e| e.to_string())?;
-        if !out.status.success() {
-            let _ = std::fs::remove_dir_all(&dest);
-            return Err(format!(
+            .map_err(|e| e.to_string());
+        let copied = match out {
+            Ok(o) if o.status.success() => copy_dir(&tmp, &dest).map_err(|e| e.to_string()),
+            Ok(o) => Err(format!(
                 "git clone : {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => Err(e),
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Err(e) = copied {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(e);
         }
-        let _ = std::fs::remove_dir_all(dest.join(".git"));
     } else {
         return Err(format!(
             "source `{source}` : ni dossier, ni dépôt git (https://, git@, .git)"
@@ -133,6 +142,21 @@ mod tests {
         remove(data.path(), "revue-pr").unwrap();
         assert!(!dest.exists());
         assert!(remove(data.path(), "..").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_never_enters_the_plugin() {
+        let src = tempfile::tempdir().unwrap();
+        let root = src.path().join("piege");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(src.path().join("secret"), "S").unwrap();
+        std::os::unix::fs::symlink(src.path().join("secret"), root.join("lien")).unwrap();
+        std::fs::write(root.join("ok.md"), "x").unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let dest = add(data.path(), root.to_str().unwrap(), None).unwrap();
+        assert!(dest.join("ok.md").exists());
+        assert!(std::fs::symlink_metadata(dest.join("lien")).is_err());
     }
 
     #[test]
