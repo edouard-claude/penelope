@@ -55,6 +55,41 @@ pub async fn memory_size_check(s: &Services) -> DoctorCheck {
     DoctorCheck::fail(ID, LABEL, detail.join(" ; "), Some(fix.join(" ; ")))
 }
 
+/// #410 : des relectures d'épisode en échec ne laissaient qu'une ligne de journal, et la
+/// mémoire cessait d'apprendre en silence.
+pub async fn memory_review_check(s: &Services) -> DoctorCheck {
+    const ID: &str = "memory.review";
+    const LABEL: &str = "Relecture des épisodes";
+    let v: Option<serde_json::Value> = s
+        .kv_get(penelope_vault::episodes::FAILURES_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    match v {
+        None => DoctorCheck::ok(
+            ID,
+            LABEL,
+            "aucun échec depuis la dernière relecture réussie",
+        ),
+        Some(v) => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "{} relecture(s) en échec depuis {} : {}",
+                v["count"].as_u64().unwrap_or(0),
+                v["since"].as_str().unwrap_or("?"),
+                v["last_error"].as_str().unwrap_or("?")
+            ),
+            Some(
+                "vérifier le modèle du rôle `memory_review` (`penelope model show`) ; les \
+                 épisodes non relus sont rattrapés par la passe de nuit"
+                    .into(),
+            ),
+        ),
+    }
+}
+
 /// Contenu du vault hors de l'index (issue #15).
 pub async fn vault_index_check(s: &Services) -> DoctorCheck {
     const ID: &str = "vault_index";
