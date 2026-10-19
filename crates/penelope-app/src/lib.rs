@@ -12,6 +12,7 @@ pub mod backup_state;
 pub mod bus;
 pub mod catalog_refresh;
 pub mod channel;
+pub mod child;
 pub mod codex_scope;
 pub mod conversation;
 pub mod credits;
