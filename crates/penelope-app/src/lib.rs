@@ -37,6 +37,7 @@ pub mod model_route;
 pub mod model_watch;
 pub mod notices;
 pub mod outcome;
+pub mod plugin_report;
 pub mod ports;
 pub mod quiet;
 pub mod services;

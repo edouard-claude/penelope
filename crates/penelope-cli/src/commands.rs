@@ -23,6 +23,7 @@ use logs::logs;
 use offline::store_secret;
 use offline::{doctor, eval_local, paths, service, set_secret, validate_config, validate_workflow};
 use penelope_kernel::api::method as m;
+use plugin::PluginCmd;
 use render::*;
 #[cfg(test)]
 use route::parse_scalar;
@@ -59,6 +60,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
             cmd: Some(ApprovalsCmd::Stats { days }),
         } => return approval_stats::run(&cli, *days),
         Command::Dataset(cmd) => return dataset::run(&cli, cmd),
+        Command::Plugin { cmd } => return plugin::run(&cli, cmd),
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -299,6 +301,7 @@ mod interactive;
 mod local;
 mod logs;
 mod offline;
+mod plugin;
 mod purge;
 mod render;
 mod restore;

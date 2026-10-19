@@ -140,6 +140,17 @@ pub fn load(
     (ok, refused)
 }
 
+/// Les noms dérivés des serveurs que déclare le plugin de ce dossier.
+pub fn server_names(root: &Path) -> Vec<String> {
+    let Some(plugin) = plugin_name(root) else {
+        return Vec::new();
+    };
+    declared(root)
+        .into_keys()
+        .map(|server| format!("{plugin}-{server}"))
+        .collect()
+}
+
 /// Empreinte des `.mcp.json` des plugins, pour le rechargement à chaud.
 pub fn fingerprint(plugins_dir: &Path) -> String {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else {

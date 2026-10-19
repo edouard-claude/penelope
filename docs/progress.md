@@ -34,8 +34,10 @@ serveurs MCP des plugins (#395, #396, #393).**
   serveurs `<plugin>-<serveur>`, jamais écrits dans `mcp.d`. Aucun ne démarre sans la
   politique du propriétaire : nouvelle section `[plugins]`, `allowed_mcp_servers =
   ["<plugin>/<serveur>"]` ou `"<plugin>/*"` ; un serveur refusé reste visible avec la
-  raison. Le plugin est nommé par son dossier. Pas encore : hooks de plugin, CLI
-  `penelope plugin`, marketplaces.
+  raison. Le plugin est nommé par son dossier. `penelope plugin list` et `show`
+  disent, sans daemon, ce que chaque plugin apporte : skills, sous-agents, serveurs
+  autorisés et refusés. Pas encore : hooks de plugin, installation depuis une
+  marketplace.
 
 ### 1.0.78
 

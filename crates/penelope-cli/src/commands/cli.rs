@@ -149,6 +149,11 @@ pub enum Command {
         all: bool,
     },
 
+    /// Plugins au format Claude Code déposés dans `{data}/plugins` (#393), sans daemon.
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
     /// Demandes d'approbation en attente ; `stats` : la mesure préalable au juge (#203).
     Approvals {
         #[command(subcommand)]
