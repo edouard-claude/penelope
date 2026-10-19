@@ -40,6 +40,18 @@ La charte et les spécifications sont dans `design/v1/`.
   - une carte est **toujours** demandée, même pour un outil en lecture ou couvert par une
     règle « Toujours », puisque le fichier sort de la machine.
 - Fonctionne dans le chat comme dans un sous-agent.
+### 1.0.78
+
+**OAuth : point d'autorisation et paramètre des portées réglables, pour le parcours Slack
+(#378).**
+
+- Le sélecteur d'espace de travail de Slack reconstruit l'URL de `/oauth/v2_user/authorize`
+  sans `code_challenge_method`, `state` ni portées. La reconnexion du 15/10 a échoué ainsi.
+- `oauth_authorize_endpoint` remplace le point d'autorisation annoncé, et
+  `oauth_scope_param` nomme le paramètre des portées (`user_scope`). Rien de propre à Slack
+  n'est écrit dans le code.
+- Un jeton rendu sous `authed_user` (`oauth.v2.access`) est lu là.
+- La documentation donne les deux réglages pour Slack.
 
 ### 1.0.74
 

@@ -803,3 +803,43 @@ async fn a_stdio_server_is_authorized_against_its_declared_issuer() {
 async fn start_err(s: &Services, cfg: &ServerConfig) -> String {
     super::start(s, cfg, None).await.unwrap_err()
 }
+
+/// #378 : le point d'autorisation et le nom du paramètre des portées se règlent par
+/// serveur. Slack attend `/oauth/v2/authorize` et les portées utilisateur dans
+/// `user_scope` ; PKCE et `state` restent dans l'URL.
+#[tokio::test]
+async fn the_authorize_endpoint_and_scope_parameter_are_configurable() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock: penelope_kernel::clock::SharedClock = Arc::new(TestClock::new(1_789_516_800_000));
+    let s = Arc::new(
+        Services::for_tests(dir.path().to_path_buf(), clock)
+            .await
+            .unwrap(),
+    );
+    let (base, _seen) = fake_authorization_server_opts(true).await;
+    let cfg = ServerConfig {
+        name: "slack".into(),
+        transport: "http".into(),
+        url: format!("{base}/mcp"),
+        client_id: "app-interne".into(),
+        scopes: vec!["channels:history".into(), "chat:write".into()],
+        oauth_authorize_endpoint: format!("{base}/oauth/v2/authorize"),
+        oauth_scope_param: "user_scope".into(),
+        ..Default::default()
+    };
+    let start = start(&s, &cfg, None).await.unwrap();
+    assert!(
+        start
+            .url
+            .starts_with(&format!("{base}/oauth/v2/authorize?")),
+        "{}",
+        start.url
+    );
+    assert_eq!(
+        param(&start.url, "user_scope"),
+        "channels%3Ahistory%20chat%3Awrite"
+    );
+    assert!(!start.url.contains("&scope="), "{}", start.url);
+    assert_eq!(param(&start.url, "code_challenge_method"), "S256");
+    assert!(!param(&start.url, "state").is_empty());
+}
