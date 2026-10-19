@@ -235,10 +235,9 @@ impl NativeToolExecutor {
                     .as_str()
                     .ok_or_else(|| ToolError::Invalid("`$file_base64` attend un chemin".into()))?;
                 let path = self.resolve_path(raw)?;
-                // Un seul descripteur : le chemin vérifié est celui qu'on lit, sans
-                // fenêtre pour qu'un lien le remplace entre le contrôle et la lecture.
-                let file = std::fs::File::open(&path)
-                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                // Le chemin réel est vérifié avant toute ouverture (lecture interdite,
+                // fichier ordinaire), puis ouvert sans suivre de lien et sans bloquer ;
+                // le descripteur doit désigner le même inode que le chemin vérifié.
                 let real = std::fs::canonicalize(&path)
                     .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
                 let denied = denied_reads(&self.services)
@@ -250,11 +249,34 @@ impl NativeToolExecutor {
                         "`{raw}` est sous une lecture interdite (sandbox.deny_read)"
                     )));
                 }
-                let meta = file
-                    .metadata()
+                let checked = std::fs::metadata(&real)
                     .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
-                if !meta.is_file() {
+                if !checked.is_file() {
                     return Err(ToolError::Invalid(format!("`{raw}` n'est pas un fichier")));
+                }
+                let mut open = std::fs::OpenOptions::new();
+                open.read(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                }
+                let file = open
+                    .open(&real)
+                    .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let opened = file
+                        .metadata()
+                        .map_err(|e| ToolError::Invalid(format!("`{raw}` : {e}")))?;
+                    if (opened.dev(), opened.ino()) != (checked.dev(), checked.ino())
+                        || !opened.is_file()
+                    {
+                        return Err(ToolError::Denied(format!(
+                            "`{raw}` a changé pendant la lecture : refusé"
+                        )));
+                    }
                 }
                 let mut bytes = Vec::new();
                 use std::io::Read;
