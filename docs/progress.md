@@ -64,6 +64,58 @@ lots des sous-agents, des worktrees et des plugins (#396, #397, #393).**
     et ses commandes (skills `<plugin>-<commande>`), relues à chaud.
   - Ses `agents/*.md`, comme ceux de `{data}/agents`, servent `sub_agent_spawn` par leur
     nom, avec les outils de Claude Code traduits.
+### 1.0.76
+
+**Agenda : les calendriers Google sont trouvés (#409).**
+
+- Google sert son principal (`…/caldav/v2/<compte>/user`) sans `current-user-principal`,
+  mais avec `calendar-home-set`. La découverte prenait le principal pour le dossier des
+  calendriers, qui n'en contient aucun : « Aucun calendrier d'événements lisible ».
+- Une adresse qui ne nomme pas de principal est maintenant interrogée sur
+  `calendar-home-set` avant d'être prise pour le dossier.
+- Vérifié sur l'instance du propriétaire : 4 calendriers sur un compte Google, 2 sur
+  l'autre, des événements lus.
+- `AGENDA_TRACE=<fichier>` ajoute chaque réponse WebDAV au fichier, sans les en-têtes,
+  pour diagnostiquer un serveur qui ne rend rien.
+
+**MCP : un fichier local passe à un outil en base64 sans traverser le modèle (#310).**
+
+- Un outil MCP qui n'accepte qu'un champ `content_base64` (import de références vers
+  Kelpo) obligeait le modèle à recopier des dizaines de milliers de caractères.
+- Une valeur `{"$file_base64": "<chemin>"}` dans les arguments est remplacée à l'appel par
+  le contenu du fichier. La carte d'approbation montre le chemin, jamais le contenu.
+- Règles appliquées :
+  - celles des outils `fs_*` (workspaces, `vault:`) ;
+  - `sandbox.deny_read` refusé ;
+  - 15 Mo au plus, lus par un seul descripteur ;
+  - une carte est **toujours** demandée, même pour un outil en lecture ou couvert par une
+    règle « Toujours », puisque le fichier sort de la machine.
+- Fonctionne dans le chat comme dans un sous-agent.
+
+**OAuth : point d'autorisation et paramètre des portées réglables, pour le parcours Slack
+(#378).**
+
+- Le sélecteur d'espace de travail de Slack reconstruit l'URL de `/oauth/v2_user/authorize`
+  sans `code_challenge_method`, `state` ni portées. La reconnexion du 15/10 a échoué ainsi.
+- `oauth_authorize_endpoint` remplace le point d'autorisation annoncé, et
+  `oauth_scope_param` nomme le paramètre des portées (`user_scope`). Rien de propre à Slack
+  n'est écrit dans le code.
+- Un jeton rendu sous `authed_user` (`oauth.v2.access`) est lu là.
+- La documentation donne les deux réglages pour Slack.
+
+**Relecture mémoire : l'effort de raisonnement respecte la liste du modèle Codex (#410).**
+
+- Depuis le 15/10, la relecture d'épisode demandait l'effort `none` au modèle Codex du
+  rôle `memory_review`, qui le refuse. Plus aucun candidat n'arrivait à la consolidation,
+  et seul le journal le disait.
+- Le catalogue Codex rend le raisonnement obligatoire quand sa liste d'efforts ne contient
+  pas `none`.
+- `lightest_effort` prend le plus faible de la liste par rang : un `rev()` sur une liste
+  croissante rendait `max`.
+- Le chemin OpenRouter de #152 (`none` traduit en `enabled: false`) ne change pas.
+- Un échec de relecture est compté. `doctor` le dit dans un nouveau contrôle,
+  `memory.review` (« N relecture(s) en échec depuis … »).
+- La passe de nuit rattrape au plus dix épisodes non relus des quatorze derniers jours.
 
 ### 1.0.75
 

@@ -227,13 +227,87 @@ pub fn spawn_ingest(
     boundary: Boundary,
 ) {
     tokio::spawn(async move {
-        match ingest(&s, providers.as_ref(), &session_id, episode, boundary).await {
+        let outcome = ingest(&s, providers.as_ref(), &session_id, episode, boundary).await;
+        record_outcome(&s, &outcome).await;
+        match outcome {
             Ok(n) => tracing::info!(session = %session_id, episode, candidats = n, "épisode relu"),
             Err(e) => {
                 tracing::warn!(session = %session_id, episode, error = %e, "relecture d'épisode")
             }
         }
     });
+}
+
+/// Clé des relectures en échec depuis la dernière réussie (#410) : `doctor` la lit.
+pub const FAILURES_KEY: &str = "memory.review.failures";
+
+/// Échecs de relecture comptés depuis la dernière réussite, avec le premier instant et la
+/// dernière erreur : un échec ne reste plus un simple avertissement de journal (#410).
+pub async fn record_outcome(s: &Services, outcome: &anyhow::Result<usize>) {
+    match outcome {
+        Ok(_) => {
+            let _ = s.kv_delete(FAILURES_KEY).await;
+        }
+        Err(e) => {
+            let mut v: serde_json::Value = s
+                .kv_get(FAILURES_KEY)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_else(|| json!({"count": 0, "since": s.clock.now_rfc3339()}));
+            v["count"] = json!(v["count"].as_u64().unwrap_or(0) + 1);
+            let last: String = e.to_string().chars().take(300).collect();
+            v["last_error"] = json!(last);
+            let _ = s.kv_set(FAILURES_KEY, &v.to_string()).await;
+        }
+    }
+}
+
+/// Épisodes clos des `days` derniers jours que rien n'a relus (flag absent) : un échec
+/// passé (#410) ne laisse plus de trou dans la mémoire. Au plus `limit` par passe.
+pub async fn catch_up(
+    s: &Arc<Services>,
+    providers: &dyn ProviderSource,
+    days: i64,
+    limit: usize,
+) -> anyhow::Result<usize> {
+    let since = chrono::DateTime::from_timestamp_millis(s.clock.now_ms() - days * 86_400_000)
+        .unwrap_or_default()
+        .to_rfc3339();
+    let sessions: Vec<(String, i64)> = s
+        .store
+        .read(move |c| {
+            let mut st = c.prepare(
+                "SELECT id, episode_seq FROM sessions
+                 WHERE kind = 'chat' AND updated_at >= ?1 AND episode_seq > 0
+                 ORDER BY updated_at DESC",
+            )?;
+            let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await?;
+    let mut done = 0;
+    'outer: for (sid, seq) in sessions {
+        for episode in 0..seq {
+            if done >= limit {
+                break 'outer;
+            }
+            let flag = format!("episode.ingested.{sid}.{episode}");
+            if s.kv_get(&flag).await?.is_some() {
+                continue;
+            }
+            let outcome = ingest(s, providers, &sid, episode, Boundary::NewSession).await;
+            record_outcome(s, &outcome).await;
+            if let Err(e) = outcome {
+                // Le fournisseur refuse encore : inutile d'enchaîner les échecs.
+                tracing::warn!(session = %sid, episode, error = %e, "rattrapage de relecture");
+                break 'outer;
+            }
+            done += 1;
+        }
+    }
+    Ok(done)
 }
 
 /// Transcript condensé d'un épisode : propriétaire et Pénélope, sans les résultats d'outils,
@@ -791,5 +865,61 @@ mod tests {
             Some("Migration décidée pour vendredi.")
         );
         assert!(summary_of("pas de json").is_none());
+    }
+
+    /// #410 : une relecture qui échoue est comptée (le contrôle `doctor` la lit), l'épisode
+    /// reste relisible, et le rattrapage de nuit le relit une fois le fournisseur revenu.
+    #[tokio::test]
+    async fn a_failed_review_is_counted_then_caught_up() {
+        let (_dir, d, p, _clock) = daemon().await;
+        d.services
+            .publish_config("test", |c| {
+                c.memory.review_max_candidates = 5;
+                Ok(vec!["memory.review_max_candidates".into()])
+            })
+            .unwrap();
+        let sid = d.chat_session().await;
+        let first = session(&d, &sid).await.episode_seq;
+        for (role, text) in [
+            (Role::User, "On migre la facturation vers PostgreSQL"),
+            (Role::Assistant, "D'accord."),
+            (Role::User, "Désormais les migrations passent par sqlx"),
+        ] {
+            say(&d, &sid, first, role, text).await;
+        }
+        d.services.sessions.next_episode(&sid).await.unwrap();
+
+        p.push(penelope_llm::mock::Scripted::Error(
+            penelope_llm::LlmErrorKind::BadRequest,
+            "Unsupported value: 'none'".into(),
+        ));
+        assert_eq!(
+            catch_up(&d.services, d.providers.as_ref(), 14, 10)
+                .await
+                .unwrap(),
+            0
+        );
+        let failures: Value =
+            serde_json::from_str(&d.services.kv_get(FAILURES_KEY).await.unwrap().unwrap()).unwrap();
+        assert_eq!(failures["count"], 1);
+        assert!(failures["last_error"].as_str().unwrap().contains("none"));
+        let flag = format!("episode.ingested.{sid}.{first}");
+        assert!(
+            d.services.kv_get(&flag).await.unwrap().is_none(),
+            "relisible"
+        );
+
+        p.reply(r#"{"resume": "Migration.", "candidats": []}"#);
+        assert_eq!(
+            catch_up(&d.services, d.providers.as_ref(), 14, 10)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(d.services.kv_get(&flag).await.unwrap().is_some());
+        assert!(
+            d.services.kv_get(FAILURES_KEY).await.unwrap().is_none(),
+            "remis à zéro"
+        );
     }
 }

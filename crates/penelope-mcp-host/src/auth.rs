@@ -292,6 +292,10 @@ pub async fn start(
     let auth_method = meta
         .client_auth_method(!cfg.client_secret.is_empty())
         .map_err(|e| e.to_string())?;
+    let mut meta = meta;
+    if !cfg.oauth_authorize_endpoint.is_empty() {
+        meta.authorization_endpoint = cfg.oauth_authorize_endpoint.clone();
+    }
     check_endpoint(&meta.authorization_endpoint)?;
     check_endpoint(&meta.token_endpoint)?;
     let issuer = if meta.issuer.is_empty() {
@@ -374,7 +378,7 @@ pub async fn start(
     let pkce = Pkce::generate();
     let state = oauth::random_state();
     let url = oauth::with_params(
-        &oauth::authorize_url(
+        &oauth::authorize_url_with(
             &meta,
             &client_id,
             &redirect_uri,
@@ -382,6 +386,11 @@ pub async fn start(
             &state,
             &resource,
             &scopes,
+            if cfg.oauth_scope_param.is_empty() {
+                "scope"
+            } else {
+                &cfg.oauth_scope_param
+            },
         ),
         &cfg.oauth_params,
     );

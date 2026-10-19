@@ -100,7 +100,15 @@ impl ModelInfo {
         if efforts.is_empty() {
             return Some("minimal".into());
         }
-        efforts.iter().rev().find(|e| *e != "none").cloned()
+        // Le plus faible de la liste **déclarée**, quel que soit son ordre : `rev()` sur
+        // une liste croissante (`["low", …, "max"]` chez Codex) rendait `max` (#410).
+        const RANK: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
+        let rank = |e: &str| RANK.iter().position(|r| *r == e).unwrap_or(RANK.len());
+        efforts
+            .iter()
+            .filter(|e| *e != "none")
+            .min_by_key(|e| rank(e))
+            .cloned()
     }
 
     pub fn supports_tools(&self) -> bool {
@@ -639,6 +647,16 @@ mod tests {
         flash.reasoning_efforts = Some(Vec::new());
         flash.reasoning_mandatory = false;
         assert_eq!(flash.lightest_effort().as_deref(), Some("none"));
+
+        // #410 : une liste croissante (Codex) rend son plus faible, pas son dernier.
+        let mut codex = models[0].clone();
+        codex.reasoning_efforts = Some(
+            ["low", "medium", "high", "xhigh", "max"]
+                .map(String::from)
+                .to_vec(),
+        );
+        codex.reasoning_mandatory = true;
+        assert_eq!(codex.lightest_effort().as_deref(), Some("low"));
     }
 
     #[test]

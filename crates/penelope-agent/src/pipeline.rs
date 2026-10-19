@@ -386,9 +386,16 @@ impl AgentLoop {
         // « Toujours » couvrirait l'outil entier.
         let effective_args = crate::effective_arguments(&call.name, &call.arguments);
         let policy_workspace = execute.policy_workspace();
-        let verdict =
+        let mut verdict =
             PolicyStage::evaluate(s, spec, policy_workspace.as_deref(), &info, &effective_args)
                 .await?;
+        // 4 ter. Un fichier local joint par référence (#310) sort de la machine : jamais
+        // sans carte, quelle que soit la classe de l'outil ou une règle « Toujours ».
+        if verdict.decision == PolicyDecision::Auto && carries_file(&effective_args) {
+            verdict.decision = PolicyDecision::Ask;
+            verdict.layer = policy::VerdictLayer::Default;
+            verdict.reason = "un fichier local part vers un outil (`$file_base64`)".into();
+        }
         // 4 bis. Hooks `pre_tool` du propriétaire (#384) : après la politique, ils ne
         // peuvent que resserrer ; des arguments modifiés repassent la politique.
         let (call, effective_args, verdict) = match self
@@ -964,4 +971,13 @@ enum Gated {
     Go(ToolCall, Value, policy::Verdict),
     /// L'appel s'arrête là ; le texte va au modèle.
     Refused(ToolCall, String),
+}
+
+/// Vrai si les arguments portent une référence `{"$file_base64": …}` (#310).
+fn carries_file(args: &Value) -> bool {
+    match args {
+        Value::Object(o) => o.contains_key("$file_base64") || o.values().any(carries_file),
+        Value::Array(a) => a.iter().any(carries_file),
+        _ => false,
+    }
 }

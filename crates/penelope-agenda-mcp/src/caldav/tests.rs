@@ -152,8 +152,9 @@ async fn without_a_principal_the_base_is_listed_directly() {
     let depths: Vec<Option<String>> = fake.requests().into_iter().map(|r| r.depth).collect();
     assert_eq!(
         depths,
-        vec![Some("0".into()), Some("1".into())],
-        "la sonde du principal, puis la liste du dossier donné"
+        vec![Some("0".into()), Some("0".into()), Some("1".into())],
+        "la sonde du principal, celle du dossier des calendriers (#409), puis la liste du \
+         dossier donné"
     );
 }
 
@@ -215,4 +216,23 @@ async fn a_bearer_token_replaces_basic_auth() {
         .with_token("ya29.perime");
     let e = bad.discover().await.unwrap_err();
     assert!(e.to_string().contains("mcp auth"), "{e}");
+}
+
+/// #409 : Google sert son principal sans `current-user-principal`, mais avec
+/// `calendar-home-set` ; la découverte le lit sur l'adresse donnée au lieu de prendre le
+/// principal pour le dossier (qui ne contient aucun calendrier).
+#[tokio::test]
+async fn a_principal_without_current_user_principal_still_names_its_home() {
+    let fake = FakeCalDav::start().await;
+    fake.add_calendar("perso", "Perso", &[]);
+    fake.set_mode(Mode::PrincipalWithoutSelf);
+    let c = Client::new(&fake.url, USER, PASSWORD, Duration::from_secs(5)).unwrap();
+    let names: Vec<String> = c
+        .discover()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names, ["Perso"]);
 }
