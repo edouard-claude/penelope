@@ -471,7 +471,11 @@ pub fn render_source(meta: &SourceMeta, summary: Option<&str>, text: &str) -> St
     if let Some(file) = &meta.attachment {
         body.push_str(&format!("{ORIGINAL_HEADER}\n\n![[{file}]]\n\n"));
     }
-    body.push_str(&format!("{CONTENT_HEADER}\n\n{}\n", text.trim()));
+    // Les `[[…]]` d'un document importé viennent d'un autre wiki : dans la fiche, ils
+    // restent du texte, sinon ils deviennent des liens morts du vault (#413). L'original,
+    // lui, est gardé intact.
+    let text = text.trim().replace("[[", "").replace("]]", "");
+    body.push_str(&format!("{CONTENT_HEADER}\n\n{text}\n"));
     frontmatter::render(&fields, &body)
 }
 
@@ -759,6 +763,15 @@ mod tests {
         // … sauf déclaration explicite du propriétaire.
         let owner = raw.replace("origine: untrusted", "origine: owner");
         assert_eq!(parse_source(&owner).unwrap().origine, Origin::Owner);
+
+        // #413 : les liens d'un document importé restent du texte dans la fiche ; ceux que
+        // Pénélope pose (original, résumé) restent des liens.
+        let imported = render_source(&meta, None, "Voir [[ailleurs]] et [[autre|alias]].");
+        assert!(
+            imported.contains("Voir ailleurs et autre|alias."),
+            "{imported}"
+        );
+        assert!(imported.contains("![[contrat.pdf]]"), "{imported}");
         assert!(parse_source("# notes libres").is_none());
     }
 

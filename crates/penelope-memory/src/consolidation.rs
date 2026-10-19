@@ -641,10 +641,30 @@ impl DreamReport {
     pub fn render(&self) -> String {
         let mut s = self.render_brief();
         if !self.rejected.is_empty() {
+            // Plafonnée : une ligne de 36 Ko par nuit gonflait DREAMS.md sans être lue
+            // (#413) ; les crochets retirés, pour que le lint ne la relise pas en liens.
+            let shown: Vec<String> = self
+                .rejected
+                .iter()
+                .take(20)
+                .map(|r| {
+                    r.chars()
+                        .take(200)
+                        .collect::<String>()
+                        .replace("[[", "")
+                        .replace("]]", "")
+                })
+                .collect();
+            let more = self.rejected.len().saturating_sub(shown.len());
             s.push_str(&format!(
-                "\n{} candidats rejetés : {}",
+                "\n{} candidats rejetés : {}{}",
                 self.rejected.len(),
-                self.rejected.join(" ; ")
+                shown.join(" ; "),
+                if more > 0 {
+                    format!(" ; … et {more} autre(s)")
+                } else {
+                    String::new()
+                }
             ));
         }
         s
