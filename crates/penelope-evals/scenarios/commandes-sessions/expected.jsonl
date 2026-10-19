@@ -29,7 +29,7 @@
 {"type":"event","session":"{{session:3}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
 {"type":"event","session":"{{session:2}}","seq":11,"kind":"runtime.session.state","payload":{"state":"active"}}
 {"type":"event","session":"{{session:2}}","seq":12,"kind":"runtime.session.state","payload":{"state":"closed"}}
-{"type":"event","session":"{{session:2}}","seq":13,"kind":"session.closed","payload":{"cancelled":0}}
+{"type":"event","session":"{{session:2}}","seq":13,"kind":"session.closed","payload":{"approvals_cancelled":0,"cancelled":0}}
 {"type":"turn","id":"{{turn:1}}","session":"{{session:2}}","kind":"message","state":"done","attempts":1,"error":null}
 {"type":"llm","id":"{{llm:1}}","session":"{{session:2}}","model":"openrouter:deepseek/deepseek-v4-pro","provider":"mock","state":"completed"}
 {"type":"usage","session":"{{session:2}}","model":"openrouter:deepseek/deepseek-v4-pro","provider":"mock","role":"chat","prompt":1000,"completion":50,"cached":0,"reasoning":0}
