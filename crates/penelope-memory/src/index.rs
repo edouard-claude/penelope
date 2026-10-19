@@ -94,9 +94,10 @@ pub struct Scored {
     /// Priorité : pertinence pondérée par la récence, l'importance, le projet et la
     /// confiance. Ordonne les résultats et départage sous budget.
     pub score: f64,
-    /// Pertinence seule (rang RRF normalisé : 1 pour un premier rang dans une liste, 2
-    /// dans les deux). C'est elle que compare le seuil du rappel automatique : un
-    /// souvenir ancien reste rappelable, il passe seulement après un récent (#86).
+    /// Pertinence seule, absolue entre 0 et 1 : la part des termes de la requête retrouvés,
+    /// ou la similarité vectorielle calibrée, la plus forte des deux (#411). C'est elle que
+    /// compare le seuil du rappel automatique : un souvenir ancien reste rappelable, il
+    /// passe seulement après un récent (#86). Le rang RRF ne sert qu'à ordonner.
     pub relevance: f64,
     /// Facteur d'usage appliqué au score ([`usage_factor`], issue #105).
     pub usage: f64,
@@ -300,6 +301,27 @@ impl MemoryIndex {
             p.half_life_days = f();
         }
         p
+    }
+
+    /// Un tour parti sans mémoire (budget du rappel dépassé), compté par jour dans `kv`
+    /// sous `memory.recall.misses.<jour>` (#411).
+    pub async fn count_recall_miss(&self) {
+        let day = chrono::DateTime::from_timestamp_millis(self.clock.now_ms())
+            .unwrap_or_default()
+            .format("%Y-%m-%d")
+            .to_string();
+        let key = format!("memory.recall.misses.{day}");
+        let _ = self
+            .store
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO kv(k, v, ts) VALUES (?1, '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                     ON CONFLICT(k) DO UPDATE SET v = CAST(v AS INTEGER) + 1, ts = excluded.ts",
+                    [key],
+                )?;
+                Ok(())
+            })
+            .await;
     }
 
     pub fn store(&self) -> &Store {
@@ -676,25 +698,114 @@ fn age_days(maj: &str, now_ms: i64) -> f64 {
     }
 }
 
-/// Requête FTS assainie.
-pub fn fts_query(q: &str) -> String {
+/// Mots vides du français (et de l'anglais courant) : « comment » ramenait 330 lignes et
+/// noyait le seul mot qui distingue la requête (#411).
+const STOPWORDS: &[&str] = &[
+    "les", "des", "une", "aux", "avec", "pour", "par", "sur", "dans", "sans", "sous", "chez",
+    "est", "sont", "été", "être", "avoir", "fait", "faire", "comment", "quoi", "quel", "quelle",
+    "quels", "quelles", "qui", "que", "dont", "où", "mais", "donc", "car", "plus", "moins", "tout",
+    "tous", "toute", "toutes", "cette", "ces", "son", "sa", "ses", "mon", "mes", "ton", "tes",
+    "notre", "nos", "votre", "vos", "leur", "leurs", "elle", "elles", "ils", "nous", "vous", "moi",
+    "toi", "lui", "the", "and", "for", "with", "how", "what", "pas", "peux", "peut", "dois",
+    "doit", "veux", "veut", "stp", "merci",
+];
+
+/// Les termes d'une requête : mots de trois lettres et plus hors mots vides, mais aussi
+/// les nombres et les sigles même courts (« 14 », « IA ») ; en minuscules (#411).
+pub fn query_terms(q: &str) -> Vec<String> {
     let cleaned: String = q
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c.is_whitespace() {
-                c
-            } else {
-                ' '
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
         .collect();
-    cleaned
+    let mut terms: Vec<String> = cleaned
         .split_whitespace()
         .filter(|w| !matches!(*w, "AND" | "OR" | "NOT" | "NEAR"))
-        .filter(|w| w.chars().count() > 2)
-        .map(|w| format!("\"{w}\"*"))
+        .filter(|w| {
+            let short = w.chars().count() <= 2;
+            let number = w.chars().any(|c| c.is_ascii_digit());
+            let acronym = w.chars().count() >= 2 && w.chars().all(|c| c.is_uppercase());
+            (!short || number || acronym) && !STOPWORDS.contains(&w.to_lowercase().as_str())
+        })
+        .map(|w| w.to_lowercase())
+        .collect();
+    terms.dedup();
+    terms
+}
+
+/// La racine cherchée d'un terme : un mot long est coupé à cinq caractères, pour que
+/// « déployer » trouve « déploiement » (le tokenizer ne racinise pas : `déploy` et
+/// `déploi` divergent dès la sixième lettre).
+fn stem(term: &str) -> String {
+    if term.chars().count() > 5 && !term.chars().any(|c| c.is_ascii_digit()) {
+        term.chars().take(5).collect()
+    } else {
+        term.to_string()
+    }
+}
+
+/// Requête FTS assainie.
+pub fn fts_query(q: &str) -> String {
+    query_terms(q)
+        .iter()
+        .map(|w| format!("\"{}\"*", stem(w)))
         .collect::<Vec<_>>()
         .join(" OR ")
+}
+
+/// Part des termes de la requête retrouvés dans un texte, par leur racine en début de mot :
+/// une pertinence absolue, que le rang ne donne pas (#411).
+pub fn coverage(terms: &[String], text: &str) -> f64 {
+    if terms.is_empty() {
+        return 0.0;
+    }
+    let words: Vec<String> = text
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .to_lowercase()
+        .split_whitespace()
+        .map(fold)
+        .collect();
+    let found = terms
+        .iter()
+        .filter(|t| {
+            let root = fold(&stem(t));
+            words.iter().any(|w| w.starts_with(&root))
+        })
+        .count();
+    found as f64 / terms.len() as f64
+}
+
+/// Sans accents, pour comparer comme le tokenizer (`remove_diacritics`).
+fn fold(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'à' | 'â' | 'ä' | 'á' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' | 'í' => 'i',
+            'ô' | 'ö' | 'ó' => 'o',
+            'ù' | 'û' | 'ü' | 'ú' => 'u',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
+/// Similarité cosinus ramenée à une pertinence : sous 0,25 rien (voisin quelconque), au-
+/// delà de 0,60 tout. Le cosinus brut est presque toujours positif ; seul, il faisait
+/// passer n'importe quel voisin (#411).
+pub fn vector_relevance(similarity: f64) -> f64 {
+    ((similarity - 0.25) / 0.35).clamp(0.0, 1.0)
+}
+
+/// Facteur d'une entrée qui n'est pas un fait consolidé : un passage de source ou une
+/// note du journal passe derrière un souvenir à pertinence égale (#411).
+pub fn provenance_factor(file: &str) -> f64 {
+    if file.starts_with("sources/") || file.starts_with("journal/") {
+        0.8
+    } else {
+        1.0
+    }
 }
 
 /// Signaux d'une entrée, neutres si elle n'en a pas.

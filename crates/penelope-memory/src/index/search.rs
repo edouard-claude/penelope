@@ -10,6 +10,7 @@ impl MemoryIndex {
         active_projects: &[String],
     ) -> penelope_store::Result<Vec<Scored>> {
         let fts = crate::index::fts_query(query);
+        let terms = crate::index::query_terms(query);
         let f = filter.clone_for_move();
         let projects = active_projects.to_vec();
         let params_ = self.score_params();
@@ -100,10 +101,19 @@ impl MemoryIndex {
                     if !f.accepts(&entry) || hidden.contains(&entry.uid) {
                         continue;
                     }
+                    // Le rang ordonne ; la pertinence, elle, est absolue : part des termes
+                    // retrouvés ou similarité vectorielle calibrée (#411).
                     let base = rrf(fr, vr, params_.rrf_k);
+                    let relevance =
+                        crate::index::coverage(&terms, &entry.text).max(if vr.is_some() {
+                            crate::index::vector_relevance(sim)
+                        } else {
+                            0.0
+                        });
                     let age = age_days(&entry.maj, now_ms);
                     let usage = usage_factor(&signals_row(c, &entry.uid)?);
                     let score = base
+                        * crate::index::provenance_factor(&entry.file)
                         * decay(age, params_.half_life_days, entry.pinned)
                         * importance_factor(entry.importance)
                         * project_factor(entry.projet.as_deref(), &projects)
@@ -112,7 +122,7 @@ impl MemoryIndex {
                     out.push(Scored {
                         entry,
                         score,
-                        relevance: base,
+                        relevance,
                         usage,
                         fts_rank: fr,
                         vec_rank: vr,
