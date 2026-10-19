@@ -91,6 +91,9 @@ pub struct Request {
     pub budget_usd: Option<f64>,
     #[serde(default)]
     pub hours: Option<f64>,
+    /// Travailler dans un worktree git à soi (#397), sur une branche `penelope/mission-…`.
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +118,12 @@ pub struct Mission {
     pub failures: u32,
     /// Dernière note : pourquoi la mission a relancé ou s'est arrêtée.
     pub note: String,
+    /// Dépôt d'origine quand la mission travaille dans son propre worktree (#397).
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Branche du worktree de la mission.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 impl Mission {
@@ -197,6 +206,22 @@ pub async fn start(
                 .into_owned(),
         ),
     };
+    // Un worktree à soi (#397) : la mission travaille sur sa branche, le dépôt d'origine
+    // reste tel quel pour une autre mission ou pour le propriétaire.
+    let (cwd, repo, branch) = match (&cwd, req.worktree) {
+        (Some(repo), true) => {
+            let (path, branch) = worktree::open(s, std::path::Path::new(repo), session_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("worktree de la mission : {e}"))?;
+            (
+                Some(path.to_string_lossy().into_owned()),
+                Some(repo.clone()),
+                Some(branch),
+            )
+        }
+        (None, true) => anyhow::bail!("`--worktree` demande un dépôt : `--cwd <dossier>`"),
+        _ => (cwd, None, None),
+    };
     let now = s.clock.now_ms();
     let hours = req.hours.filter(|h| *h > 0.0).unwrap_or(DEFAULT_HOURS);
     let m = Mission {
@@ -217,6 +242,8 @@ pub async fn start(
         idle: 0,
         failures: 0,
         note: String::new(),
+        repo,
+        branch,
     };
     save(s, &m).await?;
     event(s, &m, "mission.started").await;
@@ -264,12 +291,13 @@ pub fn parse_request(text: &str) -> Result<Request, String> {
         match name {
             "check" | "verif" => req.check = Some(value.clone()),
             "cwd" | "depot" | "dépôt" => req.cwd = Some(value.clone()),
+            "worktree" => req.worktree = true,
             "hook" => req.hook = Some(value.clone()),
             "budget" => req.budget_usd = Some(number()?),
             "heures" | "hours" => req.hours = Some(number()?),
             other => {
                 return Err(format!(
-                    "option inconnue `--{other}` (check, cwd, hook, budget, heures)"
+                    "option inconnue `--{other}` (check, cwd, worktree, hook, budget, heures)"
                 ));
             }
         }
@@ -289,7 +317,7 @@ pub async fn stop(s: &Services, session_id: &str) -> anyhow::Result<Mission> {
         m.state = State::Stopped;
         m.note = "arrêtée par le propriétaire".into();
         save(s, &m).await?;
-        event(s, &m, "mission.finished").await;
+        finished(s, &m).await;
     }
     Ok(m)
 }
@@ -306,7 +334,7 @@ pub async fn block(s: &Services, session_id: &str, reason: &str) -> anyhow::Resu
     m.state = State::Blocked;
     m.note = format!("🧱 Mission bloquée : {reason}");
     save(s, &m).await?;
-    event(s, &m, "mission.finished").await;
+    finished(s, &m).await;
     Ok(())
 }
 
@@ -326,6 +354,12 @@ pub fn brief(m: &Mission, why: Option<&str>) -> String {
         out.push_str(&format!(
             "Dépôt : `{cwd}` (lis son CLAUDE.md ou AGENTS.md s'il y en a un ; donne `cwd` à \
              chaque commande).\n"
+        ));
+    }
+    if let Some(branch) = &m.branch {
+        out.push_str(&format!(
+            "Ton worktree est sur la branche `{branch}` : commite et pousse là, jamais sur la \
+             branche du dépôt d'origine.\n"
         ));
     }
     if let Some(h) = &m.hook {
@@ -724,7 +758,7 @@ pub async fn after_turn(
             if let Err(e) = save(s, &m).await {
                 tracing::error!(error = %e, session = session_id, "mission non enregistrée");
             }
-            event(s, &m, "mission.finished").await;
+            finished(s, &m).await;
             ports.notify(&m.origin(), &report).await;
         }
     }
@@ -734,6 +768,17 @@ pub async fn after_turn(
 pub async fn absorbs(s: &Services, session_id: &str, outcome: &TurnOutcome) -> bool {
     matches!(outcome, TurnOutcome::Failed { error } if error.starts_with(CALLS_EXHAUSTED))
         && is_running(s, session_id).await
+}
+
+/// Une mission finie : son événement, et son worktree retiré s'il est propre (#397).
+async fn finished(s: &Services, m: &Mission) {
+    event(s, m, "mission.finished").await;
+    if let (Some(repo), Some(cwd)) = (&m.repo, &m.cwd) {
+        match worktree::release(s, std::path::Path::new(repo), std::path::Path::new(cwd)).await {
+            Ok(note) => tracing::info!(session = %m.session_id, "{note}"),
+            Err(e) => tracing::warn!(session = %m.session_id, error = %e, "worktree de mission"),
+        }
+    }
 }
 
 async fn event(s: &Services, m: &Mission, kind: &str) {
@@ -749,6 +794,8 @@ async fn event(s: &Services, m: &Mission, kind: &str) {
         tracing::warn!(error = %e, kind, "événement de mission non enregistré");
     }
 }
+
+pub mod worktree;
 
 #[cfg(test)]
 mod tests;

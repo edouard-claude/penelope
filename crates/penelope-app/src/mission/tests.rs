@@ -304,3 +304,12 @@ async fn a_mission_outside_the_workspaces_is_refused() {
             .is_ok()
     );
 }
+
+/// #397 : `--worktree` est un drapeau sans valeur, entre les autres options.
+#[test]
+fn the_worktree_flag_is_read() {
+    let r = parse_request("ajouter X --cwd ~/depot --worktree --check cargo test").unwrap();
+    assert!(r.worktree);
+    assert_eq!(r.check.as_deref(), Some("cargo test"));
+    assert!(!parse_request("ajouter X --cwd ~/depot").unwrap().worktree);
+}
