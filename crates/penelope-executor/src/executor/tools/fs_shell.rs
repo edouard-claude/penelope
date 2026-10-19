@@ -230,12 +230,17 @@ impl NativeToolExecutor {
                     .min(std::time::Duration::from_secs(1800));
                 // Réseau accordé par appel (#106) : la carte d'approbation l'a dit.
                 let network = cfg.sandbox.shell_network || b_arg(args, "network").unwrap_or(false);
-                let profile = penelope_tools::shell::profile_with_denied_reads(
+                let mut profile = penelope_tools::shell::profile_with_denied_reads(
                     &cfg.sandbox.default_profile,
                     &cwd,
                     network,
                     &denied_reads(s),
                 );
+                // Motifs masqués (#394) sous les workspaces et le vault : Seatbelt les
+                // refuse à la commande comme `deny_read`.
+                let mut roots = self.workspaces();
+                roots.push(penelope_app::helpers::vault_dir(s));
+                profile.hide = penelope_tools::hide::regexes(&roots, &cfg.sandbox.hide);
                 let shell = shell_override(&cfg.tools.shell);
                 // Secrets collés demandés par l'appel (#352) : lus au magasin, caviardés,
                 // passés en variables ; la commande n'en écrit que le nom.

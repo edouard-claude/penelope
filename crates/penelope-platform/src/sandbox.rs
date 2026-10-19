@@ -51,6 +51,9 @@ pub struct Profile {
     /// Chemins dont la **lecture** est refusée, même sous un profil qui lit le disque :
     /// clés SSH, base de Pénélope, secrets, configuration (issue #68).
     pub deny_read: Vec<PathBuf>,
+    /// Motifs masqués dans les dossiers accordés, en expressions régulières absolues
+    /// (`sandbox.hide`, #394) : refusés en lecture et en écriture comme `deny_read`.
+    pub hide: Vec<String>,
     /// Dérogation explicite : le profil n'est pas appliqué, mais l'audit le sait.
     pub waived: bool,
     /// Trousseau ouvert malgré le profil : un serveur MCP dont le métier est de lire ses
@@ -67,6 +70,7 @@ impl Profile {
             readable: Vec::new(),
             allow_network: false,
             deny_read: Vec::new(),
+            hide: Vec::new(),
             waived: false,
             allow_keychain: false,
         }
@@ -79,6 +83,7 @@ impl Profile {
             readable: Vec::new(),
             allow_network: false,
             deny_read: Vec::new(),
+            hide: Vec::new(),
             waived: false,
             allow_keychain: false,
         }
@@ -91,6 +96,7 @@ impl Profile {
             readable,
             allow_network: true,
             deny_read: Vec::new(),
+            hide: Vec::new(),
             waived: false,
             allow_keychain: false,
         }
@@ -103,6 +109,7 @@ impl Profile {
             readable: Vec::new(),
             allow_network: true,
             deny_read: Vec::new(),
+            hide: Vec::new(),
             waived: false,
             allow_keychain: false,
         }
@@ -238,6 +245,13 @@ pub fn seatbelt_profile(p: &Profile) -> String {
         s.push_str(&format!(
             "(deny file-read* file-write* (subpath \"{}\"))\n",
             esc(&d)
+        ));
+    }
+    // Motifs masqués (#394) : `.env`, `.netrc`, clés, dans tout dossier accordé.
+    for r in &p.hide {
+        s.push_str(&format!(
+            "(deny file-read* file-write* file-link (regex #\"{}\"))\n",
+            r.replace('"', "\\\"")
         ));
     }
     // Le trousseau est fermé à tout profil imposé, même sans lecture refusée : une
@@ -393,6 +407,14 @@ mod tests {
             "le refus doit venir après l'autorisation :\n{sbpl}"
         );
         assert!(sbpl.contains("secrets.enc"), "{sbpl}");
+        // #394 : les motifs masqués deviennent des refus `regex`, après les autorisations.
+        let mut h = p.clone();
+        h.hide = vec!["^/ws/(.*/)?\\.env$".into()];
+        let hidden = seatbelt_profile(&h);
+        let at = hidden
+            .find("(deny file-read* file-write* file-link (regex #\"^/ws/(.*/)?\\.env$\"))")
+            .expect("motif masqué");
+        assert!(at > allow_at, "{hidden}");
         assert!(
             sbpl.contains("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))"),
             "le trousseau doit être fermé :\n{sbpl}"

@@ -288,7 +288,18 @@ impl NativeToolExecutor {
         let vault = self
             .follows_config()
             .then(|| penelope_app::helpers::vault_dir(&self.services));
-        penelope_tools::fs::resolve_in(raw, &self.workspaces(), vault.as_deref())
+        let path = penelope_tools::fs::resolve_in(raw, &self.workspaces(), vault.as_deref())?;
+        // Motifs masqués dans les dossiers accordés (`sandbox.hide`, #394) : `.env`,
+        // clés et identifiants restent hors de portée des outils de fichiers.
+        let mut roots = self.workspaces();
+        roots.extend(vault);
+        let patterns = &self.services.config.config().sandbox.hide;
+        if let Some(p) = penelope_tools::hide::hidden(&path, &roots, patterns) {
+            return Err(ToolError::Denied(format!(
+                "`{raw}` est masqué (`sandbox.hide` : `{p}`)"
+            )));
+        }
+        Ok(path)
     }
 
     fn path_arg(&self, args: &Value, key: &str) -> ToolResult<PathBuf> {

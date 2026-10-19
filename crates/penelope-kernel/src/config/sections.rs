@@ -478,6 +478,27 @@ pub struct Sandbox {
     /// profil lit le disque : clés, jetons, base de Pénélope, secrets, configuration.
     /// `{data}`, `{config}`, `{state}` et `~` sont développés.
     pub deny_read: Vec<String>,
+    /// Motifs masqués dans les dossiers accordés (workspaces, vault) : `**/.env`,
+    /// `.git/config`, `secrets/`. Refusés aux outils de fichiers et, sous macOS, aux
+    /// commandes du shell, comme `deny_read` (#394).
+    pub hide: Vec<String>,
+}
+
+/// Motifs masqués par défaut : fichiers d'environnement, identifiants, clés (#394).
+pub fn default_hide() -> Vec<String> {
+    [
+        "**/.env",
+        "**/.env.*",
+        "**/.netrc",
+        "**/.npmrc",
+        "**/.pypirc",
+        "**/id_rsa",
+        "**/id_ed25519",
+        "**/*.pem",
+        "**/*.key",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 /// Lectures refusées par défaut : ce qu'une consigne cachée dans un résultat d'outil
@@ -512,6 +533,7 @@ impl Default for Sandbox {
             workspaces: Vec::new(),
             shell_network: false,
             deny_read: default_deny_read(),
+            hide: default_hide(),
         }
     }
 }
