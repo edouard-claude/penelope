@@ -330,3 +330,9 @@ pub fn keep_awake(s: &Services, reason: &str) -> Option<penelope_platform::Sleep
         }
     }
 }
+
+/// Le sous-agent déclaré en fichier de ce nom (#393) : `{data}/agents/<nom>.md` ou
+/// `agents/` d'un plugin.
+pub fn declared_agent(s: &Services, name: &str) -> Option<penelope_skills::plugins::AgentDef> {
+    penelope_skills::plugins::agent(&s.platform.dirs.data(), name)
+}
