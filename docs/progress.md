@@ -12,6 +12,18 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.82
+
+**Marketplaces de plugins (#393).**
+
+- `penelope plugin marketplace add <dossier|dépôt git>` inscrit une marketplace au format
+  Claude Code (`.claude-plugin/marketplace.json`), `marketplace list` montre ses
+  plugins, `penelope plugin install <plugin>@<marketplace>` en dépose un (chemin relatif
+  resté dans la marketplace, ou source `github`/`url`). Les registres
+  `known_marketplaces.json` et `installed_plugins.json` (`{data}/plugins`) suivent la
+  forme de ceux du CLI. Installer n'active rien qui exécute : serveurs et hooks attendent
+  la politique.
+
 ### 1.0.81
 
 **Plugins dans `self_status` (#393).**

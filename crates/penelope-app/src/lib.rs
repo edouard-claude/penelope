@@ -38,6 +38,7 @@ pub mod model_watch;
 pub mod notices;
 pub mod outcome;
 pub mod plugin_install;
+pub mod plugin_market;
 pub mod plugin_report;
 pub mod ports;
 pub mod quiet;

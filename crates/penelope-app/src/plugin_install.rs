@@ -24,7 +24,7 @@ fn is_git(source: &str) -> bool {
     source.starts_with("https://") || source.starts_with("git@") || source.ends_with(".git")
 }
 
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+pub fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for e in std::fs::read_dir(from)? {
         let e = e?;
@@ -43,6 +43,72 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Copie `source` (dossier local, ou dépôt git cloné dans `tmp` puis recopié) vers
+/// `dest`, sans `.git` ni lien symbolique. `dest` est effacé si la copie échoue.
+pub fn fetch(source: &str, dest: &Path, tmp: &Path) -> Result<(), String> {
+    fetch_with(source, dest, tmp, false)
+}
+
+/// [`fetch`] pour une source qu'un tiers a écrite (une marketplace) : un dépôt distant
+/// seulement, `https://` ou `git@`, jamais un chemin ni le protocole `file`.
+pub fn fetch_remote(source: &str, dest: &Path, tmp: &Path) -> Result<(), String> {
+    if !(source.starts_with("https://") || source.starts_with("git@")) {
+        return Err(format!(
+            "source `{source}` : un dépôt distant (https:// ou git@) attendu"
+        ));
+    }
+    fetch_with(source, dest, tmp, true)
+}
+
+fn fetch_with(source: &str, dest: &Path, tmp: &Path, remote_only: bool) -> Result<(), String> {
+    let local = Path::new(source);
+    if !remote_only && local.is_dir() {
+        return copy_dir(local, dest).map_err(|e| {
+            let _ = std::fs::remove_dir_all(dest);
+            e.to_string()
+        });
+    }
+    if !is_git(source) {
+        return Err(format!(
+            "source `{source}` : ni dossier, ni dépôt git (https://, git@, .git)"
+        ));
+    }
+    if source.starts_with('-') {
+        return Err("source refusée".into());
+    }
+    // Cloné à part, puis recopié par la même règle qu'un dossier : un lien symbolique du
+    // dépôt (vers ~/.ssh, par exemple) n'arrive jamais à destination.
+    let git = penelope_platform::which("git").ok_or("`git` est absent du PATH")?;
+    let _ = std::fs::remove_dir_all(tmp);
+    let out = std::process::Command::new(git)
+        .args([
+            "-c",
+            "protocol.file.allow=never",
+            "clone",
+            "--depth",
+            "1",
+            "--",
+            source,
+        ])
+        .arg(tmp)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| e.to_string());
+    let copied = match out {
+        Ok(o) if o.status.success() => copy_dir(tmp, dest).map_err(|e| e.to_string()),
+        Ok(o) => Err(format!(
+            "git clone : {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(e),
+    };
+    let _ = std::fs::remove_dir_all(tmp);
+    if copied.is_err() {
+        let _ = std::fs::remove_dir_all(dest);
+    }
+    copied
+}
+
 /// Dépose `source` (dossier local ou dépôt git) sous `{data}/plugins/<nom>` ; rend le
 /// chemin du plugin.
 pub fn add(data: &Path, source: &str, name: Option<&str>) -> Result<PathBuf, String> {
@@ -57,42 +123,11 @@ pub fn add(data: &Path, source: &str, name: Option<&str>) -> Result<PathBuf, Str
         ));
     }
     std::fs::create_dir_all(data.join("plugins")).map_err(|e| e.to_string())?;
-    let local = Path::new(source);
-    if local.is_dir() {
-        copy_dir(local, &dest).map_err(|e| e.to_string())?;
-    } else if is_git(source) {
-        if source.starts_with('-') {
-            return Err("source refusée".into());
-        }
-        // Cloné à part, puis recopié par la même règle qu'un dossier : un lien symbolique
-        // du dépôt (vers ~/.ssh, par exemple) n'arrive jamais dans le plugin.
-        let git = penelope_platform::which("git").ok_or("`git` est absent du PATH")?;
-        let tmp = data.join("plugins").join(format!(".clone-{name}"));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let out = std::process::Command::new(git)
-            .args(["clone", "--depth", "1", "--", source])
-            .arg(&tmp)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| e.to_string());
-        let copied = match out {
-            Ok(o) if o.status.success() => copy_dir(&tmp, &dest).map_err(|e| e.to_string()),
-            Ok(o) => Err(format!(
-                "git clone : {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            )),
-            Err(e) => Err(e),
-        };
-        let _ = std::fs::remove_dir_all(&tmp);
-        if let Err(e) = copied {
-            let _ = std::fs::remove_dir_all(&dest);
-            return Err(e);
-        }
-    } else {
-        return Err(format!(
-            "source `{source}` : ni dossier, ni dépôt git (https://, git@, .git)"
-        ));
-    }
+    fetch(
+        source,
+        &dest,
+        &data.join("plugins").join(format!(".clone-{name}")),
+    )?;
     std::fs::write(dest.join(SOURCE_FILE), source).map_err(|e| e.to_string())?;
     Ok(dest)
 }
