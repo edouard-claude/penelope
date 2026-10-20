@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.83
+
+**Plugins : compatibles avec le registre de Claude Code, et la fin de #393.**
+
+- `installed_plugins.json` suit la forme relevée sur un vrai `~/.claude/plugins` :
+  `version: 2`, une liste d'installations par plugin (`scope`, `installPath`, `version`,
+  `installedAt`, `lastUpdated`, `gitCommitSha`). Un test de référence part de cette forme.
+- `penelope plugin import [--from <registre>] [<plugin>@<marketplace>]` reprend les
+  plugins installés par Claude Code sur la même machine, sans modifier son registre :
+  portée `user` seulement, doublons de nom signalés.
+- Traduction des hooks corrigée sur de vrais plugins : un matcher garde les outils qui
+  ont un équivalent (`NotebookEdit|Write|Edit` → `fs_write|fs_edit`), `Agent`/`Task`
+  donnent `sub_agent_spawn`, et le matcher d'un `SessionStart` (`startup`) ne restreint
+  plus rien.
+- Autoriser un serveur de plugin dans `plugins.allowed_mcp_servers` le démarre sans
+  toucher un fichier, et `mcp list` relit les déclarations avant de répondre.
+- Scénario rejouable `plugins-politique` : skill, commande, hook autorisé, serveur refusé.
+
 ### 1.0.82
 
 **Marketplaces de plugins (#393).**

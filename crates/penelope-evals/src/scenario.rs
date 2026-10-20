@@ -170,6 +170,8 @@ pub enum SeedRoot {
     Skills,
     /// `hooks.d/` du dossier de données (#383).
     Hooks,
+    /// `plugins/` du dossier de données (#393).
+    Plugins,
 }
 
 #[derive(Debug, Clone, Deserialize)]

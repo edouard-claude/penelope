@@ -56,6 +56,7 @@ scenario_cases! {
     message_pendant_un_lot => "message-pendant-un-lot",
     commandes_systeme => "commandes-systeme",
     commande_hooks => "commande-hooks",
+    plugins_politique => "plugins-politique",
     commande_mission => "commande-mission",
     commande_secrets => "commande-secrets",
     hooks_avant_outil => "hooks-avant-outil",

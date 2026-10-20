@@ -168,21 +168,99 @@ pub fn install(data: &Path, spec: &str) -> Result<PathBuf, String> {
         fetch(&source, &dest, &tmp)?;
     }
     std::fs::write(dest.join(SOURCE_FILE), spec).map_err(|e| e.to_string())?;
-    let installed_path = plugins_dir(data).join(INSTALLED);
-    let mut installed = read_json(&installed_path);
-    if installed["version"].is_null() {
-        installed["version"] = json!(1);
-    }
     let at = now();
-    installed["plugins"][spec] = json!({
-        "version": entry["version"].as_str().unwrap_or("unknown"),
-        "installedAt": at,
-        "lastUpdated": at,
-        "installPath": dest,
-        "isLocal": entry["source"].is_string(),
-    });
-    write_json(&installed_path, &installed)?;
+    record(
+        data,
+        spec,
+        json!({
+            "scope": "user",
+            "installPath": dest,
+            "version": entry["version"].as_str().unwrap_or("unknown"),
+            "installedAt": at,
+            "lastUpdated": at,
+        }),
+    )?;
     Ok(dest)
+}
+
+/// Inscrit `spec` dans `installed_plugins.json`, à la forme du CLI (version 2 : une
+/// liste d'installations par plugin). Les autres entrées ne bougent pas.
+fn record(data: &Path, spec: &str, row: Value) -> Result<(), String> {
+    let path = plugins_dir(data).join(INSTALLED);
+    let mut installed = read_json(&path);
+    installed["version"] = json!(2);
+    if !installed["plugins"].is_object() {
+        installed["plugins"] = json!({});
+    }
+    installed["plugins"][spec] = json!([row]);
+    write_json(&path, &installed)
+}
+
+/// Reprend des plugins installés par Claude Code, d'après son `installed_plugins.json`
+/// (`~/.claude/plugins`, lu sans le modifier) : chaque plugin de portée `user` est copié
+/// dans `{data}/plugins/<nom>` et inscrit ici avec ses champs d'origine. `only` : un seul
+/// `<plugin>@<marketplace>`. Rend, par plugin, ce qui a été fait.
+pub fn import_claude(
+    data: &Path,
+    registry: &Path,
+    only: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let raw =
+        std::fs::read_to_string(registry).map_err(|e| format!("{} : {e}", registry.display()))?;
+    let doc: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("{} : {e}", registry.display()))?;
+    let plugins = doc["plugins"]
+        .as_object()
+        .ok_or("pas de table `plugins` : est-ce bien un installed_plugins.json ?")?;
+    let mut done = Vec::new();
+    for (spec, rows) in plugins {
+        if only.is_some_and(|o| o != spec) {
+            continue;
+        }
+        // Version 2 : une liste d'installations ; version 1 : une seule.
+        let row = match rows {
+            Value::Array(list) => list.iter().find(|r| r["scope"] == "user").cloned(),
+            Value::Object(_) => Some(rows.clone()),
+            _ => None,
+        };
+        let Some(row) = row else {
+            done.push(format!(
+                "{spec} : ignoré (installé pour un projet seulement)"
+            ));
+            continue;
+        };
+        let name = spec.split_once('@').map(|(p, _)| p).unwrap_or(spec);
+        if penelope_platform::validate_slug(name).is_err() {
+            done.push(format!("{spec} : nom invalide"));
+            continue;
+        }
+        let dest = plugins_dir(data).join(name);
+        if dest.exists() {
+            done.push(format!("{spec} : déjà présent"));
+            continue;
+        }
+        let from = row["installPath"].as_str().unwrap_or_default();
+        if !Path::new(from).is_dir() {
+            done.push(format!("{spec} : dossier `{from}` absent"));
+            continue;
+        }
+        std::fs::create_dir_all(plugins_dir(data)).map_err(|e| e.to_string())?;
+        crate::plugin_install::copy_dir(Path::new(from), &dest).map_err(|e| e.to_string())?;
+        std::fs::write(dest.join(SOURCE_FILE), spec).map_err(|e| e.to_string())?;
+        let mut mine = row.clone();
+        mine["installPath"] = json!(dest);
+        mine["scope"] = json!("user");
+        record(data, spec, mine)?;
+        done.push(format!("{spec} : repris"));
+    }
+    if only.is_some() && done.is_empty() {
+        return Err(format!(
+            "`{}` n'est pas dans {}",
+            only.unwrap_or_default(),
+            registry.display()
+        ));
+    }
+    Ok(done)
 }
 
 /// Retire `plugin` de `installed_plugins.json`, quelle que soit sa marketplace.
@@ -243,10 +321,10 @@ mod tests {
         let dest = install(data.path(), "notes@atelier").unwrap();
         assert!(dest.join("skills/n/SKILL.md").exists());
         let installed = read_json(&data.path().join("plugins").join(INSTALLED));
-        assert_eq!(installed["version"], 1);
-        let row = &installed["plugins"]["notes@atelier"];
+        assert_eq!(installed["version"], 2);
+        let row = &installed["plugins"]["notes@atelier"][0];
         assert_eq!(row["version"], "1.2.0");
-        assert_eq!(row["isLocal"], true);
+        assert_eq!(row["scope"], "user");
         assert!(row["installedAt"].is_string() && row["installPath"].is_string());
 
         assert!(
@@ -280,5 +358,81 @@ mod tests {
             json!({"source": "github", "repo": "acme/outils"})
         );
         assert_eq!(source_entry("git@exemple.fr:a/b.git")["source"], "git");
+    }
+}
+
+/// Le registre écrit par Claude Code (forme relevée sur un vrai `~/.claude/plugins`) :
+/// lu sans le modifier, ses plugins de portée `user` repris, ce qu'on écrit ici garde sa
+/// forme.
+#[cfg(test)]
+mod claude_registry {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/claude-installed_plugins.json");
+
+    #[test]
+    fn a_registry_written_by_claude_code_is_read_and_ours_keeps_its_shape() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("cache");
+        for p in [
+            "claude-code-plugins/feature-dev/1.0.0",
+            "claude-code-plugins/frontend-design/1.1.0",
+        ] {
+            std::fs::create_dir_all(cache.join(p).join("skills/s")).unwrap();
+            std::fs::write(
+                cache.join(p).join("skills/s/SKILL.md"),
+                "---\nname: s\ndescription: d\n---\nb\n",
+            )
+            .unwrap();
+        }
+        let registry = home.path().join("installed_plugins.json");
+        let raw = FIXTURE.replace("{CACHE}", &cache.to_string_lossy());
+        std::fs::write(&registry, &raw).unwrap();
+        let data = tempfile::tempdir().unwrap();
+
+        let done = import_claude(data.path(), &registry, None).unwrap();
+        assert_eq!(
+            done,
+            [
+                "feature-dev@claude-code-plugins : repris",
+                "frontend-design@claude-code-plugins : repris",
+                "projet-seul@claude-plugins-official : ignoré (installé pour un projet seulement)",
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&registry).unwrap(),
+            raw,
+            "lu sans modification"
+        );
+        assert!(
+            data.path()
+                .join("plugins/feature-dev/skills/s/SKILL.md")
+                .exists()
+        );
+
+        // Ce qu'on écrit : même version, même forme d'entrée, champs d'origine gardés.
+        let ours = read_json(&data.path().join("plugins").join(INSTALLED));
+        let theirs: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(ours["version"], theirs["version"]);
+        let row = &ours["plugins"]["frontend-design@claude-code-plugins"][0];
+        let orig = &theirs["plugins"]["frontend-design@claude-code-plugins"][0];
+        let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys(row), keys(orig));
+        assert_eq!(row["gitCommitSha"], orig["gitCommitSha"]);
+        assert_eq!(
+            row["installPath"],
+            json!(data.path().join("plugins/frontend-design"))
+        );
+
+        assert_eq!(
+            import_claude(
+                data.path(),
+                &registry,
+                Some("feature-dev@claude-code-plugins")
+            )
+            .unwrap(),
+            ["feature-dev@claude-code-plugins : déjà présent"]
+        );
+        assert!(import_claude(data.path(), &registry, Some("absent@x")).is_err());
     }
 }

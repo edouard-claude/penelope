@@ -209,6 +209,16 @@ impl McpSupervisor {
             .collect();
         parts.sort();
         parts.push(penelope_mcp::plugins::fingerprint(&self.plugins_dir()));
+        // La politique aussi : autoriser un serveur de plugin le démarre sans toucher un
+        // fichier.
+        parts.push(
+            self.services
+                .config
+                .config()
+                .plugins
+                .allowed_mcp_servers
+                .join(","),
+        );
         parts.join("|")
     }
 
