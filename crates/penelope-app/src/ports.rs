@@ -25,6 +25,8 @@ pub trait ProviderSource: Send + Sync {
 /// au lieu du superviseur concret : état, déclarations, cycle de vie, prompts.
 #[async_trait::async_trait]
 pub trait McpAdmin: McpGateway {
+    /// Relit les déclarations si le disque ou la politique des plugins a changé (#393).
+    async fn refresh(&self) {}
     async fn statuses(&self) -> Vec<ServerStatus>;
     /// Déclarations invalides lors du dernier chargement : (fichier, erreur).
     fn invalid(&self) -> Vec<(String, String)>;

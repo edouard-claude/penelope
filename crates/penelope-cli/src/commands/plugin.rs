@@ -22,6 +22,14 @@ pub enum PluginCmd {
     Remove { name: String },
     /// Installe `<plugin>@<marketplace>` depuis une marketplace inscrite.
     Install { spec: String },
+    /// Reprend des plugins installés par Claude Code (son `installed_plugins.json`, lu
+    /// sans le modifier) ; tous ceux de portée `user`, ou un seul `<plugin>@<marketplace>`.
+    Import {
+        /// Le registre de Claude Code ; par défaut `~/.claude/plugins/installed_plugins.json`.
+        #[arg(long)]
+        from: Option<std::path::PathBuf>,
+        spec: Option<String>,
+    },
     /// Marketplaces au format Claude Code (`.claude-plugin/marketplace.json`).
     #[command(subcommand)]
     Marketplace(MarketCmd),
@@ -69,6 +77,23 @@ pub(super) fn run(cli: &Cli, cmd: &PluginCmd) -> CliResult<()> {
                  politique (`penelope plugin show`).",
                 dest.display()
             );
+            return Ok(());
+        }
+        PluginCmd::Import { from, spec } => {
+            let registry = match from {
+                Some(p) => p.clone(),
+                None => std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                    .join(".claude/plugins/installed_plugins.json"),
+            };
+            let done = penelope_app::plugin_market::import_claude(
+                &dirs.data(),
+                &registry,
+                spec.as_deref(),
+            )
+            .map_err(CliError::Usage)?;
+            for line in done {
+                println!("{line}");
+            }
             return Ok(());
         }
         PluginCmd::Marketplace(MarketCmd::Add { source }) => {

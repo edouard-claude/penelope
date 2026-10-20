@@ -42,6 +42,7 @@ impl Rpc {
         match method {
             method::MCP_LIST => {
                 let sup = self.mcp()?;
+                sup.refresh().await;
                 let servers: Vec<Value> = sup
                     .statuses()
                     .await

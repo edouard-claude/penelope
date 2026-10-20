@@ -29,13 +29,16 @@ fn event_of(name: &str) -> Option<(Event, &'static str)> {
     })
 }
 
-/// Les noms d'outils de Claude Code dans un `matcher` ; `None` : tous les outils.
+/// Les noms d'outils de Claude Code dans un `matcher` ; `None` : tous les outils. Un nom
+/// sans équivalent ici est écarté ; un matcher dont aucun nom n'a d'équivalent est refusé
+/// (il ne répondrait à rien, ou à tout si on l'ignorait).
 fn tools_of(matcher: &str) -> Result<Option<String>, String> {
     let m = matcher.trim();
     if m.is_empty() || m == "*" || m == ".*" {
         return Ok(None);
     }
     let mut out: Vec<&str> = Vec::new();
+    let mut unknown: Vec<&str> = Vec::new();
     for t in m.split('|') {
         let ours = match t.trim() {
             "Write" => "fs_write",
@@ -46,11 +49,21 @@ fn tools_of(matcher: &str) -> Result<Option<String>, String> {
             "Glob" | "LS" => "fs_list",
             "WebFetch" => "http_fetch",
             "WebSearch" => "web_search",
-            other => return Err(format!("outil `{other}` du matcher inconnu ici")),
+            "Task" | "Agent" => "sub_agent_spawn",
+            other => {
+                unknown.push(other);
+                continue;
+            }
         };
         if !out.contains(&ours) {
             out.push(ours);
         }
+    }
+    if out.is_empty() {
+        return Err(format!(
+            "aucun outil du matcher n'a d'équivalent ici ({})",
+            unknown.join(", ")
+        ));
     }
     Ok(Some(out.join("|")))
 }
@@ -167,7 +180,15 @@ pub fn load(
                             name: name.clone(),
                             on: event,
                             matcher: Match {
-                                tool: tools_of(group["matcher"].as_str().unwrap_or_default())?,
+                                // Seuls les hooks d'outils filtrent par outil ; ailleurs, le
+                                // matcher de Claude Code dit autre chose (`startup`, `resume`
+                                // pour SessionStart) et ne restreint rien ici.
+                                tool: match event {
+                                    Event::PreTool | Event::PostTool => {
+                                        tools_of(group["matcher"].as_str().unwrap_or_default())?
+                                    }
+                                    _ => None,
+                                },
                                 path: None,
                             },
                             command,
@@ -263,6 +284,28 @@ mod tests {
                 .any(|r| r.starts_with("fmt-pre_tool-1") && r.contains("`fmt/pre_tool`")),
             "{reasons:?}"
         );
+    }
+
+    #[test]
+    fn a_matcher_keeps_what_has_an_equivalent_and_session_start_ignores_it() {
+        assert_eq!(
+            tools_of("NotebookEdit|Write|Edit").unwrap().as_deref(),
+            Some("fs_write|fs_edit")
+        );
+        assert!(tools_of("Skill").is_err());
+        assert_eq!(
+            tools_of("Agent").unwrap().as_deref(),
+            Some("sub_agent_spawn")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        plugin(
+            dir.path(),
+            "s",
+            r#"{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"accueil"}]}]}}"#,
+        );
+        let (ok, refused) = load(dir.path(), &|_, _| true);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert_eq!(ok[0].matcher.tool, None);
     }
 
     #[test]

@@ -1,0 +1,8 @@
+{"type":"outcome","step":1,"input":"rpc : skill.reload","result":{"generation":1,"skills":3}}
+{"type":"outcome","step":2,"input":"rpc : skill.list","result":[{"name":"notes-ranger","version":"1.0.0","scope":"plugin","description":"Ranger les notes du jour"},{"name":"resumer","version":"1.0.0","scope":"plugin","description":"Résumer une note"},{"name":"wiki-markdown","version":"1.1.0","scope":"bundled","description":"Règles d'écriture du vault, un wiki Markdown (propriétés YAML, wikilinks, identifiants de bloc, log.md), à suivre avant toute note écrite ou modifiée à la main."}]}
+{"type":"outcome","step":3,"input":"rpc : hooks.list","result":{"dir":"{{home}}/data/hooks.d","hooks":[{"name":"notes-post_tool-1","on":"post_tool","match":{"tool":"fs_write|fs_edit","path":null},"command":"true","args":[],"timeout_s":120,"sandbox":"workspace-write","on_failure":"continue","deliver":"note"}],"invalid":[],"text":"• notes-post_tool-1 (PostTool) : true "}}
+{"type":"outcome","step":4,"input":"rpc : mcp.list","result":{"servers":[],"invalid":[{"file":"notes-index","error":"serveur du plugin notes non autorisé : ajouter `notes/index` à `plugins.allowed_mcp_servers`"}],"dir":"{{home}}/data/mcp.d"}}
+{"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
+{"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}
+{"type":"event","session":null,"seq":1,"kind":"daemon.recovered","payload":{"effects_unknown":0,"llm_unknown":0,"mcp_orphans_killed":0,"runs_resumed":0,"tool_jobs_lost":0,"turns_requeued":0}}
+{"type":"audit","ok":true,"checked":2,"purged":0}

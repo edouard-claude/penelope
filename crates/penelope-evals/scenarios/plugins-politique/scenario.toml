@@ -1,0 +1,66 @@
+name = "plugins-politique"
+description = """Un plugin au format Claude Code déposé dans `{data}/plugins` (#393) : une skill,
+une commande, un sous-agent, un serveur MCP (`.mcp.json`) et un hook (`hooks/hooks.json`).
+La politique du propriétaire autorise le hook (`plugins.allowed_hooks`) mais pas le
+serveur. Après `skill.reload`, `skill.list` montre la skill et la commande du plugin, `hooks.list` le hook
+traduit en forme exec, `mcp.list` le serveur refusé avec la paire à autoriser : rien de
+ce que le plugin apporte ne s'exécute sans l'accord du propriétaire."""
+
+# Un serveur servi par le connecteur de test : le vrai superviseur MCP tourne, sans
+# processus lancé.
+[[mcp_servers]]
+name = "agenda"
+tools = ["events_today"]
+
+[config]
+"plugins.allowed_hooks" = ["notes/post_tool"]
+
+[[files]]
+root = "plugins"
+path = "notes/.claude-plugin/plugin.json"
+content = '{"name": "notes", "version": "1.0.0", "description": "Prendre des notes"}'
+
+[[files]]
+root = "plugins"
+path = "notes/skills/resumer/SKILL.md"
+content = "---\nname: resumer\ndescription: Résumer une note\n---\nRésume en trois lignes.\n"
+
+[[files]]
+root = "plugins"
+path = "notes/commands/ranger.md"
+content = "---\ndescription: Ranger les notes du jour\n---\nRange les notes de $ARGUMENTS.\n"
+
+[[files]]
+root = "plugins"
+path = "notes/agents/relecteur.md"
+content = "---\nname: relecteur\ndescription: Relit une note\ntools: Read, Grep\n---\nTu relis une note.\n"
+
+[[files]]
+root = "plugins"
+path = "notes/.mcp.json"
+content = '{"mcpServers": {"index": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/index", "args": ["--serve"]}}}'
+
+[[files]]
+root = "plugins"
+path = "notes/hooks/hooks.json"
+content = '{"hooks": {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "true"}]}]}}'
+
+[[steps]]
+kind = "rpc"
+method = "skill.reload"
+params = {}
+
+[[steps]]
+kind = "rpc"
+method = "skill.list"
+params = {}
+
+[[steps]]
+kind = "rpc"
+method = "hooks.list"
+params = {}
+
+[[steps]]
+kind = "rpc"
+method = "mcp.list"
+params = {}

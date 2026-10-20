@@ -5,8 +5,9 @@ use super::*;
 impl McpSupervisor {
     // -------------------------------------------------------------- entretien
 
-    /// Rechargement si `mcp.d` a changé, arrêt des inactifs, santé, reconnexions.
-    pub async fn maintenance(&self) {
+    /// Recharge les déclarations si `mcp.d`, les `.mcp.json` des plugins ou leur politique
+    /// ont changé : `mcp list` dit l'état du disque, pas celui du dernier entretien.
+    pub async fn refresh(&self) {
         let changed = {
             let now = self.dir_fingerprint();
             let g = self.fingerprint.lock().unwrap_or_else(|p| p.into_inner());
@@ -16,6 +17,11 @@ impl McpSupervisor {
             let report = self.reload().await;
             tracing::info!(?report, "mcp.d rechargé");
         }
+    }
+
+    /// Rechargement si `mcp.d` a changé, arrêt des inactifs, santé, reconnexions.
+    pub async fn maintenance(&self) {
+        self.refresh().await;
 
         let now = self.now_ms();
         let cfg = self.services.config.config();
@@ -481,6 +487,10 @@ impl McpSupervisor {
 
 #[async_trait::async_trait]
 impl penelope_app::ports::McpAdmin for McpSupervisor {
+    async fn refresh(&self) {
+        McpSupervisor::refresh(self).await
+    }
+
     async fn statuses(&self) -> Vec<ServerStatus> {
         McpSupervisor::statuses(self).await
     }
