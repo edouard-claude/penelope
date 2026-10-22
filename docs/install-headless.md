@@ -529,6 +529,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `runners.count` | `4` | Tours traités en parallèle. |
 | `runners.lease_ttl` | `"60s"` | Durée du bail d'un tour réclamé ; au-delà, un autre runner le reprend. |
 | `runners.heartbeat` | `"15s"` | Période de renouvellement du bail : au plus la moitié de `lease_ttl`, sinon un tour en cours perd son bail. |
+| `runners.sub_agents_in_child` | `false` | Un sous-agent tourne dans un process enfant (`penelope run --stdio`, #395) : sa panne, sa mémoire ou son blocage ne touchent pas le daemon, qui garde le host MCP et l'arrête sur `/stop`. Faux : dans le daemon, comme avant. |
+| `runners.child_max_rss_mb` | `2048` | Mémoire résidente au-delà de laquelle un enfant est arrêté, en Mio. |
+| `runners.child_max_secs` | `3600` | Durée au-delà de laquelle un enfant est arrêté, en secondes. |
 
 **[sandbox]**
 

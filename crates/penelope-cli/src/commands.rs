@@ -52,7 +52,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 ));
             }
             return penelope_app::child::serve_stdio(std::sync::Arc::new(
-                penelope_app::child::Probe,
+                child::CliChild::default(),
             ))
             .await
             .map_err(CliError::Usage);
@@ -296,6 +296,7 @@ mod approval_stats;
 mod backup_setup;
 #[cfg(test)]
 mod backup_tests;
+mod child;
 mod cli;
 mod console;
 mod dataset;

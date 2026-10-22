@@ -1429,6 +1429,7 @@ name = "penelope-cli"
 version = "1.0.83"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "futures",
@@ -1437,12 +1438,14 @@ dependencies = [
  "penelope-app",
  "penelope-daemon",
  "penelope-evals",
+ "penelope-executor",
  "penelope-gateway-telegram",
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
  "penelope-observe",
  "penelope-ops",
+ "penelope-orchestrator",
  "penelope-platform",
  "penelope-store",
  "penelope-telegram",

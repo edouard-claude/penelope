@@ -261,6 +261,9 @@ unknown = "ask"
 count = 4
 lease_ttl = "60s"
 heartbeat = "15s"
+sub_agents_in_child = false
+child_max_rss_mb = 2048
+child_max_secs = 3600
 
 [sandbox]
 default_profile = "workspace-write"

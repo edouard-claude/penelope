@@ -236,7 +236,10 @@
       "runners": {
         "count": "integer",
         "lease_ttl": "string",
-        "heartbeat": "string"
+        "heartbeat": "string",
+        "sub_agents_in_child": "bool",
+        "child_max_rss_mb": "integer",
+        "child_max_secs": "integer"
       },
       "sandbox": {
         "default_profile": "string",

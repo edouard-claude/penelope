@@ -10,14 +10,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod relay;
 mod serve;
 mod supervisor;
 
-pub use serve::{ChildRun, Probe, serve_stdio};
+pub use relay::{ChildMcp, Relay};
+pub use serve::{ChildCtx, ChildRun, Probe, serve_io, serve_stdio};
 pub use supervisor::{Cause, Limits, Report, supervise};
 
 /// Version du protocole : l'enfant la renvoie dans `ready`, un écart arrête le run.
-pub const PROTOCOL: u32 = 1;
+/// 2 : version du binaire dans `init`, appels MCP relayés au daemon (#395).
+pub const PROTOCOL: u32 = 2;
+
+/// La version du binaire : un enfant d'une autre version refuse le run (il migrerait la
+/// base sous le daemon, ou parlerait un autre schéma).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Ce que le superviseur envoie à l'enfant, une ligne JSON par message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +33,9 @@ pub enum ToChild {
     /// Premier message : le run à faire.
     Init {
         protocol: u32,
+        /// Version du binaire du superviseur ; vide : non contrôlée (essais).
+        #[serde(default)]
+        version: String,
         run_id: String,
         kind: String,
         #[serde(default)]
@@ -34,23 +44,54 @@ pub enum ToChild {
     /// `/stop` : l'enfant s'arrête de lui-même, sinon SIGTERM puis SIGKILL du groupe.
     Interrupt,
     Heartbeat,
+    /// Réponse à un [`FromChild::McpCall`].
+    McpResult {
+        id: u64,
+        #[serde(default)]
+        ok: Option<Value>,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 /// Ce que l'enfant renvoie.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromChild {
-    Ready { protocol: u32, pid: u32 },
-    Progress { text: String },
+    Ready {
+        protocol: u32,
+        pid: u32,
+    },
+    Progress {
+        text: String,
+    },
     Heartbeat,
-    Done { result: Value },
-    Failed { error: String },
+    Done {
+        result: Value,
+    },
+    Failed {
+        error: String,
+    },
+    /// Un appel au host MCP, qui reste dans le daemon : `call_tool`, `tool_policy` ou
+    /// `read_resource`.
+    McpCall {
+        id: u64,
+        op: String,
+        qualified: String,
+        #[serde(default)]
+        args: Value,
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        origin: Option<Value>,
+    },
 }
 
 impl ToChild {
     pub fn init(run_id: impl Into<String>, kind: impl Into<String>, payload: Value) -> ToChild {
         ToChild::Init {
             protocol: PROTOCOL,
+            version: VERSION.into(),
             run_id: run_id.into(),
             kind: kind.into(),
             payload,

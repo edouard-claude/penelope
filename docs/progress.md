@@ -12,6 +12,26 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.84
+
+**Un sous-agent dans un process enfant (#395, lot 2).**
+
+- Avec `runners.sub_agents_in_child = true`, un sous-agent (`sub_agent_spawn`, au premier
+  plan comme en arrière-plan) tourne dans `penelope run --stdio`. L'enfant ouvre la même
+  base et la même configuration et fait tourner la boucle avec ses propres providers.
+  Il relaie au daemon les appels MCP, car le host MCP reste dans le daemon. Il n'a pas
+  de jobs d'arrière-plan (un job lancé là mourrait avec lui).
+- Une panne de l'enfant (signal, mémoire au-delà de `runners.child_max_rss_mb`, durée
+  au-delà de `runners.child_max_secs`) rend un échec lisible au parent, après une seule
+  relance ; elle ne touche jamais le daemon. Chaque fin d'enfant est journalisée
+  (`child.exited`, avec sa cause et sa mémoire maximale). `/stop` l'atteint comme avant.
+- Protocole 2 : la version du binaire part dans `init`, et un enfant d'une autre version
+  (mise à jour en cours) refuse le run plutôt que de migrer la base sous le daemon.
+- Les jetons Codex restent au daemon : l'enfant les lit sans jamais les faire tourner,
+  car la rotation est à usage unique.
+- Désactivé par défaut. Pas encore : la reprise après redémarrage du daemon,
+  l'exécuteur distant.
+
 ### 1.0.83
 
 **Plugins : compatibles avec le registre de Claude Code, et la fin de #393.**

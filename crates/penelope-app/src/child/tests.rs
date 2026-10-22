@@ -9,7 +9,9 @@ fn the_protocol_schema_is_fixed() {
     let init = ToChild::init("r1", "probe", serde_json::json!({"echo": "x"}));
     assert_eq!(
         line(&init),
-        "{\"type\":\"init\",\"protocol\":1,\"run_id\":\"r1\",\"kind\":\"probe\",\"payload\":{\"echo\":\"x\"}}\n"
+        format!(
+            "{{\"type\":\"init\",\"protocol\":2,\"version\":\"{VERSION}\",\"run_id\":\"r1\",\"kind\":\"probe\",\"payload\":{{\"echo\":\"x\"}}}}\n"
+        )
     );
     assert_eq!(line(&ToChild::Interrupt), "{\"type\":\"interrupt\"}\n");
     let done: FromChild = serde_json::from_str(r#"{"type":"done","result":3}"#).unwrap();
@@ -67,7 +69,7 @@ async fn run(script: &str, limits: Limits, cancel: &CancelToken) -> Report {
         .arg("-c")
         .arg(format!("read l; {script}"));
     let init = ToChild::init("r1", "probe", serde_json::Value::Null);
-    supervise(&host, spec, init, &limits, cancel).await
+    supervise(&host, spec, init, &limits, cancel, None).await
 }
 
 fn fast() -> Limits {
@@ -82,7 +84,7 @@ fn fast() -> Limits {
 #[tokio::test]
 async fn a_child_that_answers_gives_its_result_and_progress() {
     let r = run(
-        r#"echo '{"type":"ready","protocol":1,"pid":0}'; echo '{"type":"progress","text":"a"}'; echo '{"type":"done","result":{"ok":true}}'"#,
+        r#"echo '{"type":"ready","protocol":2,"pid":0}'; echo '{"type":"progress","text":"a"}'; echo '{"type":"done","result":{"ok":true}}'"#,
         fast(),
         &CancelToken::new(),
     )
@@ -138,4 +140,84 @@ async fn stop_interrupts_a_child_that_ignores_it() {
     let r = run("sleep 30", fast(), &cancel).await;
     assert_eq!(r.cause, Cause::Interrupted);
     assert!(!process_exists(r.pid));
+}
+
+/// Un appel MCP de l'enfant traverse le protocole, et sa réponse le réveille (#395).
+#[tokio::test]
+async fn an_mcp_call_from_the_child_is_answered_by_the_supervisor() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (mut to_child, child_in) = tokio::io::duplex(64 * 1024);
+    let (child_out, from_child) = tokio::io::duplex(64 * 1024);
+    let serve = tokio::spawn(serve_io(child_in, child_out, std::sync::Arc::new(Probe)));
+    let init = ToChild::init(
+        "r1",
+        "probe",
+        serde_json::json!({"mcp": "notes__chercher", "args": {"q": "x"}}),
+    );
+    to_child.write_all(line(&init).as_bytes()).await.unwrap();
+    let mut lines = BufReader::new(from_child).lines();
+    let ready: FromChild =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert!(matches!(
+        ready,
+        FromChild::Ready {
+            protocol: PROTOCOL,
+            ..
+        }
+    ));
+    let call: FromChild = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let FromChild::McpCall {
+        id,
+        op,
+        qualified,
+        args,
+        ..
+    } = call
+    else {
+        panic!("appel MCP attendu : {call:?}");
+    };
+    assert_eq!(
+        (op.as_str(), qualified.as_str()),
+        ("call_tool", "notes__chercher")
+    );
+    assert_eq!(args["q"], "x");
+    let reply = ToChild::McpResult {
+        id,
+        ok: Some(serde_json::json!({"trouvé": 2})),
+        error: None,
+    };
+    to_child.write_all(line(&reply).as_bytes()).await.unwrap();
+    let done: FromChild = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        done,
+        FromChild::Done {
+            result: serde_json::json!({"mcp": {"trouvé": 2}})
+        }
+    );
+    serve.await.unwrap().unwrap();
+}
+
+/// Un enfant d'une autre version refuse le run : il migrerait la base sous le daemon.
+#[tokio::test]
+async fn a_child_of_another_version_refuses_the_run() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (mut to_child, child_in) = tokio::io::duplex(4096);
+    let (child_out, from_child) = tokio::io::duplex(4096);
+    let serve = tokio::spawn(serve_io(child_in, child_out, std::sync::Arc::new(Probe)));
+    let init = ToChild::Init {
+        protocol: PROTOCOL,
+        version: "0.0.1".into(),
+        run_id: "r1".into(),
+        kind: "probe".into(),
+        payload: serde_json::Value::Null,
+    };
+    to_child.write_all(line(&init).as_bytes()).await.unwrap();
+    let mut lines = BufReader::new(from_child).lines();
+    let failed: FromChild =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert!(
+        matches!(&failed, FromChild::Failed { error } if error.contains("même version")),
+        "{failed:?}"
+    );
+    assert!(serve.await.unwrap().is_err());
 }

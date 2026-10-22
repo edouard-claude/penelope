@@ -2,11 +2,14 @@
 //! ou sur sa mémoire, et rendre la cause de sa fin.
 
 use super::{FromChild, PROTOCOL, ToChild, line};
+use crate::elicitation::Destination;
+use crate::ports::McpGateway;
 use penelope_llm::CancelToken;
 use penelope_platform::process::{ExitInfo, rss_kb};
 use penelope_platform::{ProcessHost, ProcessSpec};
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -97,13 +100,44 @@ impl Report {
     }
 }
 
-/// Lance `spec`, lui envoie `init` et le suit jusqu'à sa fin.
+/// Un appel MCP de l'enfant, servi par le host du daemon.
+async fn serve_mcp(
+    mcp: Option<Arc<dyn McpGateway>>,
+    op: &str,
+    qualified: &str,
+    args: Value,
+    session_id: Option<String>,
+    origin: Option<Value>,
+) -> Result<Value, String> {
+    let Some(mcp) = mcp else {
+        return Err("aucun host MCP dans ce daemon".into());
+    };
+    match op {
+        "call_tool" => {
+            let dest = Destination {
+                session_id,
+                origin: origin.and_then(|o| serde_json::from_value(o).ok()),
+            };
+            mcp.call_tool(qualified, &args, dest).await
+        }
+        "tool_policy" => Ok(serde_json::json!(mcp.tool_policy(qualified).await)),
+        "read_resource" => {
+            mcp.read_resource(qualified, args["uri"].as_str().unwrap_or_default())
+                .await
+        }
+        other => Err(format!("appel MCP inconnu : {other}")),
+    }
+}
+
+/// Lance `spec`, lui envoie `init` et le suit jusqu'à sa fin. `mcp` sert les appels MCP
+/// que l'enfant relaie : le host reste dans le daemon.
 pub async fn supervise(
     host: &dyn ProcessHost,
     spec: ProcessSpec,
     init: ToChild,
     limits: &Limits,
     cancel: &CancelToken,
+    mcp: Option<Arc<dyn McpGateway>>,
 ) -> Report {
     let mut report = Report {
         cause: Cause::Done,
@@ -140,8 +174,16 @@ pub async fn supervise(
     // La cause qui décide l'arrêt ; `None` tant que l'enfant vit.
     let mut stop: Option<(Cause, Duration)> = None;
     let mut finished: Option<Cause> = None;
+    // Les réponses MCP, servies à part : un appel long ne suspend pas la surveillance.
+    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<ToChild>();
     while stop.is_none() && finished.is_none() {
         tokio::select! {
+            Some(reply) = reply_rx.recv() => {
+                if let Some(w) = stdin.as_mut() {
+                    let _ = w.write_all(line(&reply).as_bytes()).await;
+                    let _ = w.flush().await;
+                }
+            }
             next = lines.next_line() => match next {
                 Ok(Some(l)) => match serde_json::from_str::<FromChild>(&l) {
                     Ok(FromChild::Ready { protocol, .. }) if protocol != PROTOCOL => {
@@ -153,6 +195,17 @@ pub async fn supervise(
                         finished = Some(Cause::Done);
                     }
                     Ok(FromChild::Failed { error }) => finished = Some(Cause::Failed { error }),
+                    Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin }) => {
+                        let (mcp, tx) = (mcp.clone(), reply_tx.clone());
+                        tokio::spawn(async move {
+                            let res = serve_mcp(mcp, &op, &qualified, args, session_id, origin).await;
+                            let (ok, error) = match res {
+                                Ok(v) => (Some(v), None),
+                                Err(e) => (None, Some(e)),
+                            };
+                            let _ = tx.send(ToChild::McpResult { id, ok, error });
+                        });
+                    }
                     _ => {}
                 },
                 // Sortie fermée sans résultat : l'enfant est mort.
