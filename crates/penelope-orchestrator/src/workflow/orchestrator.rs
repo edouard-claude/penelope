@@ -208,24 +208,27 @@ impl penelope_executor::executor::Orchestrator for WorkflowOrchestrator {
                     .find(|r| r.session_id == session_id && !r.state.is_terminal())
             })
             .map(|r| r.id);
-        let text = run_sub_agent(
-            &self.context,
-            SubAgentTask {
-                session_id,
-                run_id: run_id.as_deref(),
-                kind: &request.kind,
-                prompt: &request.prompt,
-                model_id: &model_id,
-                tools: &request.tools,
-                workspaces: penelope_executor::executor::default_workspaces(&self.context.services),
-                // Un rôle de lecture a de quoi parcourir un dépôt (#367) ; `budget` l'emporte.
-                limits: crate::workflow::step_agent::role_limits(&request.kind, request.max_calls),
-            },
-            // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un
-            // sous-agent qui s'arrête ne touche pas au parent (issue #57).
-            &cancel.child(),
-        )
-        .await?;
+        let in_child = cfg.runners.sub_agents_in_child;
+        let task = SubAgentTask {
+            session_id,
+            run_id: run_id.as_deref(),
+            kind: &request.kind,
+            prompt: &request.prompt,
+            model_id: &model_id,
+            tools: &request.tools,
+            workspaces: penelope_executor::executor::default_workspaces(&self.context.services),
+            // Un rôle de lecture a de quoi parcourir un dépôt (#367) ; `budget` l'emporte.
+            limits: crate::workflow::step_agent::role_limits(&request.kind, request.max_calls),
+        };
+        // Jeton enfant : `/stop` sur le tour parent arrête le sous-agent, et un sous-agent
+        // qui s'arrête ne touche pas au parent (issue #57). Dans un process enfant (#395),
+        // sa panne ne touche pas non plus le daemon.
+        let cancel = cancel.child();
+        let text = if in_child {
+            crate::workflow::child::spawn_in_child(&self.context, task, &cancel).await?
+        } else {
+            run_sub_agent(&self.context, task, &cancel).await?
+        };
         Ok(json!({"text": text, "model": model_id, "kind": request.kind}))
     }
 

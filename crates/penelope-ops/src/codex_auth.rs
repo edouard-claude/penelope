@@ -632,6 +632,54 @@ impl penelope_llm::TokenSource for DaemonTokens {
     }
 }
 
+/// Source de jetons d'un process enfant (#395) : lit le magasin, ne fait jamais tourner
+/// la rotation. Elle est à usage unique ; deux process qui rafraîchissent ensemble
+/// déconnecteraient le compte. Un jeton à rafraîchir attend que le daemon le fasse.
+pub struct PassiveTokens {
+    services: Arc<Services>,
+}
+
+/// Attente au plus d'un jeton rafraîchi par le daemon.
+const PASSIVE_WAIT: Duration = Duration::from_secs(90);
+
+#[async_trait::async_trait]
+impl penelope_llm::TokenSource for PassiveTokens {
+    async fn token(&self) -> penelope_llm::Result<CodexToken> {
+        let deadline = tokio::time::Instant::now() + PASSIVE_WAIT;
+        loop {
+            let grant = load(&self.services)
+                .map_err(auth_error)?
+                .ok_or_else(|| auth_error(NOT_CONNECTED.into()))?;
+            if let Some(why) = &grant.disconnected {
+                return Err(auth_error(format!("{NOT_CONNECTED} ({why})")));
+            }
+            if !grant.needs_refresh(self.services.clock.now_ms()) {
+                return Ok(grant.token());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(auth_error(
+                    "jeton Codex à rafraîchir : le daemon ne l'a pas fait à temps".into(),
+                ));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    async fn refreshed(&self) -> penelope_llm::Result<CodexToken> {
+        Err(auth_error(
+            "jeton Codex refusé : la rotation reste au daemon, l'appel est rendu".into(),
+        ))
+    }
+}
+
+/// [`access`] pour un process enfant : mêmes jauges et identité, jetons en lecture seule.
+pub async fn access_passive(s: &Arc<Services>) -> Option<penelope_llm::CodexAccess> {
+    let mut a = access(s).await?;
+    a.tokens = Arc::new(PassiveTokens {
+        services: s.clone(),
+    });
+    Some(a)
+}
+
 /// L'accès que le fournisseur reçoit, si un compte est connecté : jetons, identifiant
 /// d'installation, jauges, et l'identité de la machine (#313) que la plateforme lit, le
 /// système et le Codex CLI installé, sondés hors des fils asynchrones.

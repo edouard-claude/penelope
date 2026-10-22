@@ -1,23 +1,25 @@
 //! Côté enfant : lire `init`, faire le run, rendre `done` ou `failed`. Un stdin fermé
 //! (superviseur mort) arrête l'enfant : il ne survit pas orphelin à son daemon.
 
-use super::{FromChild, PROTOCOL, ToChild, line};
+use super::{FromChild, PROTOCOL, Relay, ToChild, VERSION, line};
 use penelope_llm::CancelToken;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
+/// Ce qu'un run reçoit de la boucle : sa progression, son jeton d'arrêt, et le relais
+/// vers le host MCP du daemon.
+pub struct ChildCtx {
+    pub progress: mpsc::UnboundedSender<String>,
+    pub cancel: CancelToken,
+    pub relay: Relay,
+}
+
 /// Un genre de run que l'enfant sait faire.
 #[async_trait::async_trait]
 pub trait ChildRun: Send + Sync {
-    async fn run(
-        &self,
-        kind: &str,
-        payload: Value,
-        progress: mpsc::UnboundedSender<String>,
-        cancel: CancelToken,
-    ) -> Result<Value, String>;
+    async fn run(&self, kind: &str, payload: Value, ctx: ChildCtx) -> Result<Value, String>;
 }
 
 /// Le run d'essai, déterministe et sans réseau, qui sert la suite du protocole :
@@ -26,13 +28,12 @@ pub struct Probe;
 
 #[async_trait::async_trait]
 impl ChildRun for Probe {
-    async fn run(
-        &self,
-        kind: &str,
-        payload: Value,
-        progress: mpsc::UnboundedSender<String>,
-        cancel: CancelToken,
-    ) -> Result<Value, String> {
+    async fn run(&self, kind: &str, payload: Value, ctx: ChildCtx) -> Result<Value, String> {
+        let ChildCtx {
+            progress,
+            cancel,
+            relay,
+        } = ctx;
         if kind != "probe" {
             return Err(format!("genre de run inconnu : {kind}"));
         }
@@ -40,6 +41,13 @@ impl ChildRun for Probe {
             let _ = progress.send(p.as_str().unwrap_or_default().to_string());
         }
         // Mémoire réellement touchée, pour que la RSS monte.
+        // `mcp` : un appel relayé au daemon, son résultat rendu tel quel.
+        if let Some(tool) = payload["mcp"].as_str() {
+            let out = relay
+                .call("call_tool", tool, payload["args"].clone(), None, None)
+                .await?;
+            return Ok(serde_json::json!({ "mcp": out }));
+        }
         let held: Vec<u8> = vec![1u8; (payload["alloc_mb"].as_u64().unwrap_or(0) as usize) << 20];
         if let Some(code) = payload["exit"].as_i64() {
             std::process::exit(code as i32);
@@ -59,22 +67,39 @@ impl ChildRun for Probe {
     }
 }
 
-/// La boucle de l'enfant sur stdin et stdout.
+/// La boucle de l'enfant sur stdin et stdout. Un superviseur parti (stdin fermé) arrête
+/// l'enfant : il ne survit pas orphelin à son daemon.
 pub async fn serve_stdio(runner: Arc<dyn ChildRun>) -> Result<(), String> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    match serve_io(tokio::io::stdin(), tokio::io::stdout(), runner).await {
+        Err(e) if e == GONE => std::process::exit(2),
+        other => other,
+    }
+}
+
+const GONE: &str = "superviseur parti";
+
+/// La boucle de l'enfant sur deux flux quelconques (stdio, ou un tuyau en mémoire pour
+/// les tests).
+pub async fn serve_io<R, W>(input: R, output: W, runner: Arc<dyn ChildRun>) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let mut lines = BufReader::new(input).lines();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<FromChild>();
     let writer = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
+        let mut output = output;
         while let Some(msg) = out_rx.recv().await {
-            if stdout.write_all(line(&msg).as_bytes()).await.is_err() {
+            if output.write_all(line(&msg).as_bytes()).await.is_err() {
                 break;
             }
-            let _ = stdout.flush().await;
+            let _ = output.flush().await;
         }
     });
     let first = lines.next_line().await.map_err(|e| e.to_string())?;
     let Some(Ok(ToChild::Init {
         protocol,
+        version,
         kind,
         payload,
         ..
@@ -82,23 +107,39 @@ pub async fn serve_stdio(runner: Arc<dyn ChildRun>) -> Result<(), String> {
     else {
         return Err("premier message attendu : init".into());
     };
-    if protocol != PROTOCOL {
+    let refused = if protocol != PROTOCOL {
+        Some(format!("protocole {protocol} inconnu (attendu {PROTOCOL})"))
+    } else if !version.is_empty() && version != VERSION {
+        Some(format!(
+            "binaire {VERSION}, superviseur {version} : une mise à jour est en cours, le run \
+             attend la même version"
+        ))
+    } else {
+        None
+    };
+    if let Some(error) = refused {
         let _ = out_tx.send(FromChild::Failed {
-            error: format!("protocole {protocol} inconnu (attendu {PROTOCOL})"),
+            error: error.clone(),
         });
         drop(out_tx);
         let _ = writer.await;
-        return Err("protocole incompatible".into());
+        return Err(error);
     }
     let _ = out_tx.send(FromChild::Ready {
         protocol: PROTOCOL,
         pid: std::process::id(),
     });
     let cancel = CancelToken::new();
+    let relay = Relay::new(out_tx.clone());
     let (prog_tx, mut prog_rx) = mpsc::unbounded_channel::<String>();
     let run = {
-        let (runner, cancel) = (runner.clone(), cancel.clone());
-        tokio::spawn(async move { runner.run(&kind, payload, prog_tx, cancel).await })
+        let ctx = ChildCtx {
+            progress: prog_tx,
+            cancel: cancel.clone(),
+            relay: relay.clone(),
+        };
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(&kind, payload, ctx).await })
     };
     tokio::pin!(run);
     let outcome = loop {
@@ -109,10 +150,14 @@ pub async fn serve_stdio(runner: Arc<dyn ChildRun>) -> Result<(), String> {
                 Ok(Some(l)) => match serde_json::from_str::<ToChild>(&l) {
                     Ok(ToChild::Interrupt) => cancel.cancel(),
                     Ok(ToChild::Heartbeat) => { let _ = out_tx.send(FromChild::Heartbeat); }
+                    Ok(ToChild::McpResult { id, ok, error }) => relay.resolve(id, ok, error),
                     _ => {}
                 },
                 // Superviseur parti : rien à rendre à personne.
-                _ => std::process::exit(2),
+                _ => {
+                    cancel.cancel();
+                    return Err(GONE.into());
+                }
             },
         }
     };
@@ -124,6 +169,7 @@ pub async fn serve_stdio(runner: Arc<dyn ChildRun>) -> Result<(), String> {
         Err(error) => FromChild::Failed { error },
     });
     drop(out_tx);
+    drop(relay);
     let _ = writer.await;
     Ok(())
 }

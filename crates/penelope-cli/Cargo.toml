@@ -41,6 +41,14 @@ penelope-evals.workspace = true
 # La règle « toujours » qui ne crée pas de règle (`always_creates_no_rule`), lue par
 # `approvals stats` depuis la boucle d'agent (T30 : plus par le daemon).
 penelope-agent.workspace = true
+# `penelope run --stdio` (#395) fait tourner un sous-agent : la boucle de l'orchestrateur
+# et l'exécuteur des outils, montés dans l'enfant.
+penelope-orchestrator.workspace = true
+penelope-executor.workspace = true
+async-trait.workspace = true
+# Les providers de l'enfant (`penelope run --stdio`) ; aussi le fournisseur simulé des
+# tests (tests/logs_turn.rs, #206).
+penelope-llm.workspace = true
 # Le jeu de décisions du juge (`penelope dataset export`, #233) : la lecture des
 # échantillons vit à côté de leur écriture, dans le crate des approbations.
 penelope-hitl.workspace = true
@@ -54,6 +62,3 @@ penelope-app.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Fournisseur simulé : un vrai tour du daemon écrit les lignes que `logs --turn` relit
-# (tests/logs_turn.rs, #206).
-penelope-llm.workspace = true

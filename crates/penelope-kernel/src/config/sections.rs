@@ -444,6 +444,14 @@ pub struct Runners {
     /// Période de renouvellement du bail : au plus la moitié de `lease_ttl`, sinon un tour
     /// en cours perd son bail.
     pub heartbeat: String,
+    /// Un sous-agent tourne dans un process enfant (`penelope run --stdio`, #395) : sa
+    /// panne, sa mémoire ou son blocage ne touchent pas le daemon, qui garde le host MCP
+    /// et l'arrête sur `/stop`. Faux : dans le daemon, comme avant.
+    pub sub_agents_in_child: bool,
+    /// Mémoire résidente au-delà de laquelle un enfant est arrêté, en Mio.
+    pub child_max_rss_mb: u64,
+    /// Durée au-delà de laquelle un enfant est arrêté, en secondes.
+    pub child_max_secs: u64,
 }
 
 impl Default for Runners {
@@ -452,6 +460,9 @@ impl Default for Runners {
             count: 4,
             lease_ttl: "60s".into(),
             heartbeat: "15s".into(),
+            sub_agents_in_child: false,
+            child_max_rss_mb: 2048,
+            child_max_secs: 3600,
         }
     }
 }
