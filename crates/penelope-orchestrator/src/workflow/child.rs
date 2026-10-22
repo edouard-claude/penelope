@@ -117,9 +117,16 @@ async fn launch(
         .arg("--max-secs")
         .arg(s.config.config().runners.child_max_secs.max(10).to_string());
     spec.stdin = false;
-    // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant.
-    if let Ok(home) = std::env::var("PENELOPE_HOME") {
-        spec = spec.env("PENELOPE_HOME", home);
+    // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant, et la clé
+    // du magasin de secrets chiffré (Linux, ou macOS sans Trousseau) aussi.
+    for k in [
+        "PENELOPE_HOME",
+        "PENELOPE_MASTER_KEY_FILE",
+        "PENELOPE_PASSPHRASE",
+    ] {
+        if let Ok(v) = std::env::var(k) {
+            spec = spec.env(k, v);
+        }
     }
     use penelope_platform::ProcessHost;
     let child = s
@@ -185,31 +192,7 @@ pub async fn spawn_in_child(
     cancel: &CancelToken,
 ) -> Result<String, String> {
     let s = &cx.services;
-<<<<<<< HEAD
     let limits = limits_of(cx);
-=======
-    let cfg = s.config.config();
-    let exe = penelope_app::helpers::running_binary()?;
-    let mut spec = penelope_platform::ProcessSpec::new(exe.to_string_lossy().to_string())
-        .arg("run")
-        .arg("--stdio");
-    // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant, et la clé
-    // du magasin de secrets chiffré (Linux, ou macOS sans Trousseau) aussi.
-    for k in [
-        "PENELOPE_HOME",
-        "PENELOPE_MASTER_KEY_FILE",
-        "PENELOPE_PASSPHRASE",
-    ] {
-        if let Ok(v) = std::env::var(k) {
-            spec = spec.env(k, v);
-        }
-    }
-    let limits = Limits {
-        max_rss_kb: Some(cfg.runners.child_max_rss_mb.max(64) * 1024),
-        max_duration: Duration::from_secs(cfg.runners.child_max_secs.max(10)),
-        ..Limits::default()
-    };
->>>>>>> i395b
     let job = SubAgentJob::of(&task);
     let payload = serde_json::to_value(&job).map_err(|e| e.to_string())?;
     let extra = json!({"model": job.model_id, "kind": job.kind});
