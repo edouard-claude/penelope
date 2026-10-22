@@ -265,7 +265,8 @@ async fn a_sub_agent_child_outlives_its_daemon_and_is_reattached() {
         .arg("run")
         .arg("--socket")
         .arg(sock.to_str().unwrap())
-        .env("PENELOPE_HOME", home.path().to_str().unwrap());
+        .env("PENELOPE_HOME", home.path().to_str().unwrap())
+        .env("PENELOPE_PASSPHRASE", "phrase-d-essai");
     spec.stdin = false;
     let host = UnixProcessHost::new(home.path().join("pids"));
     let child = host.spawn(spec, None).await.unwrap();
