@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+/// Les appels en attente : qui attend, et la trame à renvoyer si la connexion change.
+type Pending = Arc<Mutex<HashMap<u64, (oneshot::Sender<Result<Value, String>>, FromChild)>>>;
 
 /// Le canal vers le superviseur, et les appels en attente de réponse.
 #[derive(Clone)]
@@ -40,19 +41,20 @@ impl Relay {
     ) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
+        let frame = FromChild::McpCall {
+            id,
+            op: op.into(),
+            qualified: qualified.into(),
+            args,
+            session_id,
+            origin,
+        };
         self.pending
             .lock()
             .map_err(|_| "relais MCP indisponible".to_string())?
-            .insert(id, tx);
+            .insert(id, (tx, frame.clone()));
         self.out
-            .send(FromChild::McpCall {
-                id,
-                op: op.into(),
-                qualified: qualified.into(),
-                args,
-                session_id,
-                origin,
-            })
+            .send(frame)
             .map_err(|_| "superviseur parti".to_string())?;
         rx.await.map_err(|_| "superviseur parti".to_string())?
     }
@@ -60,12 +62,26 @@ impl Relay {
     /// Une réponse du superviseur : l'appel qui l'attend reprend.
     pub(super) fn resolve(&self, id: u64, ok: Option<Value>, error: Option<String>) {
         let waiter = self.pending.lock().ok().and_then(|mut p| p.remove(&id));
-        if let Some(tx) = waiter {
+        if let Some((tx, _)) = waiter {
             let _ = tx.send(match error {
                 Some(e) => Err(e),
                 None => Ok(ok.unwrap_or(Value::Null)),
             });
         }
+    }
+}
+
+impl Relay {
+    /// Les appels sans réponse, à renvoyer au superviseur qui se rattache : celui d'avant a
+    /// pu mourir sans les lire.
+    pub(super) fn pending_frames(&self) -> Vec<FromChild> {
+        let mut frames: Vec<(u64, FromChild)> = self
+            .pending
+            .lock()
+            .map(|p| p.iter().map(|(id, (_, f))| (*id, f.clone())).collect())
+            .unwrap_or_default();
+        frames.sort_by_key(|(id, _)| *id);
+        frames.into_iter().map(|(_, f)| f).collect()
     }
 }
 

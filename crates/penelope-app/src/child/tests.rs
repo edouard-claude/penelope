@@ -221,3 +221,91 @@ async fn a_child_of_another_version_refuses_the_run() {
     );
     assert!(serve.await.unwrap().is_err());
 }
+
+/// #395, reprise : le superviseur meurt en plein run (redémarrage du daemon), l'enfant
+/// continue ; un second superviseur se rattache par `resume` et reçoit le résultat, y
+/// compris l'appel MCP resté sans réponse, renvoyé.
+#[tokio::test]
+async fn a_child_survives_its_supervisor_and_a_new_one_reattaches() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("c1.sock");
+    let serving = {
+        let sock = sock.clone();
+        tokio::spawn(
+            async move { serve_socket(&sock, Arc::new(Probe), Duration::from_secs(30)).await },
+        )
+    };
+    let limits = fast();
+    let pid = std::process::id();
+    // Premier superviseur : son host MCP ne répond jamais, il part pendant l'appel.
+    struct Stuck;
+    #[async_trait::async_trait]
+    impl crate::ports::McpGateway for Stuck {
+        async fn call_tool(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+            _: crate::elicitation::Destination,
+        ) -> Result<serde_json::Value, String> {
+            std::future::pending().await
+        }
+        async fn server_lines(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+    let first = {
+        let sock = sock.clone();
+        let limits = limits.clone();
+        tokio::spawn(async move {
+            let init = ToChild::init("r1", "probe", serde_json::json!({"mcp": "notes__chercher"}));
+            supervise_socket(
+                pid,
+                &sock,
+                init,
+                &limits,
+                &CancelToken::new(),
+                Some(Arc::new(Stuck)),
+                Instant::now(),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    first.abort();
+    // Second superviseur, avec un host MCP cette fois.
+    struct Fake;
+    #[async_trait::async_trait]
+    impl crate::ports::McpGateway for Fake {
+        async fn call_tool(
+            &self,
+            q: &str,
+            _: &serde_json::Value,
+            _: crate::elicitation::Destination,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({"servi": q}))
+        }
+        async fn server_lines(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+    let r = supervise_socket(
+        pid,
+        &sock,
+        ToChild::Resume,
+        &limits,
+        &CancelToken::new(),
+        Some(Arc::new(Fake)),
+        Instant::now(),
+    )
+    .await;
+    assert_eq!(r.cause, Cause::Done, "{r:?}");
+    assert_eq!(
+        r.result,
+        Some(serde_json::json!({"mcp": {"servi": "notes__chercher"}}))
+    );
+    serving.await.unwrap().unwrap();
+    // Le résultat reste lisible après la fin, pour un daemon qui reviendrait plus tard.
+    assert!(matches!(read_result(&sock), Some(FromChild::Done { .. })));
+}

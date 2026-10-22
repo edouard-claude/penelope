@@ -101,7 +101,7 @@ impl Report {
 }
 
 /// Un appel MCP de l'enfant, servi par le host du daemon.
-async fn serve_mcp(
+pub(super) async fn serve_mcp(
     mcp: Option<Arc<dyn McpGateway>>,
     op: &str,
     qualified: &str,

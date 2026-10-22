@@ -71,11 +71,17 @@ pub struct NewJob {
 pub struct JobStore {
     store: Store,
     clock: SharedClock,
+    /// Dossier d'état, où vivent les fiches des enfants (#395) ; absent en test.
+    state: Option<std::path::PathBuf>,
 }
 
 impl JobStore {
     pub fn new(store: Store, clock: SharedClock) -> Self {
-        JobStore { store, clock }
+        JobStore {
+            store,
+            clock,
+            state: None,
+        }
     }
 
     pub async fn create(&self, new: NewJob) -> anyhow::Result<ToolJob> {
@@ -264,11 +270,32 @@ impl JobStore {
     /// le job est mort, pour qu'il cesse de l'attendre et propose la reprise lui-même.
     pub async fn recover_on_boot(&self) -> anyhow::Result<Vec<ToolJob>> {
         let ts = self.clock.now_rfc3339();
+        // Un job servi par un enfant encore vivant, ou fini avec un résultat écrit, reste
+        // ouvert : l'orchestrateur s'y rattache (#395).
+        let keep: Vec<String> = self
+            .state
+            .as_deref()
+            .map(penelope_app::child::registry::live_jobs)
+            .unwrap_or_default();
+        let keep_sql = keep
+            .iter()
+            .filter(|id| {
+                id.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            })
+            .map(|id| format!("'{id}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let live = if keep_sql.is_empty() {
+            LIVE.to_string()
+        } else {
+            format!("{LIVE} AND id NOT IN ({keep_sql})")
+        };
         Ok(self
             .store
             .write(move |tx| {
                 let lost: Vec<ToolJob> = {
-                    let mut st = tx.prepare(&format!("{SELECT} WHERE {LIVE}"))?;
+                    let mut st = tx.prepare(&format!("{SELECT} WHERE {live}"))?;
                     let rows = st.query_map([], row_to_job)?;
                     let mut v = Vec::new();
                     for r in rows {
@@ -280,14 +307,14 @@ impl JobStore {
                     &format!(
                         "UPDATE effects SET state = 'failed', error = ?1, updated_at = ?2
                          WHERE state = 'dispatching'
-                           AND id IN (SELECT effect_id FROM tool_jobs WHERE {LIVE})"
+                           AND id IN (SELECT effect_id FROM tool_jobs WHERE {live})"
                     ),
                     params![LOST_ON_BOOT, ts],
                 )?;
                 tx.execute(
                     &format!(
                         "UPDATE tool_jobs SET state = 'failed', result = ?1, updated_at = ?2
-                         WHERE {LIVE}"
+                         WHERE {live}"
                     ),
                     params![json!({"error": LOST_ON_BOOT}).to_string(), ts],
                 )?;
@@ -303,7 +330,10 @@ pub const LOST_ON_BOOT: &str =
 
 /// Le magasin de jobs des services.
 pub fn store(s: &Services) -> JobStore {
-    JobStore::new(s.store.clone(), s.clock.clone())
+    JobStore {
+        state: Some(s.platform.dirs.state()),
+        ..JobStore::new(s.store.clone(), s.clock.clone())
+    }
 }
 
 /// Outils qui savent rendre la main : les deux que le ticket nomme, et eux seuls. Un

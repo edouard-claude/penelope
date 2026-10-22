@@ -12,6 +12,24 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.85
+
+**Un sous-agent survit au redémarrage du daemon (#395, lot 3).**
+
+- L'enfant d'un sous-agent écoute sur son propre socket Unix
+  (`{state}/children/<id>.sock`, en `0600`) au lieu de stdio. Si le daemon redémarre,
+  par une mise à jour par exemple, l'enfant continue. Au démarrage, le daemon retrouve sa
+  fiche (`{state}/children/<id>.json`), se rattache par `resume`, et l'enfant lui renvoie
+  les appels MCP restés sans réponse. Le job d'arrière-plan qu'il sert reste ouvert à la
+  reprise des jobs, puis il est conclu comme si rien ne s'était passé.
+- Un enfant qui a fini pendant le redémarrage a écrit son résultat à côté de son socket,
+  et le daemon le lit là. S'il est mort sans résultat, son job échoue en le disant. Un
+  enfant sans job (sous-agent au premier plan, dont le tour est rejoué) est arrêté.
+- Une durée maximale borne l'enfant même sans superviseur.
+- Toujours derrière `runners.sub_agents_in_child`. Un appel MCP que le daemon avait
+  exécuté sans avoir pu répondre avant de tomber est rejoué : à garder en tête pour un
+  outil MCP qui écrit. Pas encore : l'exécuteur distant.
+
 ### 1.0.84
 
 **Un sous-agent dans un process enfant (#395, lot 2).**

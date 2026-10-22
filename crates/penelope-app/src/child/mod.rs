@@ -10,12 +10,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod registry;
 mod relay;
 mod serve;
+mod socket;
 mod supervisor;
 
 pub use relay::{ChildMcp, Relay};
 pub use serve::{ChildCtx, ChildRun, Probe, serve_io, serve_stdio};
+pub use socket::{read_result, result_path, serve_socket, supervise_socket};
 pub use supervisor::{Cause, Limits, Report, supervise};
 
 /// Version du protocole : l'enfant la renvoie dans `ready`, un écart arrête le run.
@@ -41,6 +44,9 @@ pub enum ToChild {
         #[serde(default)]
         payload: Value,
     },
+    /// Un superviseur se rattache à un enfant déjà lancé (redémarrage du daemon) : pas de
+    /// nouvel `init`, l'enfant renvoie ce qui attend une réponse.
+    Resume,
     /// `/stop` : l'enfant s'arrête de lui-même, sinon SIGTERM puis SIGKILL du groupe.
     Interrupt,
     Heartbeat,

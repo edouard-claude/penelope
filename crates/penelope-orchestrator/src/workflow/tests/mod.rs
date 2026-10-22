@@ -58,6 +58,7 @@ fn owner() -> Origin {
     }
 }
 
+mod children;
 mod control;
 mod credits;
 mod delivery;

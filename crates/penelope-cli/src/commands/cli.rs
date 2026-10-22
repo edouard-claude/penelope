@@ -46,6 +46,12 @@ pub enum Command {
     Run {
         #[arg(long)]
         stdio: bool,
+        /// Écoute sur ce socket Unix au lieu de stdio : l'enfant survit au daemon.
+        #[arg(long)]
+        socket: Option<std::path::PathBuf>,
+        /// Durée maximale du run, en secondes, même sans superviseur.
+        #[arg(long, default_value_t = 3600)]
+        max_secs: u64,
     },
     /// Journaux du daemon (JSON du jour et de la veille), filtrés par tour ou par session.
     Logs {
