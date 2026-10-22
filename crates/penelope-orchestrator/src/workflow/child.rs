@@ -107,9 +107,16 @@ pub async fn spawn_in_child(
     let mut spec = penelope_platform::ProcessSpec::new(exe.to_string_lossy().to_string())
         .arg("run")
         .arg("--stdio");
-    // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant.
-    if let Ok(home) = std::env::var("PENELOPE_HOME") {
-        spec = spec.env("PENELOPE_HOME", home);
+    // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant, et la clé
+    // du magasin de secrets chiffré (Linux, ou macOS sans Trousseau) aussi.
+    for k in [
+        "PENELOPE_HOME",
+        "PENELOPE_MASTER_KEY_FILE",
+        "PENELOPE_PASSPHRASE",
+    ] {
+        if let Ok(v) = std::env::var(k) {
+            spec = spec.env(k, v);
+        }
     }
     let limits = Limits {
         max_rss_kb: Some(cfg.runners.child_max_rss_mb.max(64) * 1024),
