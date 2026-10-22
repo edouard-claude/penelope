@@ -12,6 +12,7 @@ use serde_json::Value;
 
 pub mod registry;
 mod relay;
+pub mod remote;
 mod serve;
 mod socket;
 mod supervisor;

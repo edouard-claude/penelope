@@ -21,9 +21,13 @@ impl NativeToolExecutor {
         &self,
         name: &str,
         args: &Value,
-        _cancel: &penelope_llm::CancelToken,
+        cancel: &penelope_llm::CancelToken,
     ) -> ToolResult<ToolOutcome> {
         let s = &self.services;
+        // Une mission `--host` (#395) : les fichiers sont ceux de l'hôte.
+        if let Some((host, root)) = self.mission_host().await {
+            return self.remote_fs(&host, &root, name, args, cancel).await;
+        }
 
         let v = match name {
             "fs_read" => {
@@ -220,7 +224,13 @@ impl NativeToolExecutor {
         match name {
             "shell_exec" => {
                 let command = str_arg(args, "command")?;
-                let cwd = self.cwd_arg(args)?;
+                // Une mission `--host` (#395) : la commande tourne sur l'hôte, son `cwd`
+                // y est résolu ; ici, seulement le profil et le traitement de la sortie.
+                let remote = self.mission_host().await;
+                let cwd = match &remote {
+                    Some((_, root)) => PathBuf::from(root),
+                    None => self.cwd_arg(args)?,
+                };
                 let default_timeout =
                     penelope_kernel::config::parse_duration(&cfg.tools.shell_timeout)
                         .unwrap_or(std::time::Duration::from_secs(120));
@@ -281,23 +291,28 @@ impl NativeToolExecutor {
                 } else {
                     command.clone()
                 };
-                let out = penelope_tools::shell::exec(
-                    &s.platform.processes,
-                    &run,
-                    penelope_tools::shell::ExecOptions {
-                        profile: Some(&profile),
-                        cwd: Some(&cwd),
-                        timeout,
-                        max_output_bytes: cfg.tools.max_output_bytes,
-                        shell,
-                        cancel: Some(cancel),
-                        env,
-                        // La sortie d'un job se suit en direct, sauf si un secret collé
-                        // y passe : il ne doit jamais atterrir en clair sur le disque.
-                        tee: crate::jobs::live::current().filter(|_| masked.is_empty()),
-                    },
-                )
-                .await;
+                let out = if let Some(target) = &remote {
+                    self.remote_shell(target, args, &run, env, timeout, cancel)
+                        .await
+                } else {
+                    penelope_tools::shell::exec(
+                        &s.platform.processes,
+                        &run,
+                        penelope_tools::shell::ExecOptions {
+                            profile: Some(&profile),
+                            cwd: Some(&cwd),
+                            timeout,
+                            max_output_bytes: cfg.tools.max_output_bytes,
+                            shell,
+                            cancel: Some(cancel),
+                            env,
+                            // La sortie d'un job se suit en direct, sauf si un secret collé
+                            // y passe : il ne doit jamais atterrir en clair sur le disque.
+                            tee: crate::jobs::live::current().filter(|_| masked.is_empty()),
+                        },
+                    )
+                    .await
+                };
                 if let Some(log) = crate::jobs::live::current() {
                     crate::jobs::live::mark_done(&log);
                 }

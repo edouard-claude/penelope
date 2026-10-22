@@ -264,6 +264,9 @@ heartbeat = "15s"
 sub_agents_in_child = false
 child_max_rss_mb = 2048
 child_max_secs = 3600
+remote_binary = "penelope"
+remote_full_for = []
+local_executor = ""
 
 [sandbox]
 default_profile = "workspace-write"

@@ -14,7 +14,8 @@ La charte et les spécifications sont dans `design/v1/`.
 
 ### 1.0.85
 
-**Un sous-agent survit au redémarrage du daemon (#395, lot 3).**
+**Un sous-agent survit au redémarrage du daemon, et une mission travaille sur un hôte
+distant (#395, lots 3 et 4).**
 
 - L'enfant d'un sous-agent écoute sur son propre socket Unix
   (`{state}/children/<id>.sock`, en `0600`) au lieu de stdio. Si le daemon redémarre,
@@ -30,7 +31,23 @@ La charte et les spécifications sont dans `design/v1/`.
   rejoué à l'aveugle : il revient au sous-agent en erreur (« a pu être exécuté, vérifie »).
   Une lecture (politique, ressource) est rejouée. `/stop` et `job_cancel` atteignent
   l'enfant rattaché.
-- Toujours derrière `runners.sub_agents_in_child`. Pas encore : l'exécuteur distant.
+- Toujours derrière `runners.sub_agents_in_child`.
+- **Mission sur un hôte distant.** `/mission <objectif> --host <connexion> --cwd
+  /chemin/sur/l/hote` (ou `penelope mission start --host`) : fichiers, `shell_exec` et
+  `--check` tournent sur l'hôte. Le modèle, la mémoire, la politique, l'approbation et le
+  canal restent ici. Chaque appel part par `ssh` sur un canal exec, sans transfert de
+  port, d'agent ni de X11 (`RemoteCommand=none`, `BatchMode=yes`), vers
+  `penelope run --stdio` sur l'hôte. Aucun port n'est ouvert. Sur l'hôte, le chemin est
+  résolu dans la racine de la mission, rien n'en sort, et les motifs masqués
+  s'appliquent. Le vault n'y va pas.
+- La connexion est un nom de `~/.ssh/config`, jamais une option.
+  `runners.remote_binary` donne le binaire de l'hôte, qui doit avoir la même version.
+  Un hôte Linux n'a pas de bac à sable : son shell est refusé tant que l'hôte n'est pas
+  déclaré dans `runners.remote_full_for`. `@local` désigne cette machine, par le même
+  protocole.
+- La release publie un binaire Linux statique (`penelope-<version>-linux-x86_64.tar.gz`)
+  pour l'hôte. Pas encore : les serveurs MCP stdio d'une mission sur l'hôte, le worktree
+  et le `--hook` à distance.
 
 ### 1.0.84
 

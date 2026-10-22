@@ -417,6 +417,10 @@ pub enum MissionCmd {
         /// Travailler dans un worktree git à soi, sur une branche `penelope/mission-…`.
         #[arg(long)]
         worktree: bool,
+        /// Travailler sur un hôte distant (une connexion de ~/.ssh/config) : fichiers,
+        /// shell et vérification y tournent ; `--cwd` est un chemin absolu de l'hôte.
+        #[arg(long)]
+        host: Option<String>,
         /// Commande relancée après chaque édition de fichier, `{file}` pour le fichier.
         #[arg(long)]
         hook: Option<String>,

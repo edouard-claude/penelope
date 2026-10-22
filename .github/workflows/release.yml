@@ -132,9 +132,54 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Le binaire de l'hôte distant d'une mission `--host` (#395) : statique (musl), il
+  # tourne sur toute distribution Linux x86_64. Un échec ici ne bloque pas la release
+  # macOS : l'archive Linux manque, la release part sans elle.
+  construire-linux:
+    name: Construire (x86_64-unknown-linux-musl)
+    needs: verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Chaîne d'outils
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          rustc --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: release-linux-musl-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Construire
+        env:
+          PENELOPE_MINISIGN_PUBKEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --locked -p penelope-cli --target x86_64-unknown-linux-musl
+
+      - name: Vérifier que le binaire répond
+        run: ./target/x86_64-unknown-linux-musl/release/penelope --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: penelope-x86_64-unknown-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/penelope
+          retention-days: 1
+          if-no-files-found: error
+
   publier:
     name: Publier la release
-    needs: construire
+    needs: [construire, construire-linux]
+    if: ${{ !cancelled() && needs.construire.result == 'success' }}
     runs-on: macos-14
     timeout-minutes: 15
     steps:
@@ -166,6 +211,15 @@ jobs:
             chmod +x "${src}/penelope"
             tar -czf "dist/penelope-${VERSION}-macos-${arch}.tar.gz" -C "$src" penelope
           done
+
+          # L'hôte Linux d'une mission `--host` (#395), s'il a été construit.
+          linux="binaires/penelope-x86_64-unknown-linux-musl"
+          if [ -f "${linux}/penelope" ]; then
+            chmod +x "${linux}/penelope"
+            tar -czf "dist/penelope-${VERSION}-linux-x86_64.tar.gz" -C "$linux" penelope
+          else
+            echo "::warning::pas de binaire Linux pour cette release"
+          fi
 
           # Rapport du banc d'essai de la mémoire, hors sommes : ce n'est pas un binaire.
           cp binaires/rapport-memoire/banc-memoire.md dist/banc-memoire.md
