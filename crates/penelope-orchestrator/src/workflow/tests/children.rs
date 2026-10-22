@@ -62,7 +62,7 @@ async fn a_child_that_finished_during_the_restart_concludes_its_job() {
     std::fs::write(penelope_app::child::result_path(&sock), line(&done)).unwrap();
     assert_eq!(
         penelope_app::child::registry::live_jobs(&e.d.services.platform.dirs.state()),
-        [job.clone()],
+        std::slice::from_ref(&job),
         "la reprise des jobs le laisse ouvert"
     );
     crate::workflow::child::reattach_all(&e.d).await;
