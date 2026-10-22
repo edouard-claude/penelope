@@ -41,6 +41,25 @@ pub struct ToolRequest {
     /// Variables d'environnement de la commande (secrets collés, `TERM`).
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// Lectures refusées (`sandbox.deny_read`) : `~/…` est développé sur l'hôte, une entrée
+    /// qui nomme un dossier de Pénélope (`{data}`…) ne vaut que sur sa machine.
+    #[serde(default)]
+    pub deny_read: Vec<String>,
+}
+
+/// Les lectures refusées, en chemins de cet hôte.
+fn denied(req: &ToolRequest) -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    req.deny_read
+        .iter()
+        .filter(|d| !d.contains('{'))
+        .map(|d| match d.strip_prefix("~/") {
+            Some(rest) if !home.is_empty() => Path::new(&home).join(rest),
+            _ => PathBuf::from(d),
+        })
+        .filter(|p| p.is_absolute())
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .collect()
 }
 
 fn str_arg<'a>(args: &'a Value, k: &str) -> ToolResult<&'a str> {
@@ -64,6 +83,12 @@ fn resolve(req: &ToolRequest, raw: &str) -> ToolResult<PathBuf> {
         ));
     }
     let p = crate::fs::resolve_in(raw, std::slice::from_ref(&req.root), None)?;
+    if let Some(d) = denied(req).into_iter().find(|d| p.starts_with(d)) {
+        return Err(ToolError::Denied(format!(
+            "`{raw}` est sous une lecture refusée (`sandbox.deny_read` : {})",
+            d.display()
+        )));
+    }
     if let Some(pattern) = crate::hide::hidden(&p, std::slice::from_ref(&req.root), &req.hide) {
         return Err(ToolError::Denied(format!(
             "`{raw}` est masqué (`sandbox.hide` : `{pattern}`)"
@@ -127,8 +152,12 @@ pub async fn run(
                 Some(c) if !c.is_empty() => resolve(req, c)?,
                 _ => req.root.clone(),
             };
-            let mut profile =
-                crate::shell::profile_with_denied_reads(&req.profile, &cwd, req.network, &[]);
+            let mut profile = crate::shell::profile_with_denied_reads(
+                &req.profile,
+                &cwd,
+                req.network,
+                &denied(req),
+            );
             profile.hide = crate::hide::regexes(std::slice::from_ref(&req.root), &req.hide);
             let full = req.profile == "full";
             let out = crate::shell::exec(
@@ -178,6 +207,7 @@ mod tests {
             timeout_ms: 10_000,
             max_output_bytes: 64 * 1024,
             env: Vec::new(),
+            deny_read: Vec::new(),
         }
     }
 
@@ -259,5 +289,21 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn a_denied_read_is_denied_on_the_host_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let host = penelope_platform::UnixProcessHost::new(root.join(".pids"));
+        std::fs::create_dir_all(root.join("cles")).unwrap();
+        std::fs::write(root.join("cles/a"), "x").unwrap();
+        let mut r = req(&root, "fs_read", serde_json::json!({"path": "cles/a"}));
+        r.deny_read = vec![
+            root.join("cles").to_string_lossy().to_string(),
+            "{data}/penelope.db".into(),
+        ];
+        let e = run(&host, &r, &CancelToken::new()).await.unwrap_err();
+        assert!(e.to_string().contains("lecture refusée"), "{e}");
     }
 }

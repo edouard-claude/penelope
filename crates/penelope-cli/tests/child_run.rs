@@ -231,7 +231,9 @@ async fn a_real_sub_agent_runs_in_the_child_process() {
     let spec = ProcessSpec::new(env!("CARGO_BIN_EXE_penelope"))
         .arg("run")
         .arg("--stdio")
-        .env("PENELOPE_HOME", home.path().to_str().unwrap());
+        .env("PENELOPE_HOME", home.path().to_str().unwrap())
+        // Sous Linux, le magasin de secrets est un fichier chiffré : sa phrase de passe.
+        .env("PENELOPE_PASSPHRASE", "phrase-d-essai");
     let r = supervise(
         &host,
         spec,

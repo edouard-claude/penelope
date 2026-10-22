@@ -216,6 +216,22 @@ pub async fn start(
             req.hook.is_none(),
             "`--hook` ne tourne pas encore sur un hôte distant"
         );
+        // `@local` est cette machine : sa racine obéit aux mêmes règles qu'un `--cwd` local,
+        // et ne couvre jamais les dossiers de Pénélope (hooks.d, configuration, base).
+        if h == crate::child::remote::LOCAL {
+            let c = req.cwd.as_deref().unwrap_or_default();
+            let root = dir_of(s, c).ok_or_else(|| {
+                anyhow::anyhow!("`{c}` n'est dans aucun workspace autorisé (`sandbox.workspaces`)")
+            })?;
+            let dirs = &s.platform.dirs;
+            for own in [dirs.data(), dirs.config(), dirs.state()] {
+                let own = std::fs::canonicalize(&own).unwrap_or(own);
+                anyhow::ensure!(
+                    !own.starts_with(&root),
+                    "`{c}` contient les dossiers de Pénélope : racine refusée"
+                );
+            }
+        }
     }
     // Le dépôt d'une mission est dans un workspace autorisé (revue de sécurité du 14/10),
     // gardé sous sa forme canonique ; chaque usage le revérifie (`dir_of`). Sur un hôte
@@ -596,6 +612,16 @@ pub fn remote_request(
         args,
         root: root.into(),
         hide: cfg.sandbox.hide.clone(),
+        // Sur cette machine (`@local`), les chemins développés ; sur un hôte, les entrées
+        // en `~/…` et absolues, développées là-bas.
+        deny_read: if host == crate::child::remote::LOCAL {
+            crate::helpers::denied_reads(s)
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        } else {
+            cfg.sandbox.deny_read.clone()
+        },
         profile: if full {
             "full".into()
         } else {

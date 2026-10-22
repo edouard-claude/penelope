@@ -9,7 +9,7 @@ use penelope_app::services::Services;
 use serde_json::json;
 use std::sync::Arc;
 
-async fn services(home: &std::path::Path) -> Arc<Services> {
+async fn services(home: &std::path::Path, workspace: &std::path::Path) -> Arc<Services> {
     let clock: penelope_kernel::clock::SharedClock = Arc::new(penelope_kernel::clock::SystemClock);
     let s = Arc::new(
         Services::for_tests(home.to_path_buf(), clock)
@@ -19,6 +19,7 @@ async fn services(home: &std::path::Path) -> Arc<Services> {
     s.publish_config("test", |c| {
         c.runners.local_executor = env!("CARGO_BIN_EXE_penelope").into();
         c.runners.remote_full_for = vec!["@local".into()];
+        c.sandbox.workspaces = vec![workspace.to_string_lossy().into_owned()];
         Ok(Vec::new())
     })
     .unwrap();
@@ -30,7 +31,7 @@ async fn a_host_mission_works_on_the_host_through_the_protocol() {
     let home = tempfile::tempdir().unwrap();
     let hote = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(hote.path()).unwrap();
-    let s = services(home.path()).await;
+    let s = services(home.path(), &root).await;
     let req = Request {
         goal: "écrire et tester".into(),
         check: Some("test -f src/a.txt".into()),
@@ -89,7 +90,7 @@ async fn a_host_mission_works_on_the_host_through_the_protocol() {
 #[tokio::test]
 async fn a_host_mission_refuses_what_it_cannot_honour() {
     let home = tempfile::tempdir().unwrap();
-    let s = services(home.path()).await;
+    let s = services(home.path(), home.path()).await;
     let base = || Request {
         goal: "x".into(),
         cwd: Some("/srv/depot".into()),
