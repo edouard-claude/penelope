@@ -94,6 +94,11 @@ pub struct Request {
     /// Travailler dans un worktree git à soi (#397), sur une branche `penelope/mission-…`.
     #[serde(default)]
     pub worktree: bool,
+    /// Travailler sur un hôte distant (#395) : un nom de connexion de `~/.ssh/config`.
+    /// Fichiers, shell et `--check` y tournent ; le modèle, la mémoire, l'approbation et le
+    /// canal restent ici. `cwd` est alors un chemin absolu de l'hôte.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +129,9 @@ pub struct Mission {
     /// Branche du worktree de la mission.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Hôte distant de la mission (#395).
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 impl Mission {
@@ -190,9 +198,46 @@ pub async fn start(
     {
         anyhow::bail!("une mission est déjà en cours dans cette session : `mission stop` d'abord");
     }
+    let host = req.host.clone().filter(|h| !h.trim().is_empty());
+    if let Some(h) = &host {
+        anyhow::ensure!(
+            crate::child::remote::valid_host(h),
+            "hôte `{h}` refusé : un nom de connexion de ~/.ssh/config"
+        );
+        anyhow::ensure!(
+            !req.worktree,
+            "`--worktree` et `--host` ne vont pas encore ensemble"
+        );
+        anyhow::ensure!(
+            req.cwd.as_deref().is_some_and(|c| c.starts_with('/')),
+            "une mission `--host` demande `--cwd /chemin/absolu/sur/l/hote`"
+        );
+        anyhow::ensure!(
+            req.hook.is_none(),
+            "`--hook` ne tourne pas encore sur un hôte distant"
+        );
+        // `@local` est cette machine : sa racine obéit aux mêmes règles qu'un `--cwd` local,
+        // et ne couvre jamais les dossiers de Pénélope (hooks.d, configuration, base).
+        if h == crate::child::remote::LOCAL {
+            let c = req.cwd.as_deref().unwrap_or_default();
+            let root = dir_of(s, c).ok_or_else(|| {
+                anyhow::anyhow!("`{c}` n'est dans aucun workspace autorisé (`sandbox.workspaces`)")
+            })?;
+            let dirs = &s.platform.dirs;
+            for own in [dirs.data(), dirs.config(), dirs.state()] {
+                let own = std::fs::canonicalize(&own).unwrap_or(own);
+                anyhow::ensure!(
+                    !own.starts_with(&root),
+                    "`{c}` contient les dossiers de Pénélope : racine refusée"
+                );
+            }
+        }
+    }
     // Le dépôt d'une mission est dans un workspace autorisé (revue de sécurité du 14/10),
-    // gardé sous sa forme canonique ; chaque usage le revérifie (`dir_of`).
+    // gardé sous sa forme canonique ; chaque usage le revérifie (`dir_of`). Sur un hôte
+    // distant, c'est l'hôte qui le vérifie, à chaque appel.
     let cwd = match req.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+        Some(c) if host.is_some() => Some(c.to_string()),
         None => None,
         Some(c) => Some(
             dir_of(s, c)
@@ -244,6 +289,7 @@ pub async fn start(
         note: String::new(),
         repo,
         branch,
+        host,
     };
     save(s, &m).await?;
     event(s, &m, "mission.started").await;
@@ -292,12 +338,13 @@ pub fn parse_request(text: &str) -> Result<Request, String> {
             "check" | "verif" => req.check = Some(value.clone()),
             "cwd" | "depot" | "dépôt" => req.cwd = Some(value.clone()),
             "worktree" => req.worktree = true,
+            "host" | "hote" | "hôte" => req.host = Some(value.clone()),
             "hook" => req.hook = Some(value.clone()),
             "budget" => req.budget_usd = Some(number()?),
             "heures" | "hours" => req.hours = Some(number()?),
             other => {
                 return Err(format!(
-                    "option inconnue `--{other}` (check, cwd, worktree, hook, budget, heures)"
+                    "option inconnue `--{other}` (check, cwd, worktree, host, hook, budget, heures)"
                 ));
             }
         }
@@ -425,7 +472,11 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
             let Some(check) = m.check.clone() else {
                 return Next::Finish(State::Done, format!("🏁 Mission terminée : {}", m.goal));
             };
-            match run_check(s, &check, m.cwd.as_deref()).await {
+            let checked = match &m.host {
+                Some(host) => run_check_remote(s, host, &check, m.cwd.as_deref()).await,
+                None => run_check(s, &check, m.cwd.as_deref()).await,
+            };
+            match checked {
                 Ok(()) => {
                     return Next::Finish(
                         State::Done,
@@ -501,6 +552,85 @@ fn stopped(m: &Mission, why: &str) -> String {
         "⏹️ Mission arrêtée ({why}) après {} tours : {}",
         m.turns, m.goal
     )
+}
+
+/// La vérification d'une mission `--host` (#395), sur l'hôte, dans `cwd`.
+pub async fn run_check_remote(
+    s: &Services,
+    host: &str,
+    check: &str,
+    cwd: Option<&str>,
+) -> Result<(), String> {
+    let root = cwd.ok_or("une mission `--host` a toujours son `--cwd`")?;
+    let req = remote_request(
+        s,
+        host,
+        root,
+        "shell_exec",
+        // Réseau ouvert, comme la vérification locale : les dépendances d'un `cargo test`.
+        serde_json::json!({"command": check, "network": true}),
+        CHECK_TIMEOUT,
+    );
+    let out = crate::child::remote::call(s, host, &req, &penelope_llm::CancelToken::new())
+        .await
+        .map_err(|e| format!("vérification impossible : {e}"))?;
+    let code = out["exitCode"].as_i64().unwrap_or(-1);
+    if code == 0 {
+        return Ok(());
+    }
+    let text = format!(
+        "{}{}",
+        out["stdout"].as_str().unwrap_or_default(),
+        out["stderr"].as_str().unwrap_or_default()
+    );
+    let chars: Vec<char> = text.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(CHECK_TAIL)..]
+        .iter()
+        .collect();
+    Err(format!("code {code}\n{tail}"))
+}
+
+/// Un appel d'outil pour l'hôte d'une mission : sa racine, ses motifs masqués, et le
+/// profil du shell (`full` seulement pour un hôte déclaré dans `runners.remote_full_for`).
+pub fn remote_request(
+    s: &Services,
+    host: &str,
+    root: &str,
+    tool: &str,
+    args: serde_json::Value,
+    timeout: std::time::Duration,
+) -> penelope_tools::remote::ToolRequest {
+    let cfg = s.config.config();
+    let full = cfg.runners.remote_full_for.iter().any(|h| h == host);
+    penelope_tools::remote::ToolRequest {
+        tool: tool.into(),
+        network: args
+            .get("network")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || cfg.sandbox.shell_network,
+        args,
+        root: root.into(),
+        hide: cfg.sandbox.hide.clone(),
+        // Sur cette machine (`@local`), les chemins développés ; sur un hôte, les entrées
+        // en `~/…` et absolues, développées là-bas.
+        deny_read: if host == crate::child::remote::LOCAL {
+            crate::helpers::denied_reads(s)
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        } else {
+            cfg.sandbox.deny_read.clone()
+        },
+        profile: if full {
+            "full".into()
+        } else {
+            cfg.sandbox.default_profile.clone()
+        },
+        timeout_ms: timeout.as_millis() as u64,
+        max_output_bytes: cfg.tools.max_output_bytes,
+        env: Vec::new(),
+    }
 }
 
 /// Lance la vérification, sans bac à sable (la commande est celle du propriétaire) ;

@@ -239,7 +239,10 @@
         "heartbeat": "string",
         "sub_agents_in_child": "bool",
         "child_max_rss_mb": "integer",
-        "child_max_secs": "integer"
+        "child_max_secs": "integer",
+        "remote_binary": "string",
+        "remote_full_for": [],
+        "local_executor": "string"
       },
       "sandbox": {
         "default_profile": "string",

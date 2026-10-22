@@ -16,6 +16,7 @@ pub mod hooks;
 pub mod html;
 pub mod http;
 pub mod loops;
+pub mod remote;
 pub mod secret_env;
 pub mod shell;
 pub mod spec;

@@ -532,6 +532,9 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `runners.sub_agents_in_child` | `false` | Un sous-agent tourne dans un process enfant (`penelope run --stdio`, #395) : sa panne, sa mémoire ou son blocage ne touchent pas le daemon, qui garde le host MCP et l'arrête sur `/stop`. Faux : dans le daemon, comme avant. |
 | `runners.child_max_rss_mb` | `2048` | Mémoire résidente au-delà de laquelle un enfant est arrêté, en Mio. |
 | `runners.child_max_secs` | `3600` | Durée au-delà de laquelle un enfant est arrêté, en secondes. |
+| `runners.remote_binary` | `"penelope"` | Le binaire lancé sur l'hôte d'une mission `--host` (#395) : `penelope` du PATH de la session SSH, ou un chemin absolu. |
+| `runners.remote_full_for` | `[]` | Hôtes dont le shell tourne sans bac à sable (`full`) : un hôte Linux n'en a pas, et sans cette déclaration son `shell_exec` est refusé plutôt que lancé sans protection. |
+| `runners.local_executor` | `""` | Le binaire de l'hôte `@local` (le même protocole, sans `ssh`) ; vide : le binaire courant. |
 
 **[sandbox]**
 

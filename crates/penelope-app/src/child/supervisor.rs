@@ -101,7 +101,7 @@ impl Report {
 }
 
 /// Un appel MCP de l'enfant, servi par le host du daemon.
-async fn serve_mcp(
+pub(super) async fn serve_mcp(
     mcp: Option<Arc<dyn McpGateway>>,
     op: &str,
     qualified: &str,
@@ -195,7 +195,7 @@ pub async fn supervise(
                         finished = Some(Cause::Done);
                     }
                     Ok(FromChild::Failed { error }) => finished = Some(Cause::Failed { error }),
-                    Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin }) => {
+                    Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin, .. }) => {
                         let (mcp, tx) = (mcp.clone(), reply_tx.clone());
                         tokio::spawn(async move {
                             let res = serve_mcp(mcp, &op, &qualified, args, session_id, origin).await;

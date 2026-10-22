@@ -8,7 +8,7 @@
 //! un échec lisible ; elle ne touche jamais le daemon.
 
 use super::{CallLimits, Context, SubAgentTask, run_sub_agent};
-use penelope_app::child::{Cause, ChildCtx, Limits, ToChild, supervise};
+use penelope_app::child::{Cause, ChildCtx, Limits, ToChild, supervise_socket};
 use penelope_kernel::event::EventDraft;
 use penelope_llm::CancelToken;
 use serde::{Deserialize, Serialize};
@@ -95,18 +95,28 @@ where
     }
 }
 
-/// Côté daemon : le sous-agent dans un enfant, relancé une fois s'il meurt.
-pub async fn spawn_in_child(
+/// Côté daemon : lance l'enfant sur son socket, note sa fiche, et rend son pid et son
+/// socket.
+async fn launch(
     cx: &Context,
-    task: SubAgentTask<'_>,
-    cancel: &CancelToken,
-) -> Result<String, String> {
+    id: &str,
+    job: &SubAgentJob,
+    extra: &Value,
+) -> Result<(u32, PathBuf), String> {
     let s = &cx.services;
-    let cfg = s.config.config();
+    let state = s.platform.dirs.state();
+    let socket =
+        penelope_app::child::registry::socket(&state, id).ok_or("identifiant d'enfant invalide")?;
+    std::fs::create_dir_all(penelope_app::child::registry::dir(&state))
+        .map_err(|e| e.to_string())?;
     let exe = penelope_app::helpers::running_binary()?;
     let mut spec = penelope_platform::ProcessSpec::new(exe.to_string_lossy().to_string())
         .arg("run")
-        .arg("--stdio");
+        .arg("--socket")
+        .arg(socket.to_string_lossy().to_string())
+        .arg("--max-secs")
+        .arg(s.config.config().runners.child_max_secs.max(10).to_string());
+    spec.stdin = false;
     // La même maison que le daemon : un `PENELOPE_HOME` d'essai suit l'enfant, et la clé
     // du magasin de secrets chiffré (Linux, ou macOS sans Trousseau) aussi.
     for k in [
@@ -118,38 +128,93 @@ pub async fn spawn_in_child(
             spec = spec.env(k, v);
         }
     }
-    let limits = Limits {
+    use penelope_platform::ProcessHost;
+    let child = s
+        .platform
+        .processes
+        .spawn(spec, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let pid = child.pid;
+    // L'enfant vit sans nous : sa sortie n'est pas lue, sa fin se lit sur le socket.
+    drop(child);
+    penelope_app::child::registry::write(
+        &state,
+        &penelope_app::child::registry::Entry {
+            id: id.into(),
+            pid,
+            session_id: job.session_id.clone(),
+            job_id: penelope_executor::jobs::live::current_job(),
+            effect_id: None,
+            extra: extra.clone(),
+            started_ms: s.clock.now_ms(),
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((pid, socket))
+}
+
+fn limits_of(cx: &Context) -> Limits {
+    let cfg = cx.services.config.config();
+    Limits {
         max_rss_kb: Some(cfg.runners.child_max_rss_mb.max(64) * 1024),
         max_duration: Duration::from_secs(cfg.runners.child_max_secs.max(10)),
         ..Limits::default()
-    };
+    }
+}
+
+async fn journal(
+    cx: &Context,
+    session: &str,
+    sub_agent: &str,
+    attempt: u32,
+    report: &penelope_app::child::Report,
+) {
+    let _ = cx
+        .services
+        .events
+        .append(
+            EventDraft::new(
+                "child.exited",
+                json!({"kind": KIND, "sub_agent": sub_agent, "pid": report.pid,
+                       "rss_max_kb": report.rss_max_kb, "attempt": attempt,
+                       "cause": report.cause, "text": report.describe()}),
+            )
+            .session(session),
+        )
+        .await;
+}
+
+/// Côté daemon : le sous-agent dans un enfant, relancé une fois s'il meurt.
+pub async fn spawn_in_child(
+    cx: &Context,
+    task: SubAgentTask<'_>,
+    cancel: &CancelToken,
+) -> Result<String, String> {
+    let s = &cx.services;
+    let limits = limits_of(cx);
     let job = SubAgentJob::of(&task);
     let payload = serde_json::to_value(&job).map_err(|e| e.to_string())?;
+    let extra = json!({"model": job.model_id, "kind": job.kind});
     let mcp = cx.workflows.ports.mcp.get();
+    let state = s.platform.dirs.state();
     let mut attempts = 0;
     loop {
+        let id = format!("c_{}", penelope_kernel::ids::Ulid::new());
+        let (pid, socket) = launch(cx, &id, &job, &extra).await?;
         let init = ToChild::init(&job.session_id, KIND, payload.clone());
-        let report = supervise(
-            &s.platform.processes,
-            spec.clone(),
+        let report = supervise_socket(
+            pid,
+            &socket,
             init,
             &limits,
             cancel,
             mcp.clone(),
+            std::time::Instant::now(),
         )
         .await;
-        let _ = s
-            .events
-            .append(
-                EventDraft::new(
-                    "child.exited",
-                    json!({"kind": KIND, "sub_agent": job.kind, "pid": report.pid,
-                           "rss_max_kb": report.rss_max_kb, "attempt": attempts,
-                           "cause": report.cause, "text": report.describe()}),
-                )
-                .session(&job.session_id),
-            )
-            .await;
+        penelope_app::child::registry::remove(&state, &id);
+        journal(cx, &job.session_id, &job.kind, attempts, &report).await;
         match &report.cause {
             Cause::Done => {
                 return Ok(report
@@ -166,5 +231,131 @@ pub async fn spawn_in_child(
             }
             _ => return Err(format!("sous-agent {}", report.describe())),
         }
+    }
+}
+
+/// Clôt un job d'outil servi par un enfant, comme sa tâche l'aurait fait : ledger, ligne,
+/// événement, puis la livraison du daemon s'en charge.
+async fn conclude_job(
+    cx: &Context,
+    job_id: &str,
+    outcome: Result<Value, String>,
+) -> anyhow::Result<()> {
+    use penelope_mcp::tasks::TaskState;
+    let s = &cx.services;
+    let jobs = penelope_executor::jobs::store(s);
+    let Some(job) = jobs.get(job_id).await? else {
+        return Ok(());
+    };
+    if job.state.is_terminal() {
+        return Ok(());
+    }
+    let (state, value, text, error) = match outcome {
+        Ok(v) => {
+            let text = v["text"].as_str().unwrap_or_default().to_string();
+            (TaskState::Completed, v, text, None)
+        }
+        Err(e) => (TaskState::Failed, json!({"error": e}), e.clone(), Some(e)),
+    };
+    if let Some(effect) = job
+        .effect_id
+        .as_deref()
+        .map(penelope_kernel::ids::EffectId::from)
+    {
+        let open = s.effects.get(&effect).await?;
+        if open.is_some_and(|e| e.state == penelope_kernel::effects::EffectState::Dispatching) {
+            match &error {
+                None => s.effects.complete(&effect, value.clone()).await?,
+                Some(e) => s.effects.fail(&effect, e.clone()).await?,
+            }
+        }
+    }
+    jobs.finish(job_id, state, Some(json!({"value": value, "text": text})))
+        .await?;
+    s.events
+        .append(
+            EventDraft::new(
+                "tool.job.completed",
+                json!({"job": job_id, "state": state.as_str(), "reattached": true}),
+            )
+            .session(&job.session_id),
+        )
+        .await?;
+    s.jobs.wake();
+    Ok(())
+}
+
+/// Au démarrage : chaque enfant noté est rattaché (vivant), lu (fini) ou constaté perdu.
+/// Un enfant sans job (sous-agent au premier plan d'un tour qui sera rejoué) est arrêté.
+pub async fn reattach_all(cx: &Context) {
+    let state = cx.services.platform.dirs.state();
+    for e in penelope_app::child::registry::list(&state) {
+        let Some(socket) = penelope_app::child::registry::socket(&state, &e.id) else {
+            continue;
+        };
+        let Some(job_id) = e.job_id.clone() else {
+            if penelope_platform::process::process_exists(e.pid) {
+                penelope_platform::process::terminate_group(e.pid, Duration::from_secs(2)).await;
+            }
+            penelope_app::child::registry::remove(&state, &e.id);
+            continue;
+        };
+        let cx = cx.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let limits = limits_of(&cx);
+            let started = std::time::Instant::now()
+                .checked_sub(Duration::from_millis(
+                    (cx.services.clock.now_ms() - e.started_ms).max(0) as u64,
+                ))
+                .unwrap_or_else(std::time::Instant::now);
+            // `/stop` et `job_cancel` atteignent l'enfant rattaché comme ils atteignaient
+            // le job avant le redémarrage.
+            let cancel = CancelToken::new();
+            cx.services
+                .jobs
+                .insert(&job_id, &e.session_id, cancel.clone());
+            let report = supervise_socket(
+                e.pid,
+                &socket,
+                ToChild::Resume,
+                &limits,
+                &cancel,
+                cx.workflows.ports.mcp.get(),
+                started,
+            )
+            .await;
+            cx.services.jobs.forget(&job_id);
+            journal(
+                &cx,
+                &e.session_id,
+                e.extra["kind"].as_str().unwrap_or_default(),
+                0,
+                &report,
+            )
+            .await;
+            let outcome = match &report.cause {
+                Cause::Done => {
+                    let text = report
+                        .result
+                        .as_ref()
+                        .and_then(|r| r["text"].as_str())
+                        .unwrap_or_default();
+                    let mut v = e.extra.clone();
+                    v["text"] = json!(text);
+                    Ok(v)
+                }
+                Cause::Failed { error } => Err(error.clone()),
+                Cause::Interrupted => Err("sous-agent arrêté sur demande".into()),
+                _ => Err(format!(
+                    "sous-agent {} (après le redémarrage du daemon)",
+                    report.describe()
+                )),
+            };
+            if let Err(err) = conclude_job(&cx, &job_id, outcome).await {
+                tracing::warn!(job = %job_id, error = %err, "job d'un enfant rattaché non conclu");
+            }
+            penelope_app::child::registry::remove(&state, &e.id);
+        });
     }
 }

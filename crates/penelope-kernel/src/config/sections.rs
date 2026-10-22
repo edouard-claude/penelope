@@ -452,6 +452,15 @@ pub struct Runners {
     pub child_max_rss_mb: u64,
     /// Durée au-delà de laquelle un enfant est arrêté, en secondes.
     pub child_max_secs: u64,
+    /// Le binaire lancé sur l'hôte d'une mission `--host` (#395) : `penelope` du PATH de
+    /// la session SSH, ou un chemin absolu.
+    pub remote_binary: String,
+    /// Hôtes dont le shell tourne sans bac à sable (`full`) : un hôte Linux n'en a pas, et
+    /// sans cette déclaration son `shell_exec` est refusé plutôt que lancé sans protection.
+    pub remote_full_for: Vec<String>,
+    /// Le binaire de l'hôte `@local` (le même protocole, sans `ssh`) ; vide : le binaire
+    /// courant.
+    pub local_executor: String,
 }
 
 impl Default for Runners {
@@ -463,6 +472,9 @@ impl Default for Runners {
             sub_agents_in_child: false,
             child_max_rss_mb: 2048,
             child_max_secs: 3600,
+            remote_binary: "penelope".into(),
+            remote_full_for: Vec::new(),
+            local_executor: String::new(),
         }
     }
 }

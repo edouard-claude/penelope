@@ -4,6 +4,9 @@ use super::*;
 
 /// Boucle du pilote : admet les runs en file, pilote les runs actifs.
 pub async fn driver_loop(d: Context) {
+    // Les sous-agents d'enfants lancés avant le redémarrage : rattachés, lus ou perdus
+    // (#395).
+    crate::workflow::child::reattach_all(&d).await;
     while !d.handle.is_shutting_down() {
         if let Err(e) = drive_all(&d).await {
             tracing::warn!(error = %e, "pilote de workflows");

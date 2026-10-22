@@ -54,6 +54,12 @@ pub fn current() -> Option<PathBuf> {
     LOG.try_with(|p| p.clone()).ok()
 }
 
+/// L'identifiant du job en cours sur cette tâche (#395 : un enfant le note dans sa fiche,
+/// pour que le daemon qui redémarre conclue ce job-là).
+pub fn current_job() -> Option<String> {
+    current().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+}
+
 /// La commande est finie : `attach` s'arrête.
 pub fn mark_done(log: &Path) {
     let _ = std::fs::write(done_path(log), "");

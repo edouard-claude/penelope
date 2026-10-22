@@ -6,6 +6,7 @@ pub(super) mod fs_shell;
 mod git_http;
 mod memory;
 mod misc;
+mod remote;
 mod schedules_messaging;
 mod self_tools;
 mod skills_workflows;

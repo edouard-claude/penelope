@@ -235,6 +235,7 @@ async fn run_story(story: &Story, timeout: Duration) -> Measure {
         budget_usd: Some(10.0),
         hours: Some(timeout.as_secs_f64() / 3600.0),
         worktree: false,
+        host: None,
     };
     let (_, text) = mission::start(&s, &session, request, &Origin::Cli)
         .await

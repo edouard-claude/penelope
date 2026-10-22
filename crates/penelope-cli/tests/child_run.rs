@@ -114,6 +114,14 @@ async fn a_child_that_swells_is_killed_for_memory() {
 /// Un faux endpoint OpenAI-compatible sur la boucle locale : chaque `chat/completions`
 /// répond en flux par `reply`, `GET /models` par une liste vide.
 async fn fake_llm(reply: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    fake_llm_slow(reply, 0).await
+}
+
+/// [`fake_llm`] qui attend `delay_ms` avant chaque réponse de modèle.
+async fn fake_llm_slow(
+    reply: &'static str,
+    delay_ms: u64,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -153,6 +161,7 @@ async fn fake_llm(reply: &'static str) -> (String, std::sync::Arc<std::sync::ato
                 let head = String::from_utf8_lossy(&buf[..got]).to_string();
                 let resp = if head.starts_with("POST") && head.contains("/chat/completions") {
                     seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     let chunk = serde_json::json!({"id":"c1","object":"chat.completion.chunk","model":"essai",
                         "choices":[{"index":0,"delta":{"role":"assistant","content":reply},"finish_reason":null}]});
                     let end = serde_json::json!({"id":"c1","object":"chat.completion.chunk","model":"essai",
@@ -180,10 +189,9 @@ async fn fake_llm(reply: &'static str) -> (String, std::sync::Arc<std::sync::ato
 
 /// #395 : un vrai sous-agent dans le vrai binaire enfant, sur un modèle local simulé : il
 /// ouvre la base et la configuration de la maison du daemon, et rend sa réponse.
-#[tokio::test]
-async fn a_real_sub_agent_runs_in_the_child_process() {
+/// Une maison d'essai dont le seul modèle est l'endpoint simulé `base`.
+fn home_on(base: &str) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
-    let (base, calls) = fake_llm("Trois fichiers lus, rien à signaler.").await;
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_penelope"))
         .args(["--home", home.path().to_str().unwrap(), "--json", "paths"])
         .output()
@@ -198,16 +206,27 @@ async fn a_real_sub_agent_runs_in_the_child_process() {
         ),
     )
     .unwrap();
-    let job = penelope_orchestrator::workflow::child::SubAgentJob {
+    home
+}
+
+fn job_in(home: &std::path::Path) -> penelope_orchestrator::workflow::child::SubAgentJob {
+    penelope_orchestrator::workflow::child::SubAgentJob {
         session_id: "s_essai".into(),
         run_id: None,
         kind: "explore".into(),
         prompt: "Relis le dépôt et dis ce qui cloche.".into(),
         model_id: "local:essai".into(),
         tools: Vec::new(),
-        workspaces: vec![home.path().to_path_buf()],
+        workspaces: vec![home.to_path_buf()],
         limits: None,
-    };
+    }
+}
+
+#[tokio::test]
+async fn a_real_sub_agent_runs_in_the_child_process() {
+    let (base, calls) = fake_llm("Trois fichiers lus, rien à signaler.").await;
+    let home = home_on(&base);
+    let job = job_in(home.path());
     let host = UnixProcessHost::new(home.path().join("pids"));
     let spec = ProcessSpec::new(env!("CARGO_BIN_EXE_penelope"))
         .arg("run")
@@ -230,4 +249,61 @@ async fn a_real_sub_agent_runs_in_the_child_process() {
         "Trois fichiers lus, rien à signaler."
     );
     assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+}
+
+/// #395, reprise : le daemon meurt pendant que le sous-agent attend son modèle ; l'enfant
+/// (le vrai binaire, sur son socket) continue, et le superviseur suivant se rattache par
+/// `resume` et reçoit la réponse.
+#[tokio::test]
+async fn a_sub_agent_child_outlives_its_daemon_and_is_reattached() {
+    use penelope_app::child::supervise_socket;
+    use penelope_platform::ProcessHost;
+    let (base, _) = fake_llm_slow("Fini malgré le redémarrage.", 1500).await;
+    let home = home_on(&base);
+    let sock = home.path().join("c1.sock");
+    let mut spec = ProcessSpec::new(env!("CARGO_BIN_EXE_penelope"))
+        .arg("run")
+        .arg("--socket")
+        .arg(sock.to_str().unwrap())
+        .env("PENELOPE_HOME", home.path().to_str().unwrap())
+        .env("PENELOPE_PASSPHRASE", "phrase-d-essai");
+    spec.stdin = false;
+    let host = UnixProcessHost::new(home.path().join("pids"));
+    let child = host.spawn(spec, None).await.unwrap();
+    let pid = child.pid;
+    drop(child);
+    let init = ToChild::init(
+        "s_essai",
+        "sub_agent",
+        serde_json::to_value(job_in(home.path())).unwrap(),
+    );
+    let first = {
+        let sock = sock.clone();
+        tokio::spawn(async move {
+            supervise_socket(
+                pid,
+                &sock,
+                init,
+                &limits(),
+                &CancelToken::new(),
+                None,
+                std::time::Instant::now(),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    first.abort();
+    let r = supervise_socket(
+        pid,
+        &sock,
+        ToChild::Resume,
+        &limits(),
+        &CancelToken::new(),
+        None,
+        std::time::Instant::now(),
+    )
+    .await;
+    assert_eq!(r.cause, Cause::Done, "{r:?}");
+    assert_eq!(r.result.unwrap()["text"], "Fini malgré le redémarrage.");
 }

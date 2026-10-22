@@ -117,6 +117,19 @@ pub(super) struct CliChild {
 #[async_trait::async_trait]
 impl ChildRun for CliChild {
     async fn run(&self, kind: &str, payload: Value, ctx: ChildCtx) -> Result<Value, String> {
+        // Un outil sur cet hôte, pour une mission `--host` (#395) : ni base ni
+        // configuration, seulement l'outil dans sa racine.
+        if kind == penelope_app::child::remote::KIND_TOOL {
+            let req: penelope_tools::remote::ToolRequest =
+                serde_json::from_value(payload).map_err(|e| format!("appel illisible : {e}"))?;
+            penelope_tools::remote::check_root(&req.root).map_err(|e| e.to_string())?;
+            let host = penelope_platform::UnixProcessHost::new(
+                std::env::temp_dir().join("penelope-hote-pids"),
+            );
+            return penelope_tools::remote::run(&host, &req, &ctx.cancel)
+                .await
+                .map_err(|e| e.to_string());
+        }
         if kind != penelope_orchestrator::workflow::child::KIND {
             return Probe.run(kind, payload, ctx).await;
         }

@@ -45,17 +45,27 @@ pub async fn run(cli: Cli) -> CliResult<()> {
                 .await
                 .map_err(CliError::Usage);
         }
-        Command::Run { stdio } => {
-            if !stdio {
-                return Err(CliError::Usage(
-                    "`penelope run` ne parle que `--stdio`".into(),
-                ));
-            }
-            return penelope_app::child::serve_stdio(std::sync::Arc::new(
-                child::CliChild::default(),
-            ))
-            .await
-            .map_err(CliError::Usage);
+        Command::Run {
+            stdio,
+            socket,
+            max_secs,
+        } => {
+            let runner = std::sync::Arc::new(child::CliChild::default());
+            return match (socket, stdio) {
+                (Some(path), _) => penelope_app::child::serve_socket(
+                    path,
+                    runner,
+                    std::time::Duration::from_secs(*max_secs),
+                )
+                .await
+                .map_err(CliError::Usage),
+                (None, true) => penelope_app::child::serve_stdio(runner)
+                    .await
+                    .map_err(CliError::Usage),
+                (None, false) => Err(CliError::Usage(
+                    "`penelope run` parle `--stdio` ou `--socket <chemin>`".into(),
+                )),
+            };
         }
         Command::Approvals {
             cmd: Some(ApprovalsCmd::Stats { days }),
