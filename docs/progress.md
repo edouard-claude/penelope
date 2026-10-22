@@ -26,9 +26,11 @@ La charte et les spécifications sont dans `design/v1/`.
   et le daemon le lit là. S'il est mort sans résultat, son job échoue en le disant. Un
   enfant sans job (sous-agent au premier plan, dont le tour est rejoué) est arrêté.
 - Une durée maximale borne l'enfant même sans superviseur.
-- Toujours derrière `runners.sub_agents_in_child`. Un appel MCP que le daemon avait
-  exécuté sans avoir pu répondre avant de tomber est rejoué : à garder en tête pour un
-  outil MCP qui écrit. Pas encore : l'exécuteur distant.
+- Un appel d'outil MCP que le daemon d'avant avait reçu sans y répondre n'est pas
+  rejoué à l'aveugle : il revient au sous-agent en erreur (« a pu être exécuté, vérifie »).
+  Une lecture (politique, ressource) est rejouée. `/stop` et `job_cancel` atteignent
+  l'enfant rattaché.
+- Toujours derrière `runners.sub_agents_in_child`. Pas encore : l'exécuteur distant.
 
 ### 1.0.84
 

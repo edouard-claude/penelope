@@ -90,6 +90,9 @@ pub enum FromChild {
         session_id: Option<String>,
         #[serde(default)]
         origin: Option<Value>,
+        /// Renvoyé à un superviseur qui se rattache : le précédent a pu l'exécuter.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        replay: bool,
     },
 }
 

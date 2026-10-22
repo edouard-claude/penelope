@@ -48,6 +48,7 @@ impl Relay {
             args,
             session_id,
             origin,
+            replay: false,
         };
         self.pending
             .lock()
@@ -81,7 +82,15 @@ impl Relay {
             .map(|p| p.iter().map(|(id, (_, f))| (*id, f.clone())).collect())
             .unwrap_or_default();
         frames.sort_by_key(|(id, _)| *id);
-        frames.into_iter().map(|(_, f)| f).collect()
+        frames
+            .into_iter()
+            .map(|(_, mut f)| {
+                if let FromChild::McpCall { replay, .. } = &mut f {
+                    *replay = true;
+                }
+                f
+            })
+            .collect()
     }
 }
 

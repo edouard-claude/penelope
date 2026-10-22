@@ -302,16 +302,23 @@ pub async fn reattach_all(cx: &Context) {
                     (cx.services.clock.now_ms() - e.started_ms).max(0) as u64,
                 ))
                 .unwrap_or_else(std::time::Instant::now);
+            // `/stop` et `job_cancel` atteignent l'enfant rattaché comme ils atteignaient
+            // le job avant le redémarrage.
+            let cancel = CancelToken::new();
+            cx.services
+                .jobs
+                .insert(&job_id, &e.session_id, cancel.clone());
             let report = supervise_socket(
                 e.pid,
                 &socket,
                 ToChild::Resume,
                 &limits,
-                &CancelToken::new(),
+                &cancel,
                 cx.workflows.ports.mcp.get(),
                 started,
             )
             .await;
+            cx.services.jobs.forget(&job_id);
             journal(
                 &cx,
                 &e.session_id,
@@ -332,6 +339,7 @@ pub async fn reattach_all(cx: &Context) {
                     Ok(v)
                 }
                 Cause::Failed { error } => Err(error.clone()),
+                Cause::Interrupted => Err("sous-agent arrêté sur demande".into()),
                 _ => Err(format!(
                     "sous-agent {} (après le redémarrage du daemon)",
                     report.describe()

@@ -300,12 +300,13 @@ async fn a_child_survives_its_supervisor_and_a_new_one_reattaches() {
         Instant::now(),
     )
     .await;
-    assert_eq!(r.cause, Cause::Done, "{r:?}");
-    assert_eq!(
-        r.result,
-        Some(serde_json::json!({"mcp": {"servi": "notes__chercher"}}))
+    // L'appel avait été lu par le premier superviseur : il n'est pas rejoué à l'aveugle,
+    // l'enfant le reçoit en erreur et le dit.
+    assert!(
+        matches!(&r.cause, Cause::Failed { error } if error.contains("redémarrage du daemon")),
+        "{r:?}"
     );
     serving.await.unwrap().unwrap();
     // Le résultat reste lisible après la fin, pour un daemon qui reviendrait plus tard.
-    assert!(matches!(read_result(&sock), Some(FromChild::Done { .. })));
+    assert!(matches!(read_result(&sock), Some(FromChild::Failed { .. })));
 }

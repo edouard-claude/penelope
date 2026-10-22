@@ -195,7 +195,7 @@ pub async fn supervise(
                         finished = Some(Cause::Done);
                     }
                     Ok(FromChild::Failed { error }) => finished = Some(Cause::Failed { error }),
-                    Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin }) => {
+                    Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin, .. }) => {
                         let (mcp, tx) = (mcp.clone(), reply_tx.clone());
                         tokio::spawn(async move {
                             let res = serve_mcp(mcp, &op, &qualified, args, session_id, origin).await;

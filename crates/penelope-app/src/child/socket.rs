@@ -138,10 +138,21 @@ pub async fn serve_socket(
                 lines = Some(l);
                 writer = Some(w);
                 send(&mut writer, &mut backlog, FromChild::Ready { protocol: PROTOCOL, pid: std::process::id() }).await;
+                // Un appel resté dans l'attente n'est jamais parti : personne n'a pu
+                // l'exécuter, il n'est pas un rejeu.
+                let unsent: Vec<u64> = backlog
+                    .iter()
+                    .filter_map(|f| match f { FromChild::McpCall { id, .. } => Some(*id), _ => None })
+                    .collect();
                 for f in std::mem::take(&mut backlog).into_iter().filter(|f| !matches!(f, FromChild::McpCall { .. })) {
                     send(&mut writer, &mut backlog, f).await;
                 }
-                for f in relay.pending_frames() {
+                for mut f in relay.pending_frames() {
+                    if let FromChild::McpCall { id, replay, .. } = &mut f
+                        && unsent.contains(id)
+                    {
+                        *replay = false;
+                    }
                     send(&mut writer, &mut backlog, f).await;
                 }
             }
@@ -240,10 +251,20 @@ pub async fn supervise_socket(
                     finish(&mut report, Some(last));
                     return report;
                 }
-                Some(Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin })) => {
+                Some(Ok(FromChild::McpCall { id, op, qualified, args, session_id, origin, replay })) => {
                     let (mcp, tx) = (mcp.clone(), reply_tx.clone());
                     tokio::spawn(async move {
-                        let res = serve_mcp(mcp, &op, &qualified, args, session_id, origin).await;
+                        // Un appel d'outil renvoyé après un redémarrage a pu être exécuté par
+                        // le daemon d'avant : il n'est pas rejoué à l'aveugle. Les lectures
+                        // (politique, ressource) le sont.
+                        let res = if replay && op == "call_tool" {
+                            Err(format!(
+                                "appel `{qualified}` interrompu par le redémarrage du daemon : il a \
+                                 pu être exécuté ; vérifie son effet avant de le relancer"
+                            ))
+                        } else {
+                            serve_mcp(mcp, &op, &qualified, args, session_id, origin).await
+                        };
                         let (ok, error) = match res { Ok(v) => (Some(v), None), Err(e) => (None, Some(e)) };
                         let _ = tx.send(ToChild::McpResult { id, ok, error });
                     });
