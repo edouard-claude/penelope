@@ -82,12 +82,8 @@ pub fn fallback_models(models: &[String]) -> Vec<ModelInfo> {
         .map(|slug| ModelInfo {
             provider: "codex".into(),
             input_modalities: vec!["text".into(), "image".into()],
-            reasoning_efforts: Some(vec![
-                "minimal".into(),
-                "low".into(),
-                "medium".into(),
-                "high".into(),
-            ]),
+            // `low` d'abord : les modèles récents (`gpt-6.1-sol`) refusent `minimal`.
+            reasoning_efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
             window_source: crate::catalog::WindowSource::Fallback,
             reasoning_mandatory: true,
             ..ModelInfo::minimal(slug, "codex", DEFAULT_CODEX_WINDOW)

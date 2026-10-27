@@ -12,6 +12,17 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.86
+
+**Un digest qui ne radote plus, et `mem split` sur les modèles Codex récents (#429).**
+
+- Une alerte du digest (Cœur au-delà du budget, entrées trop longues, concepts à
+  définir) ne revient que si elle change, ou une fois par semaine. Le reste est dans
+  `DREAMS.md` et `penelope doctor`.
+- `penelope mem split` échouait sur `gpt-6.1-sol` : le catalogue de repli de Codex
+  proposait l'effort `minimal`, que ce modèle refuse. Le repli commence à `low`, et un
+  refus d'effort du backend est rejoué une fois avec le plus faible qu'il annonce.
+
 ### 1.0.85
 
 **Un sous-agent survit au redémarrage du daemon, et une mission travaille sur un hôte

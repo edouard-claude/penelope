@@ -443,3 +443,14 @@ async fn an_unread_agenda_is_said_in_one_line() {
         .unwrap();
     assert!(!silent.contains("Agenda"), "{silent}");
 }
+
+/// Une alerte inchangée ne revient pas le lendemain ; changée, elle revient aussitôt.
+#[tokio::test]
+async fn an_unchanged_alert_is_not_repeated_the_next_morning() {
+    let (_dir, d, _p) = daemon().await;
+    let s = &d.services;
+    assert!(super::super::digest::fresh(s, "digest.alerts.essai", "Cœur 3367/2500").await);
+    assert!(!super::super::digest::fresh(s, "digest.alerts.essai", "Cœur 3367/2500").await);
+    assert!(super::super::digest::fresh(s, "digest.alerts.essai", "Cœur 3400/2500").await);
+    assert!(!super::super::digest::fresh(s, "digest.alerts.essai", "Cœur 3400/2500").await);
+}
