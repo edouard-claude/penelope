@@ -153,7 +153,23 @@ pub async fn digest_text(
         ));
     }
     match last_report(s).await?.filter(|_| failed.is_none()) {
-        Some((id, finished, report)) => {
+        Some((id, finished, mut report)) => {
+            // Les alertes de la mémoire (Cœur au-delà du budget, entrées trop longues) ne
+            // reviennent que si elles changent, ou une fois par semaine : le digest les
+            // répétait chaque matin à l'identique, et on finissait par ne plus le lire.
+            let alerts = format!(
+                "{:?}{:?}",
+                report.cleanup,
+                report
+                    .warnings
+                    .iter()
+                    .filter(|w| w.contains("Cœur"))
+                    .collect::<Vec<_>>()
+            );
+            if !fresh(s, "digest.alerts.memory", &alerts).await {
+                report.cleanup.clear();
+                report.warnings.retain(|w| !w.contains("Cœur"));
+            }
             t.push_str(&format!(
                 "\n🧠 {} _(passe `{id}`, {})_\n",
                 report.render_digest(),
@@ -263,7 +279,9 @@ pub async fn digest_text(
     }
     // Termes employés dans les sources sans définition (issue #22).
     let undefined = crate::concepts::to_define(&crate::helpers::vault_dir(s));
-    if !undefined.is_empty() {
+    if !undefined.is_empty()
+        && fresh(s, "digest.alerts.concepts", &undefined.len().to_string()).await
+    {
         let shown: Vec<&str> = undefined.iter().take(5).map(String::as_str).collect();
         t.push_str(&format!(
             "\n🧩 {} concept(s) à définir : {}{} (`concepts/_a-definir.md`)\n",
@@ -305,4 +323,30 @@ pub async fn digest_text(
         t.push_str(&format!("\n💶 Dépense d'hier : {:.2} $\n", row.cost_usd).replace('.', ","));
     }
     Ok(t)
+}
+
+/// Jours au bout desquels une alerte inchangée revient quand même au digest.
+const ALERT_REMINDER_DAYS: i64 = 7;
+
+/// Vrai si l'alerte `fingerprint` est à montrer : nouvelle, changée depuis le dernier
+/// digest, ou montrée il y a plus d'une semaine. Le repère est mis à jour quand elle part.
+pub(crate) async fn fresh(s: &Services, key: &str, fingerprint: &str) -> bool {
+    let today = today(s);
+    let hash = format!("{:016x}", {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        fingerprint.hash(&mut h);
+        h.finish()
+    });
+    let previous = s.kv_get(key).await.ok().flatten().unwrap_or_default();
+    let (seen_hash, seen_day) = previous.split_once('|').unwrap_or(("", ""));
+    let stale = chrono::NaiveDate::parse_from_str(seen_day, "%Y-%m-%d")
+        .ok()
+        .zip(chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").ok())
+        .is_none_or(|(seen, now)| (now - seen).num_days() >= ALERT_REMINDER_DAYS);
+    if seen_hash == hash && !stale {
+        return false;
+    }
+    let _ = s.kv_set(key, &format!("{hash}|{today}")).await;
+    true
 }

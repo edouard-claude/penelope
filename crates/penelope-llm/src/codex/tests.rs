@@ -608,7 +608,7 @@ fn the_catalog_has_windows_tools_and_no_price() {
     assert!(models[0].reasoning_mandatory);
     assert_eq!(models[0].lightest_effort().as_deref(), Some("low"));
     assert!(!models[1].reasoning_mandatory, "sans liste : rien d'imposé");
-    assert_eq!(fallback[0].lightest_effort().as_deref(), Some("minimal"));
+    assert_eq!(fallback[0].lightest_effort().as_deref(), Some("low"));
     let with_none = parse_codex_models(&json!({"models": [
         {"slug": "x", "supported_reasoning_levels": ["none", "low"]}]}));
     assert_eq!(with_none[0].lightest_effort().as_deref(), Some("none"));
@@ -759,4 +759,14 @@ fn an_overload_is_retryable_whatever_says_it() {
             ..
         }
     ));
+}
+
+/// Un refus d'effort donne le plus faible que le modèle annonce (un `mem split` sur
+/// `gpt-6.1-sol` échouait sur `minimal`).
+#[test]
+fn a_refused_effort_names_the_lightest_supported_one() {
+    let text = r#"{"error":{"message":"Unsupported value: 'minimal' is not supported with the 'gpt-6.1-sol' model. Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'.","type":"invalid_request_error"}}"#;
+    assert_eq!(super::supported_effort(text).as_deref(), Some("low"));
+    assert_eq!(super::supported_effort("Unsupported value: x"), None);
+    assert_eq!(super::supported_effort("autre erreur"), None);
 }

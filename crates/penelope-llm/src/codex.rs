@@ -428,11 +428,29 @@ impl Provider for CodexProvider {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        let status = resp.status().as_u16();
+        let mut status = resp.status().as_u16();
         if status >= 400 {
             let headers = resp.headers().clone();
             let text = resp.text().await.unwrap_or_default();
-            return Err(codex_error(status, &text, &headers));
+            // Un effort que ce modèle refuse (« 'minimal' is not supported… Supported values
+            // are: 'low', … ») : un seul rejeu avec le plus faible qu'il annonce, plutôt
+            // qu'un échec de tout l'appel.
+            let retry = (status == 400)
+                .then(|| supported_effort(&text))
+                .flatten()
+                .filter(|_| body["reasoning"]["effort"].is_string());
+            let Some(effort) = retry else {
+                return Err(codex_error(status, &text, &headers));
+            };
+            let mut body = body.clone();
+            body["reasoning"]["effort"] = serde_json::json!(effort);
+            resp = self.post_responses(&body, &token).await?;
+            status = resp.status().as_u16();
+            if status >= 400 {
+                let headers = resp.headers().clone();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(codex_error(status, &text, &headers));
+            }
         }
         stream_from_response(
             resp,
@@ -577,3 +595,20 @@ pub use response::*;
 
 #[cfg(test)]
 mod tests;
+
+/// Le plus faible effort qu'annonce un refus d'effort de raisonnement du backend
+/// (« Unsupported value: 'minimal' … Supported values are: 'low', 'medium', … »).
+pub(crate) fn supported_effort(text: &str) -> Option<String> {
+    if !text.contains("Unsupported value") {
+        return None;
+    }
+    let after = &text[text.find("Supported values are:")? + "Supported values are:".len()..];
+    let start = after.find('\'')? + 1;
+    let end = start + after[start..].find('\'')?;
+    let effort = &after[start..end];
+    (!effort.is_empty()
+        && effort
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then(|| effort.to_string())
+}
