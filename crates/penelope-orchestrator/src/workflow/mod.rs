@@ -238,6 +238,7 @@ mod step_ctx;
 mod step_shell_tool;
 mod step_user;
 mod step_verify;
+mod sub_agent_wait;
 mod watch;
 pub mod worktree;
 
