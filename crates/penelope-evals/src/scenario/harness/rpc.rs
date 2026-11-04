@@ -153,6 +153,12 @@ impl Harness<'_> {
                 continue;
             }
             if done.load(Ordering::SeqCst) {
+                // L'appel a pu mettre son tour en file entre le dernier regard sur la file
+                // et sa fin : un dernier passage le joue. Sans lui, un runner lent (macOS
+                // en CI) rendait `drained` vide une fois sur quelques-unes.
+                while let Some(turn) = self.claim().await? {
+                    out.push(outcome_json(&runner::process(d, turn, HEARTBEAT).await));
+                }
                 return Ok(out);
             }
             if let Some(close) = tail
