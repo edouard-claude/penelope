@@ -456,6 +456,13 @@ fn validate_step(
                 r.error(format!("{path}/on/cron"), e.to_string());
             }
         }
+        // Une mission (#425) : un objectif, le reste a ses défauts.
+        "mission" if s.prompt.trim().is_empty() => {
+            r.error(
+                format!("{path}/prompt"),
+                "une étape `mission` demande son objectif",
+            );
+        }
         "verify" if s.verifier.is_empty() && s.checks.is_empty() => {
             r.error(
                 format!("{path}/verifier"),

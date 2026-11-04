@@ -591,17 +591,22 @@ fn ticket_deploy_steps() -> Vec<Step> {
 }
 
 mod backlog;
-pub use backlog::{backlog, task};
+pub use backlog::{backlog, story};
 
-/// Les six workflows livrés.
+/// Workflows livrés retirés par la décision 0025 (#425) : du code, confié désormais à une
+/// mission. Un workflow d'instance de ce nom se charge encore, avec un avertissement.
+pub const RETIRED: &[&str] = &["tache"];
+
+/// Les six workflows livrés. `build-verify` reste tant que les plans en phases (#191) s'y
+/// ancrent (décision 0025, conséquences).
 pub fn all() -> Vec<Workflow> {
     vec![
         build_verify(),
         review(),
         ticket_to_deploy(),
         deploy_generic(),
-        // `tache` avant `backlog`, qui l'appelle : le registre valide dans l'ordre.
-        task(),
+        // `story` avant `backlog`, qui l'appelle : le registre valide dans l'ordre.
+        story(),
         backlog(),
     ]
 }
@@ -619,7 +624,7 @@ mod tests {
                 "ticket-to-deploy",
                 "deploy-generic",
                 "backlog",
-                "tache",
+                "story",
             ]
             .into_iter()
             .map(String::from)

@@ -271,7 +271,7 @@ mod tests {
                 "build-verify",
                 "review",
                 "backlog",
-                "tache",
+                "story",
             ]
             .into_iter()
             .map(String::from)
@@ -316,25 +316,36 @@ mod tests {
             "review",
             "ticket-to-deploy",
             "deploy-generic",
+            "story",
+            "backlog",
         ] {
             assert!(r.get(id).is_some(), "workflow livré manquant : {id}");
+        }
+        // #425 : le code passe par une mission ; `tache` n'est plus livré.
+        for id in crate::bundled::RETIRED {
+            assert!(r.get(id).is_none(), "{id} ne doit plus être livré");
         }
     }
 
     #[test]
     fn user_files_override_bundled() {
         let dir = tempfile::tempdir().unwrap();
-        let mut w = sample("build-verify");
+        let mut w = sample("review");
         w.metadata.name = "Version maison".into();
-        std::fs::write(dir.path().join("build-verify.workflow.json"), w.to_json()).unwrap();
+        std::fs::write(dir.path().join("review.workflow.json"), w.to_json()).unwrap();
 
         let r = WorkflowRegistry::with_bundled(&known());
         assert_eq!(r.load_dir(dir.path(), Scope::User, &known()), 1);
-        assert_eq!(
-            r.get("build-verify").unwrap().metadata.name,
-            "Version maison"
-        );
-        assert_eq!(r.entry("build-verify").unwrap().scope, Scope::User);
+        assert_eq!(r.get("review").unwrap().metadata.name, "Version maison");
+        assert_eq!(r.entry("review").unwrap().scope, Scope::User);
+        // #425 : un `tache` d'instance se charge toujours, même s'il n'est plus livré.
+        std::fs::write(
+            dir.path().join("tache.workflow.json"),
+            sample("tache").to_json(),
+        )
+        .unwrap();
+        r.load_dir(dir.path(), Scope::User, &known());
+        assert_eq!(r.entry("tache").unwrap().scope, Scope::User);
     }
 
     /// CA 12 : un workflow invalide déposé par `scp` est rejeté avec un message précis ;
