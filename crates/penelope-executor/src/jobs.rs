@@ -560,6 +560,12 @@ pub async fn tool(
             {
                 v["screen"] = json!(screen);
             }
+            // Le propriétaire tape dans le terminal du job (#397) : on ne l'interrompt pas.
+            if !job.state.is_terminal() && live::owner_has_control(&s.platform.dirs.state(), &id) {
+                v["owner_control"] = json!(true);
+                v["note"] =
+                    json!("le propriétaire a pris la main sur ce terminal : attends, n'annule pas");
+            }
             Ok(v)
         }
         "job_wait" => {

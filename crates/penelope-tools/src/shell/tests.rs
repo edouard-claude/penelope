@@ -44,6 +44,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             cancel: None,
             env: Vec::new(),
             tee: None,
+            keyboard: None,
         },
     )
     .await
@@ -69,6 +70,7 @@ async fn a_denied_path_is_unreadable_under_the_sandbox() {
             cancel: None,
             env: Vec::new(),
             tee: None,
+            keyboard: None,
         },
     )
     .await
@@ -610,4 +612,36 @@ async fn the_output_is_teed_to_the_follow_file_as_it_comes() {
         let mode = std::fs::metadata(&tee).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "lisible du seul propriétaire");
     }
+}
+
+/// #397 : le clavier d'un job `tty` : ce qui est écrit dans le tube arrive sur l'entrée de
+/// la commande, et le tube disparaît avec elle.
+#[tokio::test]
+async fn what_is_typed_into_the_keyboard_reaches_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = penelope_platform::UnixProcessHost::new(dir.path().join("pids"));
+    let fifo = dir.path().join("job.in");
+    assert!(keyboard::create(&fifo));
+    let writer = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let mut f = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+            std::io::Write::write_all(&mut f, b"bonjour\n").unwrap();
+        })
+    };
+    let out = exec(
+        &host,
+        "head -n 1",
+        ExecOptions {
+            timeout: std::time::Duration::from_secs(20),
+            keyboard: Some(fifo.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    writer.join().unwrap();
+    assert_eq!(out.stdout.trim(), "bonjour", "{out:?}");
+    assert!(!fifo.exists(), "le tube est retiré avec la commande");
 }

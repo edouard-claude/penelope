@@ -139,6 +139,7 @@ async fn command(ctx: &StepCtx<'_>, plan: &E2ePlan, check: &Check, dir: &Path) -
             cancel: Some(ctx.cancel),
             env: Vec::new(),
             tee: None,
+            keyboard: None,
         },
     )
     .await

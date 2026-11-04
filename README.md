@@ -170,6 +170,12 @@ coupe le job et son groupe de processus, et deux plafonds empêchent d'en accumu
 est un effet comme un autre : planifié dans le ledger avant de partir, jamais relancé tout
 seul après un redémarrage.
 
+La sortie d'un `shell_exec` en arrière-plan se suit en direct depuis SSH :
+`penelope job attach <id>`. Lancée avec `tty: true`, la commande a un vrai terminal, et
+`penelope job attach <id> --control` en prend la main après confirmation : ce qui est tapé
+part à la commande (une passphrase, une réponse à `npm init`), Ctrl-] rend la main, et
+l'agent voit dans `job_status` que le propriétaire tape.
+
 Ce qu'elle exécute se voit : une bulle par tour sur Telegram, modifiée en place, une
 ligne par outil avec son argument principal, les appels identiques groupés (×4), ✅ ❌ 🚫 ⏹
 (`telegram.tool_trace` : `off`, `compact`, `full`). Une photo trop lourde pour le

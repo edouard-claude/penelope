@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.88
+
+**Prendre la main sur un terminal de l'agent depuis SSH (#397, épopée #398).**
+
+- Un `shell_exec` lancé en arrière-plan avec `tty: true` a un clavier : un tube nommé
+  (`{state}/jobs/<id>.in`, accès 0600) relié à l'entrée de la commande, retiré avec elle.
+  Pas de clavier quand un secret collé passe, comme pour le journal.
+- `penelope job attach <id> --control` demande confirmation dans le terminal, puis passe
+  celui-ci en mode brut : ce qui est tapé va à la commande, Ctrl-] rend la main. Sans
+  `--control`, ou sur un « non », rien ne change : lecture seule.
+- Tant que le propriétaire a la main, `job_status` le dit à l'agent (`owner_control`),
+  avec la consigne d'attendre plutôt que d'annuler.
+- Correctif : le relais d'entrée d'une commande prenait son `stdin` même sans rien à
+  écrire.
+- Pas encore : `penelope term` et `read_terminal`.
+
 ### 1.0.87
 
 **Un worktree git par run de workflow, et la base fusionnée à la demande (#397, épopée
