@@ -27,6 +27,10 @@ close.**
   terminal du propriétaire.
 - Reste hors de ce lot, écrit dans #397 : les dépendances réensemencées depuis un cache
   par dépôt pour les worktrees.
+- Scénarios : une étape `rpc` relit la file des tours une dernière fois après la fin de
+  l'appel. Le tour qu'il mettait en file juste avant de rendre la main était parfois
+  manqué sur le runner macOS de la CI (`drained` vide dans `rpc-planifications` et
+  `rpc-approbations`), ce qui a bloqué la release.
 
 ### 1.0.88
 
