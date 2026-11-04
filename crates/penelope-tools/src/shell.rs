@@ -277,6 +277,9 @@ pub struct ExecOptions<'a> {
     /// Copie brute de la sortie, au fil de l'eau, pour qui la suit (`penelope job attach`,
     /// #397) ; bornée à [`TEE_MAX_BYTES`].
     pub tee: Option<std::path::PathBuf>,
+    /// Tube nommé dont les octets vont sur l'entrée standard (#397 : la prise de contrôle
+    /// d'un job `tty`, [`keyboard`]). `None` : pas d'entrée.
+    pub keyboard: Option<std::path::PathBuf>,
 }
 
 /// Octets au plus copiés dans le fichier de suivi d'une commande.
@@ -293,6 +296,7 @@ impl Default for ExecOptions<'_> {
             cancel: None,
             env: Vec::new(),
             tee: None,
+            keyboard: None,
         }
     }
 }
@@ -311,6 +315,7 @@ pub async fn exec(
         cancel,
         env,
         tee,
+        keyboard,
     } = opts;
 
     check_command(command)?;
@@ -329,6 +334,7 @@ pub async fn exec(
             env,
             input: None,
             tee,
+            keyboard,
         },
     )
     .await
@@ -378,6 +384,7 @@ pub async fn exec_argv_with_input(
             env,
             input,
             tee,
+            keyboard: None,
         },
     )
     .await
@@ -394,6 +401,7 @@ struct Run<'a> {
     /// Écrit sur l'entrée standard, puis fermée ; `None` : pas d'entrée.
     input: Option<Vec<u8>>,
     tee: Option<std::path::PathBuf>,
+    keyboard: Option<std::path::PathBuf>,
 }
 
 async fn spawn_and_wait(
@@ -412,11 +420,12 @@ async fn spawn_and_wait(
         env,
         input,
         tee,
+        keyboard,
     } = run;
     let mut spec = penelope_platform::ProcessSpec::new(program).args(args.iter().cloned());
     spec.inherit_env
         .extend(SHELL_EXTRA_ENV.iter().map(|k| k.to_string()));
-    spec.stdin = input.is_some();
+    spec.stdin = input.is_some() || keyboard.is_some();
     for (k, v) in env {
         spec = spec.env(k, v);
     }
@@ -436,13 +445,22 @@ async fn spawn_and_wait(
 
     // L'entrée part dans une tâche à part : un programme qui écrit avant de tout lire ne
     // bloque pas l'écriture.
-    if let (Some(bytes), Some(mut stdin)) = (input, child.inner.stdin.take()) {
+    // `stdin` n'est pris que s'il y a une entrée à écrire : sinon il reste au clavier.
+    if let Some(bytes) = input
+        && let Some(mut stdin) = child.inner.stdin.take()
+    {
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
             let _ = stdin.write_all(&bytes).await;
             let _ = stdin.shutdown().await;
         });
     }
+
+    // Le clavier d'un job `tty` : relayé tant que la commande tourne, arrêté avec elle.
+    let _keyboard = match (&keyboard, child.inner.stdin.take()) {
+        (Some(path), Some(stdin)) => keyboard::Keyboard::start(path, stdin),
+        _ => None,
+    };
 
     // Sorties lues en continu sous plafond : une commande bavarde ne fait plus monter la
     // mémoire du daemon de la taille de sa sortie (issue #65).
@@ -700,6 +718,8 @@ pub fn default_workspaces(state_dir: &Path, extra: &[String]) -> Vec<PathBuf> {
     v.extend(extra.iter().map(PathBuf::from));
     v
 }
+
+pub mod keyboard;
 
 #[cfg(test)]
 mod tests;

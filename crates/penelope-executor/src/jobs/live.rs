@@ -60,9 +60,33 @@ pub fn current_job() -> Option<String> {
     current().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
 }
 
+/// Le clavier d'un job `tty` (#397) : le tube que `attach --control` écrit.
+pub fn keyboard_path(log: &Path) -> PathBuf {
+    log.with_extension("in")
+}
+
+/// Posé par `attach --control` tant que le propriétaire a la main.
+pub fn owner_path(log: &Path) -> PathBuf {
+    log.with_extension("owner")
+}
+
+/// Le tube du clavier d'un job `tty`, créé à son lancement ; `None` hors job ou si
+/// `mkfifo` échoue (la commande tourne alors sans entrée, comme avant).
+pub fn open_keyboard(log: &Path) -> Option<PathBuf> {
+    let path = keyboard_path(log);
+    penelope_tools::shell::keyboard::create(&path).then_some(path)
+}
+
+/// Le propriétaire a la main sur le job `id`.
+pub fn owner_has_control(state: &Path, id: &str) -> bool {
+    log_path(state, id).is_some_and(|l| owner_path(&l).exists())
+}
+
 /// La commande est finie : `attach` s'arrête.
 pub fn mark_done(log: &Path) {
     let _ = std::fs::write(done_path(log), "");
+    let _ = std::fs::remove_file(keyboard_path(log));
+    let _ = std::fs::remove_file(owner_path(log));
 }
 
 /// Les dernières lignes du journal, sans séquences de terminal.
@@ -104,6 +128,14 @@ mod tests {
         std::fs::write(&seen, "a\n\x1b[32mb\x1b[0m\nc\n").unwrap();
         assert_eq!(screen(dir.path(), "j1", 2).unwrap(), "b\nc");
         assert!(log_path(dir.path(), "../x").is_none());
+        // #397 : la main du propriétaire se lit par sa marque, retirée à la fin du job.
+        assert!(!owner_has_control(dir.path(), "j1"));
+        std::fs::write(owner_path(&seen), "").unwrap();
+        assert!(owner_has_control(dir.path(), "j1"));
+        assert!(open_keyboard(&seen).is_some_and(|k| k.exists()));
+        mark_done(&seen);
+        assert!(!owner_has_control(dir.path(), "j1"));
+        assert!(!keyboard_path(&seen).exists());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

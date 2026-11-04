@@ -309,6 +309,12 @@ impl NativeToolExecutor {
                             // La sortie d'un job se suit en direct, sauf si un secret collé
                             // y passe : il ne doit jamais atterrir en clair sur le disque.
                             tee: crate::jobs::live::current().filter(|_| masked.is_empty()),
+                            // Un job `tty` a un clavier que le propriétaire peut prendre
+                            // (`penelope job attach --control`, #397) ; jamais quand un
+                            // secret collé passe, comme le journal.
+                            keyboard: crate::jobs::live::current()
+                                .filter(|_| tty && masked.is_empty())
+                                .and_then(|log| crate::jobs::live::open_keyboard(&log)),
                         },
                     )
                     .await

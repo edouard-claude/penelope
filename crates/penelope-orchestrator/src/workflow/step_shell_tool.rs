@@ -66,6 +66,7 @@ pub(super) async fn shell_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcome>
                     cancel: Some(ctx.cancel),
                     env: Vec::new(),
                     tee: None,
+                    keyboard: None,
                 },
             )
             .await
