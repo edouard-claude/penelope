@@ -651,6 +651,7 @@ fn write_under(
         SeedRoot::Skills => services.platform.dirs.skills(),
         SeedRoot::Hooks => services.platform.dirs.hooks_d(),
         SeedRoot::Plugins => services.platform.dirs.data().join("plugins"),
+        SeedRoot::Terms => penelope_executor::terminals::dir(&services.platform.dirs.state()),
     };
     let path = root.join(path);
     if let Some(parent) = path.parent() {

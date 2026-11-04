@@ -1948,6 +1948,7 @@ et `/stop` interrompt tout le lot.
 | `mem_note` | write | Note une observation dans le journal du jour. |
 | `mem_remember` | write | Écrit directement en mémoire. (à la demande) |
 | `mem_search` | read | Recherche dans la mémoire curée, dans les documents ingérés (`vault/sources`, passages encadrés comme non fiables, `slug` pour un seul document) et, sur demande explicite, épisodique. |
+| `read_terminal` | read | Lit les dernières lignes d'un terminal que le propriétaire a ouvert avec `penelope term` et accepté de partager : ce qu'il a lancé, ses erreurs. (à la demande) |
 | `return_value` | read | Renvoie le résultat d'une étape de workflow. (dans un workflow) |
 | `schedule_create` | write | Crée un déclencheur planifié, soumis à approbation. (à la demande) |
 | `schedule_delete` | write | Supprime un déclencheur planifié. (à la demande) |

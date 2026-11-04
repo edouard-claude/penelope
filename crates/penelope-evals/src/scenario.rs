@@ -172,6 +172,8 @@ pub enum SeedRoot {
     Hooks,
     /// `plugins/` du dossier de données (#393).
     Plugins,
+    /// `terms/` du dossier d'état : les terminaux partagés par `penelope term` (#397).
+    Terms,
 }
 
 #[derive(Debug, Clone, Deserialize)]

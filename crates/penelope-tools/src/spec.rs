@@ -113,6 +113,7 @@ pub const ON_DEMAND: &[&str] = &[
     "mem_get",
     "mem_neighbors",
     "mem_remember",
+    "read_terminal",
     "schedule_create",
     "schedule_delete",
     "schedule_list",

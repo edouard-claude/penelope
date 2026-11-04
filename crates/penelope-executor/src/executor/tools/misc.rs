@@ -16,6 +16,8 @@ impl NativeToolExecutor {
             "job_status" | "job_wait" | "job_cancel" | "job_list" => {
                 crate::jobs::tool(s, &self.env.session_id, name, args).await?
             }
+            "read_terminal" => crate::terminals::tool(&s.platform.dirs.state(), args)
+                .map_err(ToolError::Invalid)?,
             "session_notes" => penelope_vault::session_notes::tool(s, &self.env.session_id, args)
                 .await
                 .map_err(ToolError::Invalid)?,

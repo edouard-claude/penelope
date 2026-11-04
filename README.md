@@ -176,6 +176,10 @@ La sortie d'un `shell_exec` en arrière-plan se suit en direct depuis SSH :
 part à la commande (une passphrase, une réponse à `npm init`), Ctrl-] rend la main, et
 l'agent voit dans `job_status` que le propriétaire tape.
 
+Dans l'autre sens, `penelope term` ouvre ton shell et, si tu l'acceptes, Pénélope le lit
+par `read_terminal` : la commande que tu as lancée, l'erreur qu'elle a affichée. Lecture
+seule ; la copie disparaît quand tu fermes le terminal.
+
 Ce qu'elle exécute se voit : une bulle par tour sur Telegram, modifiée en place, une
 ligne par outil avec son argument principal, les appels identiques groupés (×4), ✅ ❌ 🚫 ⏹
 (`telegram.tool_trace` : `off`, `compact`, `full`). Une photo trop lourde pour le

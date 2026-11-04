@@ -73,6 +73,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Dataset(cmd) => return dataset::run(&cli, cmd),
         Command::Plugin { cmd } => return plugin::run(&cli, cmd),
         Command::Job { cmd } => return job_attach::run(&cli, cmd).await,
+        Command::Term { share } => return term::run(&cli, *share),
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
@@ -323,6 +324,7 @@ mod purge;
 mod render;
 mod restore;
 mod route;
+mod term;
 #[cfg(test)]
 mod tests;
 mod upgrade;
