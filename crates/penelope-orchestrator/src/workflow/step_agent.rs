@@ -474,6 +474,8 @@ pub async fn run_sub_agent(
     };
     let mut agent = AgentLoop::new(d.agent.clone(), provider);
     let mut turn = 0;
+    // Le job d'arrière-plan qui porte ce sous-agent, s'il y en a un.
+    let job = penelope_executor::jobs::live::current_job();
     let outcome = loop {
         if let Some(l) = &limits {
             agent.max_iterations = l.calls;
@@ -492,6 +494,17 @@ pub async fn run_sub_agent(
                 conv.record(&ChatMessage::user(recovery_prompt(l, turn)), false)
                     .await
                     .map_err(|e| e.to_string())?;
+            }
+            // En arrière-plan, une carte n'arrête plus le sous-agent : il l'attend (#422).
+            (TurnOutcome::AwaitingApproval { approval_id }, _) if job.is_some() => {
+                let wait = super::sub_agent_wait::Waiting {
+                    job: job.as_deref().unwrap_or_default(),
+                    run_id,
+                    kind,
+                    task: prompt,
+                    approval_id,
+                };
+                super::sub_agent_wait::await_owner(d, wait, cancel).await?;
             }
             _ => break outcome,
         }

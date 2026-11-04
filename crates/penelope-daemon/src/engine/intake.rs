@@ -79,6 +79,11 @@ impl TurnIntake for Core {
             self.workflows.wake();
             return Ok(None);
         }
+        // La carte d'un sous-agent en arrière-plan : son job attend la décision (#422).
+        let child = penelope_executor::jobs::child_approval_key(approval_id);
+        if self.services.kv_get(&child).await?.is_some() {
+            return Ok(None);
+        }
         let payload = json!({"approval_id": approval_id, "origin": origin.to_value()});
         let id = self
             .services

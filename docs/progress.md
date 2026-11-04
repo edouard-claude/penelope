@@ -12,6 +12,25 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.90
+
+**Un sous-agent en arrière-plan attend ton accord au lieu d'échouer (#422, épopée #398).**
+
+- Un `sub_agent_spawn` en arrière-plan qui demande un outil soumis à approbation posait
+  une carte que personne ne voyait, puis échouait. Il envoie maintenant la carte, qui dit
+  qu'elle vient d'un sous-agent et de quelle tâche (« Un sous-agent `explore` le demande,
+  pour sa tâche : … »), passe son job en `input_required` et attend la décision.
+- Accordé, il reprend où il était et son résultat revient au parent comme avant. Refusé
+  ou expiré, il reçoit le refus comme résultat d'outil et continue ou conclut.
+- La décision ne relance aucun tour du parent : c'est le job qui la lit. Comme le veut
+  la garde de #396, le parent n'est pas réveillé tant que la carte attend ;
+  `job_status` et `job_list` montrent l'attente. Le job en attente compte dans
+  `tools.jobs_per_session`, et la carte expire comme les autres.
+- Un redémarrage du daemon pendant l'attente fait échouer le job avec une cause lisible :
+  la conversation du sous-agent vivait dans le daemon.
+- Pas encore : l'attente d'un sous-agent servi par un process enfant
+  (`runners.sub_agents_in_child`), qui échoue toujours devant une carte.
+
 ### 1.0.89
 
 **Un terminal du propriétaire que l'agent peut lire (#397, épopée #398). L'issue est

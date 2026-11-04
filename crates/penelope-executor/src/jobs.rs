@@ -225,6 +225,29 @@ impl JobStore {
             .await?)
     }
 
+    /// Un job vivant attend le propriétaire (`input_required`) ou reprend (`working`),
+    /// #422 : un sous-agent en arrière-plan devant une carte. Un job terminal ne bouge pas.
+    pub async fn set_waiting(&self, id: &str, waiting: bool) -> anyhow::Result<bool> {
+        let state = if waiting {
+            TaskState::InputRequired
+        } else {
+            TaskState::Working
+        };
+        let (id, ts) = (id.to_string(), self.clock.now_rfc3339());
+        Ok(self
+            .store
+            .write(move |tx| {
+                let n = tx.execute(
+                    &format!(
+                        "UPDATE tool_jobs SET state = ?2, updated_at = ?3 WHERE id = ?1 AND {LIVE}"
+                    ),
+                    params![id, state.as_str(), ts],
+                )?;
+                Ok(n > 0)
+            })
+            .await?)
+    }
+
     /// Jobs terminés dont le résultat n'a pas encore rejoint sa session.
     pub async fn undelivered(&self, limit: i64) -> anyhow::Result<Vec<ToolJob>> {
         Ok(self
@@ -311,6 +334,15 @@ impl JobStore {
                     ),
                     params![LOST_ON_BOOT, ts],
                 )?;
+                // Un sous-agent qui attendait une carte le dit (#422) : sa conversation
+                // vivait dans le daemon, elle est perdue.
+                tx.execute(
+                    &format!(
+                        "UPDATE tool_jobs SET state = 'failed', result = ?1, updated_at = ?2
+                         WHERE {live} AND state = 'input_required'"
+                    ),
+                    params![json!({"error": LOST_WAITING_ON_BOOT}).to_string(), ts],
+                )?;
                 tx.execute(
                     &format!(
                         "UPDATE tool_jobs SET state = 'failed', result = ?1, updated_at = ?2
@@ -327,6 +359,17 @@ impl JobStore {
 /// Ce qu'un job perdu au redémarrage porte comme résultat.
 pub const LOST_ON_BOOT: &str =
     "le daemon a redémarré pendant ce job : son processus est mort, rien n'a été relancé";
+
+/// Une carte posée par un sous-agent en arrière-plan (#422) : le job qui l'attend. Sa
+/// décision ne relance aucun tour du parent, c'est le job qui la lit.
+pub fn child_approval_key(approval_id: &str) -> String {
+    format!("approval.child.{approval_id}")
+}
+
+/// Ce qu'un sous-agent en attente d'accord, perdu au redémarrage, porte comme résultat.
+pub const LOST_WAITING_ON_BOOT: &str = "le daemon a redémarré pendant que ce sous-agent \
+     attendait ton accord : sa conversation est perdue, rien n'a été relancé ; relance la \
+     tâche si elle compte encore";
 
 /// Le magasin de jobs des services.
 pub fn store(s: &Services) -> JobStore {

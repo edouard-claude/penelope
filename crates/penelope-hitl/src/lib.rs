@@ -338,6 +338,31 @@ impl ApprovalStore {
         self.note_rule_kind(id, Some("powers")).await
     }
 
+    /// La demande vient d'un sous-agent en arrière-plan (#422) : la carte le dit, avec
+    /// sa tâche, à la place de « Pour ta demande », qui serait celle du propriétaire.
+    pub async fn note_child(&self, id: &str, kind: &str, task: &str) -> Result<()> {
+        let short: String = task.split_whitespace().collect::<Vec<_>>().join(" ");
+        let short = match short.chars().count() > 160 {
+            true => format!("{}…", short.chars().take(159).collect::<String>()),
+            false => short,
+        };
+        let why = format!("Un sous-agent `{kind}` le demande, pour sa tâche : « {short} »");
+        let child = serde_json::json!({"kind": kind, "task": short}).to_string();
+        let id = id.to_string();
+        self.store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE approval_requests SET payload = json_set(payload,
+                        '$.why', ?2, '$.why_from', 'enfant', '$.child', json(?3))
+                     WHERE id = ?1",
+                    params![id, why, child],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
     async fn note_rule_kind(&self, id: &str, kind: Option<&str>) -> Result<()> {
         let (id_s, value) = (id.to_string(), kind.map(String::from));
         self.store
