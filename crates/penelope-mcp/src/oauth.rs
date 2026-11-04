@@ -540,11 +540,15 @@ impl Tokens {
         format!("{t} {}", self.access_token)
     }
 
-    /// Vrai s'il faut rafraîchir (marge de 60 s).
+    /// Vrai s'il faut rafraîchir : moins de [`REFRESH_MARGIN_MS`] avant l'expiration
+    /// (#431 : une minute ne laissait pas le temps à un appel lent).
     pub fn needs_refresh(&self, now_ms: i64) -> bool {
-        self.expires_at_ms != i64::MAX && now_ms + 60_000 >= self.expires_at_ms
+        self.expires_at_ms != i64::MAX && now_ms + REFRESH_MARGIN_MS >= self.expires_at_ms
     }
 }
+
+/// Marge de renouvellement d'un jeton d'accès : cinq minutes avant son expiration.
+pub const REFRESH_MARGIN_MS: i64 = 5 * 60_000;
 
 /// Stratégie d'enregistrement du client, par ordre de préférence (§8.5).
 #[derive(Debug, Clone, PartialEq, Eq)]

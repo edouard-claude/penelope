@@ -400,6 +400,15 @@ L'hôte du retour local se règle par `mcp.callback_host` : `127.0.0.1` par déf
 `localhost` accepté, rien d'autre. `penelope doctor` affiche l'URL de rappel effective ;
 c'est exactement celle à enregistrer chez le fournisseur.
 
+**Renouvellement** (1.0.94, #431). Le jeton d'accès est renouvelé cinq minutes avant son
+expiration, sur une connexion HTTP déjà ouverte comme au lancement : la connexion repart
+avec le jeton neuf au prochain appel. Avec la rotation (Slack), le jeton de
+rafraîchissement ne sert qu'une fois : un seul renouvellement par serveur à la fois, et le
+jeton tourné est gardé. Un jeton refusé par la ressource alors qu'il semblait valide est
+renouvelé, la connexion rouverte et l'appel rejoué une fois. Un renouvellement refusé par
+le serveur d'autorisation (jeton révoqué ou déjà consommé) range le serveur en
+« autorisation requise » et dit de refaire `penelope mcp auth <serveur>`.
+
 Les portées demandées viennent, dans l'ordre : de `scopes` dans la déclaration du serveur,
 des portées manquantes annoncées par le défi 401, et à défaut de `scopes_supported` de la
 ressource protégée (RFC 9728). Ce dernier recours évite une demande sans portée, que
@@ -454,8 +463,8 @@ AGENDA_TIMEZONE = "Indian/Reunion"
 
 - Le jeton est rafraîchi avant chaque lancement et n'est écrit ni dans `mcp.d`, ni dans un
   journal, ni dans une erreur.
-- Comme il ne se renouvelle pas dans le processus, le serveur est relancé une minute avant
-  son expiration, au prochain appel.
+- Comme il ne se renouvelle pas dans le processus, le serveur est relancé cinq minutes
+  avant son expiration, au prochain appel.
 - Sans autorisation, l'appel dit d'exécuter `penelope mcp auth <serveur>`, au lieu
   d'échouer en silence.
 - `oauth_params` ajoute des paramètres à l'URL d'autorisation, mais ne remplace aucun

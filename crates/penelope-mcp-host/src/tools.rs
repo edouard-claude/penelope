@@ -23,24 +23,33 @@ impl McpSupervisor {
             .slot(&tool.server)
             .await
             .ok_or_else(|| format!("le serveur `{}` n'est plus déclaré dans mcp.d", tool.server))?;
-        let client = self.ensure_live(&slot).await?;
+        let mut client = self.ensure_live(&slot).await?;
         // Le serveur peut demander une confirmation pendant l'appel : elle doit revenir
         // dans la conversation qui l'a provoqué (issue #143). Le garde tombe avec
         // l'appel, réussi ou non.
         let _scope = self.services.elicitations.scope(&tool.server, from);
         let timeout = slot.config().timeout_for(&tool.name);
         let started = std::time::Instant::now();
-        let call = |input: Option<Value>, state: Option<String>| {
-            client.retry_tool(
-                &tool.name,
-                args.clone(),
-                tool.output_schema.as_ref(),
-                Some(timeout),
-                input,
-                state,
-            )
+        let (name, schema) = (&tool.name, tool.output_schema.as_ref());
+        let call = |c: Arc<McpClient>, input: Option<Value>, state: Option<String>| {
+            let args = args.clone();
+            async move {
+                c.retry_tool(name, args, schema, Some(timeout), input, state)
+                    .await
+            }
         };
-        let mut outcome = call(None, None).await;
+        let mut outcome = call(client.clone(), None, None).await;
+        // Jeton refusé alors que l'horloge le croyait valide (#431) : renouvelé, la
+        // connexion rouverte, l'appel rejoué une fois. Échoue, l'erreur dit pourquoi.
+        if let Err(e) = &outcome
+            && e.needs_auth()
+            && crate::auth::invalidate(&self.services, &tool.server).await
+        {
+            tracing::info!(server = %tool.server, "jeton refusé : renouvellement et nouvel essai");
+            self.stop_slot(&slot).await;
+            client = self.ensure_live(&slot).await?;
+            outcome = call(client.clone(), None, None).await;
+        }
         // MRTR (2026-07-28) : le serveur demande une saisie, l'appel est relancé avec les
         // réponses et son état opaque.
         let mut rounds = 0;
@@ -54,14 +63,14 @@ impl McpSupervisor {
                 .input_responses(&tool.server, r.input_requests.as_ref(), url_ok)
                 .await;
             let state = r.request_state.clone();
-            outcome = call(input, state).await;
+            outcome = call(client.clone(), input, state).await;
         }
         // 2025-11-25 : l'appel exige un lien mené à bien, puis un nouvel essai.
         if let Err(McpError::Rpc { code, data, .. }) = &outcome
             && *code == penelope_mcp::protocol::URL_ELICITATION_REQUIRED
             && self.links_completed(&tool.server, data.clone()).await
         {
-            outcome = call(None, None).await;
+            outcome = call(client.clone(), None, None).await;
         }
         let notes = self
             .services
