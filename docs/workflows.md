@@ -220,7 +220,7 @@ jamais retiré). Le worktree ne voit que ce qui est commité dans le dépôt :
 `forms` déclare les formulaires des étapes `user` (voir plus bas) : un JSON Schema d'objet
 par identifiant.
 
-## Les onze types d'étapes
+## Les douze types d'étapes
 
 | Type | Champs propres | Ce qu'il fait |
 |---|---|---|
@@ -235,6 +235,7 @@ par identifiant.
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
 | `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`, `sync_with_base`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») ; `sync_with_base` récupère `branches.dev` et la fusionne dans la branche du run : `passed` si la fusion est propre, `failed` avec `conflicts` (les fichiers) sinon, la fusion laissée en cours pour l'étape qui résout et commite |
+| `mission` | `prompt` (l'objectif, obligatoire), `cwd` (le dépôt, dans un workspace autorisé), `command` (la commande qui prouve la fin), `budget.maxUsd` | Confie une tâche de code à une mission (décision 0025) dans une session neuve, sur le canal du run, et attend sa fin : `success` si elle est terminée, `failure` sinon, avec son état et son résumé. Annuler le run arrête sa mission |
 
 `context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
 run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres
@@ -581,12 +582,26 @@ n'importe quel tracker.
 
 | Identifiant | Rôle |
 |---|---|
-| `build-verify` | Planifier, implémenter, vérifier, boucler tant que les critères ne sont pas remplis |
+| `build-verify` | Planifier, implémenter, vérifier, boucler tant que les critères ne sont pas remplis ; l'ancre des plans en phases (#191) |
 | `review` | Lint, tests et relecture en parallèle, résultats dans `review_findings` |
 | `ticket-to-deploy` | Scénario de référence du §12.10 : du ticket au déploiement, avec portes humaines |
 | `deploy-generic` | Déploiement du dépôt cloné, appelé en sous-workflow |
-| `backlog` | Lit une liste de tâches dans un tracker (paramètre `tracker` : ClickUp, Redmine, GitHub ou `fichier`) et la déroule avec `tache`, point d'arrêt à chaque fin d'épique (1.0.48, #338) |
-| `tache` | Une tâche : spécification, tests, développement, tests locaux, commit et push, **vérification sur ce qui tourne** (pipeline suivi par `glab`/`gh`, URLs et `/version` par `curl`, `docker compose config` ; 1.0.52, #348), revue adverse, statut du tracker. Un accès que seul le propriétaire peut donner arrête la liste en disant quoi poser |
+| `backlog` | Lit une liste de tâches dans un tracker (paramètre `tracker` : ClickUp, Redmine, GitHub ou `fichier`) et la déroule avec `story`, point d'arrêt à chaque fin d'épique (1.0.48, #338) |
+| `story` | Une tâche du backlog confiée à une **mission** dans le dépôt (paramètre `depot`) : code, tests, commit et push, statut du tracker ; 20 $ au plus. Une mission qui ne finit pas arrête la liste (1.0.92, #425) |
+
+`tache` n'est plus livré (décision
+[0025](decisions/0025-workflows-pipelines-missions-code.md)) : un workflow d'instance de ce
+nom se charge toujours, et le journal le signale au démarrage, avec chaque planification
+qui le lance. `build-verify` reste livré tant que les plans en phases s'y ancrent.
+
+### Quand ne pas écrire un workflow
+
+Un workflow sert un processus **déterministe** : déployer, dérouler une liste, enchaîner
+des portes humaines, réagir à une planification. Écrire du code dans un dépôt est une
+tâche **ouverte** : elle se confie à une mission (`/mission`, ou l'étape `mission` d'un
+workflow), qui tient la boucle jusqu'à sa fin vérifiée. N'écris pas de suite d'étapes
+`agent` qui se jugent l'une l'autre pour du code (spécification, développement, revue,
+retour au développement) : c'est ce qui tournait en rond en octobre (#348, #362).
 
 Ils sont validés au chargement comme n'importe quel fichier utilisateur : un workflow
 livré qui deviendrait invalide ferait échouer les tests plutôt que de se charger à moitié.
@@ -695,7 +710,7 @@ les reprend.
 **Exception : un workflow à liste part tel quel** (1.0.50, #343). Quand le plan choisit un
 workflow qui déroule sa propre liste (une étape `foreach`, comme `backlog`), « vas-y » le
 lance directement avec les paramètres du plan : la liste se fige, chaque élément est un
-sous-run (`tache`), et seuls les arrêts du workflow interrompent la série (fin d'épique,
+sous-run (`story`, une mission par élément), et seuls les arrêts du workflow interrompent la série (fin d'épique,
 élément en échec, crédits épuisés) ; aucune porte de phase n'attend le propriétaire. Un
 paramètre manquant ou inconnu est refusé au clic. Le brief du plan est lu par la première
 étape du run **et** par chaque sous-run, qui en hérite de son parent.

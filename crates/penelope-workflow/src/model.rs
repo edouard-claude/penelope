@@ -551,6 +551,7 @@ pub const STEP_KINDS: &[&str] = &[
     "wait",
     "verify",
     "delivery",
+    "mission",
 ];
 
 /// Types autorisés comme enfants d'un `parallel` (§12.6).

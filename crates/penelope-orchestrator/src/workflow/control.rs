@@ -40,6 +40,7 @@ pub async fn control(
             let st = s.runs.control(run_id, op).await?;
             d.workflows.interrupt(run_id);
             if *op == Control::Cancel {
+                super::step_mission::stop_current(d, run_id).await;
                 finish(d, &run, RunState::Cancelled, "annulé par le propriétaire").await?;
             }
             st

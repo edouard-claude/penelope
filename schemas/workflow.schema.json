@@ -362,7 +362,8 @@
             "foreach",
             "wait",
             "verify",
-            "delivery"
+            "delivery",
+            "mission"
           ]
         },
         "phase": {

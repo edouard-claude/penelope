@@ -235,6 +235,7 @@ mod start;
 mod step_agent;
 mod step_compose;
 mod step_ctx;
+mod step_mission;
 mod step_shell_tool;
 mod step_user;
 mod step_verify;

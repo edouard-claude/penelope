@@ -12,6 +12,28 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.92
+
+**Les workflows pour les pipelines, les missions pour le code (#425, décision 0025).**
+
+- Nouveau type d'étape `mission` : un workflow confie une tâche de code à une mission
+  (`prompt` pour l'objectif, `cwd` pour le dépôt, `command` pour la preuve de fin,
+  `budget.maxUsd`), dans une session neuve sur le canal du run, et attend sa fin :
+  `success` si elle est terminée, `failure` sinon. Annuler le run arrête sa mission, et
+  celles de ses sous-runs.
+- `backlog` déroule sa liste avec `story`, qui lance une mission par tâche dans le dépôt
+  (20 $ au plus), une après l'autre ; les points d'arrêt de fin d'épique restent. Une
+  mission qui ne finit pas arrête la liste.
+- `tache` n'est plus livré. Un workflow d'instance de ce nom se charge toujours, et le
+  journal le signale au démarrage, avec chaque planification qui le lance ; rien n'est
+  supprimé.
+- `build-verify` reste livré : `workflow_plan` exige un workflow enregistré, et tous les
+  plans en phases (#191), livraison en dev et en prod comprises, s'y ancrent. Le retirer
+  les aurait cassés. Il partira quand un plan de code partira en mission.
+- `docs/workflows.md` : « Quand ne pas écrire un workflow ».
+- Pas encore : la mission d'une story dans le worktree de son run (#397), et
+  `mission-bench` rejoué sur `backlog`.
+
 ### 1.0.91
 
 **Le prompt système ne propose plus `workflow_start` depuis un canal (#423).**

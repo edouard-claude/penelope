@@ -212,6 +212,7 @@ pub(super) async fn execute_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutcom
             "wait" => wait_step(ctx).await,
             "verify" => verify_step(ctx).await,
             "delivery" => delivery_step(ctx).await,
+            "mission" => super::step_mission::mission_step(ctx).await,
             other => Ok(done(
                 StepResult::Error,
                 json!({"error": format!("type d'étape inconnu `{other}`")}),

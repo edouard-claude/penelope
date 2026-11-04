@@ -1,10 +1,13 @@
-//! `backlog` et `tache` (#338) : dérouler une liste de tâches, dans l'ordre, une tâche
-//! après l'autre, chacune de la spécification au statut du tracker.
+//! `backlog` et `story` (#338, #425) : dérouler une liste de tâches, dans l'ordre, une
+//! tâche après l'autre.
 //!
 //! Le tracker est un paramètre (ClickUp, Redmine, issues GitHub ou fichier) : la première
 //! étape lit la liste par les outils du tracker (MCP) ou dans le fichier, sans code propre
-//! à aucun d'eux, et la rend en JSON ; l'étape `foreach` la fige puis appelle `tache` pour
-//! chaque élément.
+//! à aucun d'eux, et la rend en JSON ; l'étape `foreach` la fige puis appelle `story` pour
+//! chaque élément. `story` confie la tâche à une **mission** (décision 0025) : le workflow
+//! garde l'extérieur (la liste, l'ordre, les arrêts de fin d'épique), la mission tient la
+//! boucle du code jusqu'à son critère de fin. `tache`, l'ancienne suite d'étapes `agent`
+//! qui tournait entre développement, tests et revue (#348, #354, #362), n'est plus livrée.
 
 use super::step;
 use crate::model::*;
@@ -21,16 +24,16 @@ fn param(id: &str, label: &str, required: bool, default: Option<&str>) -> Parame
     }
 }
 
-/// `backlog` : lit la liste, la fige, la déroule avec `tache`, point d'arrêt à chaque fin
-/// d'épique.
+/// `backlog` : lit la liste, la fige, la déroule avec `story` (une mission par tâche),
+/// point d'arrêt à chaque fin d'épique.
 pub fn backlog() -> Workflow {
     Workflow {
         metadata: Metadata {
             id: "backlog".into(),
             name: "Dérouler un backlog".into(),
             description: "Lit une liste de tâches (ClickUp, Redmine, GitHub, fichier) et la \
-                          déroule dans l'ordre avec `tache`, point d'arrêt à chaque fin \
-                          d'épique."
+                          déroule dans l'ordre, une mission par tâche, point d'arrêt à chaque \
+                          fin d'épique."
                 .into(),
             parameters: vec![
                 param("tracker", "Tracker", false, Some("fichier")),
@@ -72,7 +75,7 @@ pub fn backlog() -> Workflow {
             },
             Step {
                 items: json!({"step": "lister", "path": "content"}),
-                workflow_id: "tache".into(),
+                workflow_id: "story".into(),
                 params: json!({"tracker": "{{tracker}}", "source": "{{source}}",
                                "depot": "{{depot}}"}),
                 on_error: "stop".into(),
@@ -95,24 +98,20 @@ pub fn backlog() -> Workflow {
 }
 
 const ITEM: &str = "Tâche {{item_index}}/{{item_total}} : {{item.title}} ({{item.url}}, \
-                    identifiant {{item.id}}, tracker {{tracker}}). Dépôt : {{depot}}.";
+                    identifiant {{item.id}}, tracker {{tracker}}).";
 
-/// `tache` : une tâche du backlog, de la spécification au statut du tracker.
-pub fn task() -> Workflow {
-    let agent = |id: &str, phase: Phase, prompt: String, next: Vec<Transition>| Step {
-        prompt,
-        transitions: next,
-        ..step(id, "agent", phase)
-    };
-    let passed_or =
-        |ok: &str, ko: &str| vec![Transition::on_result(ok, "passed"), Transition::always(ko)];
+/// Budget d'une mission par tâche, en dollars.
+const STORY_USD: f64 = 20.0;
+
+/// `story` : une tâche du backlog confiée à une mission, dans le dépôt.
+pub fn story() -> Workflow {
     Workflow {
         metadata: Metadata {
-            id: "tache".into(),
-            name: "Tâche du backlog".into(),
-            description: "Spécification, tests, développement, tests locaux, commit et push, \
-                          vérification sur ce qui tourne (pipeline, URLs, /version), revue \
-                          adverse, statut du tracker."
+            id: "story".into(),
+            name: "Tâche du backlog, en mission".into(),
+            description: "Confie une tâche du backlog à une mission dans le dépôt : code, \
+                          tests, commit et push, statut du tracker ; la mission tient la \
+                          boucle jusqu'à sa fin vérifiée."
                 .into(),
             parameters: vec![
                 Parameter {
@@ -130,169 +129,41 @@ pub fn task() -> Workflow {
             ],
             ..Default::default()
         },
-        entry_step: "spec".into(),
+        entry_step: "mission".into(),
         settings: Settings {
-            max_iterations: 30,
+            max_iterations: 4,
             budget: Budget {
-                max_usd: 10.0,
-                max_tokens: 4_000_000,
+                max_usd: STORY_USD,
+                max_tokens: 0,
                 max_wall_ms: 0,
                 max_cached_tokens: 0,
             },
             ..Settings::default()
         },
         start_condition: json!({"type":"always"}),
-        steps: vec![
-            agent(
-                "spec",
-                Phase::Plan,
-                format!(
-                    "{ITEM}\nLis la tâche dans son tracker et le code concerné. Écris une \
-                     spécification courte : comportement attendu, critères d'acceptation \
-                     vérifiables, fichiers touchés. Chaque critère dit comment le prouver avec \
-                     les outils de la machine (test, commande, pipeline suivi par `glab` ou \
-                     `gh`, URL interrogée par `curl`) : l'étape `verifier` le prouvera après le \
-                     push. Pose les critères : `session_metadata` \
-                     op=set key=criteria entry=[{{\"id\": \"…\", \"text\": \"…\", \"status\": \
-                     \"pending\"}}, …]. Puis `step_done()`."
-                ),
-                vec![Transition::always("tests")],
+        steps: vec![Step {
+            prompt: format!(
+                "{ITEM}\n\nRéalise cette tâche dans le dépôt : lis ses règles (CLAUDE.md, \
+                 AGENTS.md), écris le code et ses tests, fais passer les tests du dépôt, \
+                 commite sur une branche de travail et pousse si le dépôt a un remote. Mets \
+                 ensuite son statut à jour dans {{{{tracker}}}} (ses outils, ou le fichier \
+                 {{{{source}}}}). Ne touche à aucune autre tâche de la liste."
             ),
-            agent(
-                "tests",
-                Phase::Build,
-                "Écris d'abord les tests qui traduisent les critères, sans toucher au code \
-                 produit, et lance-les : ils doivent échouer pour la bonne raison. Puis \
-                 `step_done()`."
-                    .into(),
-                vec![Transition::always("dev")],
-            ),
-            Step {
-                max_calls: Some(120),
-                max_turns: Some(3),
-                ..agent(
-                    "dev",
-                    Phase::Build,
-                    "Implémente jusqu'à ce que les tests passent. Coche chaque critère rempli : \
-                     `session_metadata` op=update key=criteria entry={\"id\": \"<id>\", \
-                     \"status\": \"completed\"}. {{pendingCount}} critère(s) restant(s) :\n\
-                     {{criteriaList}}\nCe que la dernière vérification a refusé, s'il y en a : \
-                     {{reason}}. Puis `step_done()`."
-                        .into(),
-                    vec![Transition::always("tests-locaux")],
-                )
-            },
-            // Démarrer l'application avant de pousser (#348) : le 12/10, le test
-            // d'acceptation de la story 1.1 ne lisait que le texte des fichiers compose, et
-            // la revue a trouvé l'isolation des hôtes cassée.
-            Step {
-                max_calls: Some(120),
-                ..agent(
-                    "tests-locaux",
-                    Phase::Verification,
-                    "Lance dans {{depot}} ce que la CI lancera : format, lint, tests complets. \
-                     Puis fais tourner ce que tu as changé, en local, avant tout push. Si le \
-                     changement touche l'exécution ou le déploiement (Dockerfile, `docker \
-                     compose`, CI, routage, configuration, migrations), démarre la pile \
-                     (`docker compose -f <fichier> up -d --build`) et attends qu'elle réponde. \
-                     Interroge chaque service (`curl -fsS`, avec `-H 'Host: …'` pour un routage \
-                     par hôte) : `/version`, ce que chaque hôte doit servir et ce qu'il doit \
-                     refuser. Arrête-la ensuite (`docker compose down`, sans `-v`). Si c'est du \
-                     code applicatif, lance l'application et exerce le parcours touché (requête, \
-                     page, commande). Tout vert : `return_value(result=\"passed\", content=<les \
-                     commandes et ce qu'elles ont rendu>)`. Sinon `return_value(result=\
-                     \"failed\", content=<l'échec, la commande et sa sortie utile>)`. Puis \
-                     `step_done()`."
-                        .into(),
-                    passed_or("commit", "dev"),
-                )
-            },
-            Step {
-                context: "fresh".into(),
-                ..agent(
-                    "revue",
-                    Phase::Verification,
-                    format!(
-                        "{ITEM}\nTu fais la revue adverse de ce changement : tu ne l'as pas \
-                         écrit et tu cherches ce qui casse. Lis le diff (`git diff` depuis la \
-                         branche de départ), les tests ajoutés et les critères. Bugs, \
-                         régressions, failles, cas limites non testés : rends \
-                         `return_value(result=\"failed\", content=<les corrections, chacune \
-                         avec fichier et raison>)`. Rien de bloquant : \
-                         `return_value(result=\"passed\")`. La vérification a déjà prouvé les \
-                         critères sur ce qui tourne : {{{{steps.verifier.content}}}}. Puis \
-                         `step_done()`."
-                    ),
-                    passed_or("statut", "dev"),
-                )
-            },
-            agent(
-                "commit",
-                Phase::Deploy,
-                "Commite le changement (message : ce qui change et pourquoi, avec \
-                 l'identifiant {{item.id}}) et pousse-le dans {{depot}} sur la branche que le \
-                 flux du projet prévoit pour ce travail (README, CLAUDE.md, CI : la branche de \
-                 développement, ou celle de l'environnement que la tâche déploie), sans \
-                 `--force`. Rends `return_value(result=\"success\", content=<SHA court et \
-                 branche>)`, puis `step_done()`."
-                    .into(),
-                vec![Transition::always("verifier")],
-            ),
-            // La preuve sur ce qui tourne vient après le push, avant la revue (#348) : le
-            // 12/10, la revue exigeait des déploiements que le run ne poussait qu'après elle,
-            // et il a conclu, à tort, qu'il ne pouvait rien vérifier.
-            Step {
-                max_calls: Some(120),
-                ..agent(
-                    "verifier",
-                    Phase::Verification,
-                    "Le changement est poussé : {{steps.commit.content}}. Vérifie chaque \
-                     critère d'acceptation sur ce qui tourne vraiment, avec les outils de la \
-                     machine. Suis le pipeline de ce commit jusqu'à sa fin (`glab ci status`, \
-                     `glab ci view`, `glab ci trace` sur GitLab ; `gh run watch` sur GitHub) et \
-                     lis ses journaux s'il échoue. Interroge ce qui est déployé : `curl -fsS \
-                     <url>/version` doit rendre le SHA poussé, chaque hôte doit répondre ce \
-                     qu'il doit et refuser le reste. Compare la configuration (`docker compose \
-                     config`). Chaque critère prouvé : `session_metadata` op=update key=criteria \
-                     entry={\"id\": \"<id>\", \"status\": \"passed\"}, avec la commande et \
-                     sa sortie utile. Ne déclare jamais un critère invérifiable sans l'avoir \
-                     essayé. Ce qui manque à un environnement de développement ou de recette \
-                     (`dev`, `qa`, `staging`) est à toi de le créer : une variable CI absente, \
-                     tu la poses (`glab variable set <CLÉ> --scope <env> --masked`, la valeur \
-                     générée sur la machine, `openssl rand -hex 32` pour un secret, lue sur \
-                     l'entrée standard, jamais affichée, écrite ni rendue), puis tu relances le \
-                     pipeline et tu reprends la vérification. Un secret que seul le \
-                     propriétaire détient (clé d'un service, mot de passe d'une base existante) \
-                     est peut-être déjà rangé sous `ci.<projet>.<env>.<libellé>` : `penelope \
-                     secret list` donne les noms ; `shell_exec` avec `secrets={\"VAL\": \"<nom>\"}` \
-                     le met dans la commande sans que tu voies la valeur (`printf %s \"$VAL\" \
-                     | glab variable set <CLÉ> --scope <env> --masked`). Tout est prouvé : \
-                     `return_value(result=\"passed\", content=<les preuves, une par critère, \
-                     et les variables créées, sans leur valeur>)`. Un critère échoue : \
-                     `return_value(result=\"failed\", content=<critère, commande, sortie, \
-                     correction attendue>)`. Seul ce qui touche la production, un compte ou un \
-                     service externe que tu ne peux pas créer et qui n'est pas rangé, ou un droit \
-                     refusé, revient au propriétaire : `return_value(result=\"blocked\", \
-                     content=<ce qui manque, exactement, et la commande pour le donner : \
-                     \"/secrets <projet>\" puis coller le bloc>)`. Puis `step_done()`."
-                        .into(),
-                    vec![
-                        Transition::on_result("revue", "passed"),
-                        Transition::on_result(BLOCKED, "blocked"),
-                        Transition::always("dev"),
-                    ],
-                )
-            },
-            agent(
-                "statut",
-                Phase::Done,
-                "Passe la tâche {{item.id}} à l'état « fait » dans {{tracker}}, avec un \
-                 commentaire court : ce qui a été fait et le commit {{steps.commit.content}}. \
-                 Avec `fichier`, coche sa case dans {{source}}. Puis `step_done()`."
-                    .into(),
-                vec![Transition::always(DONE)],
-            ),
-        ],
+            cwd: "{{depot}}".into(),
+            budget: Some(Budget {
+                max_usd: STORY_USD,
+                ..Budget::default()
+            }),
+            transitions: vec![
+                Transition::on_result(DONE, "success"),
+                Transition {
+                    goto: BLOCKED.into(),
+                    condition: json!({"type":"always"}),
+                    tag: "la mission n'a pas fini : la liste s'arrête".into(),
+                },
+            ],
+            ..step("mission", "mission", Phase::Build)
+        }],
     }
 }
 
@@ -300,57 +171,21 @@ pub fn task() -> Workflow {
 mod tests {
     use super::*;
 
-    fn next_of(w: &Workflow, id: &str) -> Vec<(String, String)> {
-        w.steps
-            .iter()
-            .find(|s| s.id == id)
-            .unwrap_or_else(|| panic!("étape {id}"))
-            .transitions
-            .iter()
-            .map(|t| {
-                let on = t
-                    .condition
-                    .get("result")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("*")
-                    .to_string();
-                (on, t.goto.clone())
-            })
-            .collect()
-    }
-
-    /// #348 : le push précède la preuve, la preuve précède la revue ; un échec renvoie au
-    /// développement, un accès que seul le propriétaire peut donner arrête la liste.
+    /// #425 : `backlog` délègue chaque tâche à `story`, qui la confie à une mission dans
+    /// le dépôt, avec son budget ; une mission qui ne finit pas arrête la liste.
     #[test]
-    fn a_task_is_pushed_then_proved_then_reviewed() {
-        let w = task();
-        let pair = |on: &str, to: &str| (on.to_string(), to.to_string());
-        assert_eq!(
-            next_of(&w, "tests-locaux"),
-            [pair("passed", "commit"), pair("*", "dev")]
-        );
-        assert_eq!(next_of(&w, "commit"), [pair("*", "verifier")]);
-        assert_eq!(
-            next_of(&w, "verifier"),
-            [
-                pair("passed", "revue"),
-                pair("blocked", BLOCKED),
-                pair("*", "dev")
-            ]
-        );
-        assert_eq!(
-            next_of(&w, "revue"),
-            [pair("passed", "statut"), pair("*", "dev")]
-        );
-        let verify = &w.steps.iter().find(|s| s.id == "verifier").unwrap().prompt;
-        for tool in [
-            "glab ci",
-            "gh run watch",
-            "curl -fsS",
-            "/version",
-            "docker compose",
-        ] {
-            assert!(verify.contains(tool), "{tool}");
-        }
+    fn each_task_of_the_backlog_is_a_mission() {
+        let b = backlog();
+        let each = b.steps.iter().find(|s| s.kind == "foreach").unwrap();
+        assert_eq!(each.workflow_id, "story");
+        let w = story();
+        assert_eq!(w.steps.len(), 1);
+        let m = &w.steps[0];
+        assert_eq!(m.kind, "mission");
+        assert_eq!(m.cwd, "{{depot}}");
+        assert!(m.prompt.contains("{{item.title}}") && m.prompt.contains("{{tracker}}"));
+        assert_eq!(m.budget.as_ref().unwrap().max_usd, STORY_USD);
+        assert_eq!(m.transitions[0].goto, DONE);
+        assert_eq!(m.transitions[1].goto, BLOCKED);
     }
 }

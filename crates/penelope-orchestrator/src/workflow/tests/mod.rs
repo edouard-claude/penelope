@@ -66,6 +66,7 @@ mod driver;
 mod fake_forge;
 mod foreach;
 mod long_runs;
+mod mission_step;
 mod plan;
 mod prod;
 mod review;
