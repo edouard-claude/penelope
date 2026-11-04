@@ -301,7 +301,14 @@ pub(super) async fn send_approval_once(ctx: &StepCtx<'_>, approval_id: &str) {
 }
 
 /// Rôles câblés ; tout autre `kind` est cherché parmi les sous-agents déclarés (#393).
-const BUILTIN_KINDS: &[&str] = &["explore", "review", "code_reviewer", "verifier", "code"];
+const BUILTIN_KINDS: &[&str] = &[
+    "explore",
+    "review",
+    "code_reviewer",
+    "verifier",
+    "code",
+    "test",
+];
 
 /// Consigne d'un sous-agent déclaré : son texte, puis les règles communes.
 fn declared_system(prompt: &str) -> String {
@@ -332,6 +339,16 @@ fn sub_agent_system(kind: &str) -> String {
             "Tu vérifies qu'un travail remplit ses critères, preuves à l'appui (sorties de \
              commandes, fichiers lus). Tu ne supposes rien : ce qui n'est pas prouvé échoue."
         }
+        // #424 : un rôle qui exécute, là où `review` lit le diff.
+        "test" => {
+            "Tu testes un travail en l'exécutant, pas en le lisant : lance les tests du dépôt \
+             puis l'application ou la commande concernée sur les cas limites que tu choisis \
+             (entrée vide, valeur extrême, panne d'un service, cas réel décrit dans la \
+             demande). Tu ne modifies, ne crées et ne supprimes aucun fichier du dépôt ; un \
+             fichier temporaire va sous /tmp. Termine par une ligne `VERDICT : validé`, ou \
+             `VERDICT : recalé` suivie du cas qui casse : la commande exacte, ce qu'elle rend, \
+             ce qui était attendu."
+        }
         _ => "Tu es un sous-agent de Pénélope : une tâche précise, un résultat structuré.",
     };
     format!(
@@ -342,7 +359,7 @@ fn sub_agent_system(kind: &str) -> String {
 
 /// Outils d'un sous-agent : la liste de l'étape, sinon les outils natifs en lecture. Une
 /// liste qui nomme `tool_search`, `tool_describe` ou `tool_call` ouvre les serveurs MCP.
-fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<String>) {
+fn sub_agent_tools(kind: &str, step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<String>) {
     let with_mcp = step_tools
         .iter()
         .any(|t| matches!(t.as_str(), "tool_search" | "tool_describe" | "tool_call"));
@@ -356,11 +373,16 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
             .collect();
         return (defs, allowed);
     }
-    let readonly: Vec<String> = penelope_tools::all_tools()
+    let mut readonly: Vec<String> = penelope_tools::all_tools()
         .into_iter()
         .filter(|t| t.risk == penelope_kernel::risk::RiskClass::Read && !t.workflow_only)
         .map(|t| t.name.to_string())
         .collect();
+    // Le testeur exécute (#424) : la lecture, plus `shell_exec` pour lancer tests et
+    // application ; sa consigne lui interdit de toucher au dépôt.
+    if kind == "test" {
+        readonly.push("shell_exec".into());
+    }
     (defs, readonly)
 }
 
@@ -368,7 +390,10 @@ fn sub_agent_tools(step_tools: &[String]) -> (Vec<penelope_llm::ToolDef>, Vec<St
 /// 40 appels et un tour de reprise pour un rôle de lecture (explorer, relire, vérifier),
 /// le plafond de la conversation pour un rôle libre.
 pub fn role_limits(kind: &str, max_calls: Option<u32>) -> Option<CallLimits> {
-    let reading = matches!(kind, "explore" | "review" | "code_reviewer" | "verifier");
+    let reading = matches!(
+        kind,
+        "explore" | "review" | "code_reviewer" | "verifier" | "test"
+    );
     match (max_calls, reading) {
         (Some(calls), _) => Some(CallLimits { calls, turns: 1 }),
         (None, true) => Some(CallLimits {
@@ -440,7 +465,7 @@ pub async fn run_sub_agent(
     } else {
         step_tools
     };
-    let (tools, allowed) = sub_agent_tools(step_tools);
+    let (tools, allowed) = sub_agent_tools(kind, step_tools);
     let system = match &declared {
         Some(a) => declared_system(&a.prompt),
         None => sub_agent_system(kind),
@@ -638,14 +663,28 @@ mod role_tests {
         assert!(sub_agent_system("review").contains("VERDICT : accepté"));
         assert!(sub_agent_system("explore").contains("lecture seule"));
 
-        let (_, allowed) = sub_agent_tools(&["fs_read".into(), "sub_agent_spawn".into()]);
+        let (_, allowed) = sub_agent_tools("review", &["fs_read".into(), "sub_agent_spawn".into()]);
         assert_eq!(allowed, vec!["fs_read".to_string()]);
-        let (_, readonly) = sub_agent_tools(&[]);
+        let (_, readonly) = sub_agent_tools("review", &[]);
         assert!(readonly.iter().any(|t| t == "fs_read"));
         assert!(
             !readonly
                 .iter()
-                .any(|t| t == "fs_edit" || t == "sub_agent_spawn")
+                .any(|t| t == "fs_edit" || t == "sub_agent_spawn" || t == "shell_exec")
         );
+    }
+
+    /// #424 : le testeur exécute (lecture et `shell_exec`), sans rien écrire, et rend un
+    /// verdict validé ou recalé avec le cas qui casse.
+    #[test]
+    fn the_tester_runs_commands_but_writes_nothing() {
+        let (_, tools) = sub_agent_tools("test", &[]);
+        assert!(tools.iter().any(|t| t == "shell_exec"));
+        assert!(!tools.iter().any(|t| t == "fs_edit" || t == "fs_write"));
+        assert_eq!(role_limits("test", None).map(|l| l.calls), Some(40));
+        let system = sub_agent_system("test");
+        assert!(system.contains("VERDICT : validé") && system.contains("VERDICT : recalé"));
+        assert!(system.contains("aucun fichier du dépôt"));
+        assert!(BUILTIN_KINDS.contains(&"test"));
     }
 }
