@@ -12,6 +12,27 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.95
+
+**Mission : un testeur qui exécute, des verdicts en fichiers, la main rendue après trois
+cycles rouges (#424).**
+
+- Nouveau rôle de sous-agent `test` : il lance les tests du dépôt puis l'application sur
+  les cas limites qu'il choisit, avec la lecture et `shell_exec`, sans écrire dans le
+  dépôt, et rend `VERDICT : validé` ou `VERDICT : recalé` avec le cas qui casse. La
+  consigne de mission demande `review` puis `test` avant « MISSION TERMINÉE ».
+- Relais par fichiers : le plan (`plan.md`), la dernière revue (`revue.md`) et les
+  derniers tests (`tests.md`) vivent dans `.penelope/mission/` du dépôt, exclu de git ;
+  chaque relance les rend au modèle, encadrés comme une donnée, après la consigne. Une
+  compaction n'en garde plus qu'un résumé : le fichier fait foi.
+- Plafond de cycles : trois vérifications rouges de suite (`--check` ou un `VERDICT :
+  recalé`) mettent la mission en attente avec le dernier verdict ; une vérification verte
+  remet le compte à zéro. Avant, une vérification rouge relançait tant que le budget
+  (20 $) et l'échéance (8 h) tenaient.
+- Pas encore : `mission-bench` rejoué avant et après ce lot, avec une quatrième story qui
+  demande un second cycle. Le banc a besoin de `OPENROUTER_API_KEY`, absente de cette
+  session : à lancer par le propriétaire.
+
 ### 1.0.94
 
 **OAuth MCP : le jeton se renouvelle sur une connexion HTTP vivante, sans course de

@@ -313,3 +313,103 @@ fn the_worktree_flag_is_read() {
     assert_eq!(r.check.as_deref(), Some("cargo test"));
     assert!(!parse_request("ajouter X --cwd ~/depot").unwrap().worktree);
 }
+
+/// #424 : trois vérifications rouges de suite (`--check` ou un testeur qui recale) rendent
+/// la main avec le dernier verdict, au lieu de relancer tant que le budget tient ; une
+/// vérification verte remet le compte à zéro.
+#[tokio::test]
+async fn three_red_cycles_in_a_row_hand_back_with_the_last_verdict() {
+    let (_d, s) = services().await;
+    started(&s, Some("echo 'cas vide : panique'; exit 1")).await;
+    let ports = Ports::default();
+    after_turn(&s, &ports, "s1", &answered("Fini. MISSION TERMINÉE")).await;
+    after_turn(
+        &s,
+        &ports,
+        "s1",
+        &answered("Le testeur dit : VERDICT : recalé, `rapport --vide` plante"),
+    )
+    .await;
+    assert_eq!(ports.queued.lock().unwrap().len(), 2, "deux relances");
+    assert_eq!(load(&s, "s1").await.unwrap().red, 2);
+    assert!(
+        ports.queued.lock().unwrap()[1].1.contains("test recalé"),
+        "la relance dit pourquoi"
+    );
+    after_turn(&s, &ports, "s1", &answered("Corrigé. MISSION TERMINÉE")).await;
+    assert_eq!(
+        ports.queued.lock().unwrap().len(),
+        2,
+        "pas de troisième relance"
+    );
+    let m = load(&s, "s1").await.unwrap();
+    assert_eq!(m.state, State::Waiting);
+    let report = &ports.notified.lock().unwrap()[0];
+    assert!(report.contains("3 vérifications rouges"), "{report}");
+    assert!(
+        report.contains("cas vide : panique"),
+        "le dernier verdict : {report}"
+    );
+}
+
+#[tokio::test]
+async fn a_green_check_resets_the_red_count() {
+    let (_d, s) = services().await;
+    let mut m = started(&s, None).await;
+    m.red = 2;
+    save(&s, &m).await.unwrap();
+    let ports = Ports::default();
+    after_turn(&s, &ports, "s1", &answered("Fait. MISSION TERMINÉE")).await;
+    let m = load(&s, "s1").await.unwrap();
+    assert_eq!((m.state, m.red), (State::Done, 0));
+}
+
+/// #424 : la consigne demande `review` puis `test`, et le relais du dépôt revient à chaque
+/// relance, encadré, même après une compaction.
+#[tokio::test]
+async fn a_relaunch_reads_the_relay_files_back() {
+    let (_d, s) = services().await;
+    let repo = s.platform.dirs.data().join("workspace").join("depot");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let (m, text) = start(
+        &s,
+        "s1",
+        Request {
+            goal: "rapport".into(),
+            cwd: Some(repo.to_string_lossy().into()),
+            ..Default::default()
+        },
+        &Origin::Cli,
+    )
+    .await
+    .unwrap();
+    assert!(
+        text.contains("kind: review") && text.contains("kind: test"),
+        "{text}"
+    );
+    assert!(text.contains(".penelope/mission/plan.md"), "{text}");
+    let exclude = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains("/.penelope/mission/"));
+    assert_eq!(m.red, 0);
+
+    std::fs::create_dir_all(repo.join(relay::DIR)).unwrap();
+    std::fs::write(
+        repo.join(relay::DIR).join("plan.md"),
+        "2. brancher le rapport\n",
+    )
+    .unwrap();
+    let ports = Ports::default();
+    after_turn(&s, &ports, "s1", &exhausted()).await;
+    let queued = ports.queued.lock().unwrap().clone();
+    assert_eq!(
+        *ports.compacted.lock().unwrap(),
+        1,
+        "compacté avant la relance"
+    );
+    assert!(
+        queued[0].1.contains("<<<\n2. brancher le rapport"),
+        "{}",
+        queued[0].1
+    );
+    assert!(queued[0].1.starts_with("[mission] "), "la consigne d'abord");
+}

@@ -36,6 +36,11 @@ pub const BLOCKED: &str = "MISSION BLOQUÉE";
 pub const IDLE_MAX: u32 = 3;
 /// Échecs de tour tolérés de suite (fournisseur en panne, erreur interne).
 pub const FAILURES_MAX: u32 = 3;
+/// Vérifications rouges de suite (`--check` ou `VERDICT : recalé`) avant de rendre la main
+/// au propriétaire (#424).
+pub const RED_MAX: u32 = 3;
+/// Le verdict d'un sous-agent `test` qui casse.
+pub const REJECTED: &str = "VERDICT : recalé";
 /// Budget par défaut d'une mission, en dollars.
 pub const DEFAULT_BUDGET_USD: f64 = 20.0;
 /// Durée par défaut d'une mission, en heures.
@@ -121,6 +126,9 @@ pub struct Mission {
     pub idle: u32,
     /// Échecs de tour de suite.
     pub failures: u32,
+    /// Vérifications rouges de suite (#424).
+    #[serde(default)]
+    pub red: u32,
     /// Dernière note : pourquoi la mission a relancé ou s'est arrêtée.
     pub note: String,
     /// Dépôt d'origine quand la mission travaille dans son propre worktree (#397).
@@ -286,12 +294,18 @@ pub async fn start(
         turns: 0,
         idle: 0,
         failures: 0,
+        red: 0,
         note: String::new(),
         repo,
         branch,
         host,
     };
     save(s, &m).await?;
+    if m.host.is_none()
+        && let Some(d) = m.cwd.as_deref().and_then(|c| dir_of(s, c))
+    {
+        relay::exclude(&d);
+    }
     event(s, &m, "mission.started").await;
     let mut text = brief(&m, None);
     if let Some(p) = m
@@ -422,13 +436,15 @@ pub fn brief(m: &Mission, why: Option<&str>) -> String {
         ));
     }
     out.push_str(&format!(
-        "Tiens ton plan dans `session_notes` (objectif, plan, fait, prochaine étape) : il \
-         survit aux compactions. Pour explorer un dépôt sans charger ton contexte, \
-         `sub_agent_spawn` avec `kind: explore` ; avant d'annoncer la fin, fais relire ton \
-         diff par `kind: review` et corrige ce qu'il demande. Quand tout est fait et vérifié, \
-         réponds par un court compte \
-         rendu terminé par {DONE}. Si tu ne peux pas avancer sans moi (accès, décision), \
-         explique pourquoi et termine par {BLOCKED}. Toute autre réponse relance la mission."
+        "Tiens ton plan dans `{dir}/plan.md` (plan, fait, prochaine étape), le dernier \
+         verdict de revue dans `revue.md` et celui des tests dans `tests.md`, à côté : ces \
+         fichiers font foi et te sont rendus à chaque relance. Pour explorer un dépôt sans \
+         charger ton contexte, `sub_agent_spawn` avec `kind: explore` ; avant d'annoncer la \
+         fin, fais relire ton diff par `kind: review`, puis exécuter par `kind: test` sur des \
+         cas limites, et corrige ce qu'ils demandent. Quand tout est fait et vérifié, \
+         réponds par un court compte rendu terminé par {DONE}. Si tu ne peux pas avancer sans moi (accès, décision), \
+         explique pourquoi et termine par {BLOCKED}. Toute autre réponse relance la mission.",
+        dir = relay::DIR
     ));
     out
 }
@@ -470,6 +486,7 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
             m.idle = 0;
             m.failures = 0;
             let Some(check) = m.check.clone() else {
+                m.red = 0;
                 return Next::Finish(State::Done, format!("🏁 Mission terminée : {}", m.goal));
             };
             let checked = match &m.host {
@@ -478,6 +495,7 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
             };
             match checked {
                 Ok(()) => {
+                    m.red = 0;
                     return Next::Finish(
                         State::Done,
                         format!("🏁 Mission terminée, `{check}` est vert : {}", m.goal),
@@ -486,6 +504,9 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
                 Err(output) => {
                     if let Some(why) = over {
                         return Next::Finish(State::Budget, stopped(m, &why));
+                    }
+                    if let Some(wait) = red_cycle(m, &format!("`{check}` échoue : {output}")) {
+                        return wait;
                     }
                     return Next::Continue(format!(
                         "{}\n\nLa vérification `{check}` échoue encore. Sa sortie (fin) suit : \
@@ -499,6 +520,16 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
     }
     if let Some(why) = over {
         return Next::Finish(State::Budget, stopped(m, &why));
+    }
+    // Un testeur a recalé le travail (#424) : un cycle rouge, comme `--check`.
+    if let TurnOutcome::Answered { text, .. } = outcome
+        && let Some(at) = text.find(REJECTED)
+    {
+        m.idle = 0;
+        if let Some(wait) = red_cycle(m, &text[at..]) {
+            return wait;
+        }
+        return Next::Continue(brief(m, Some("test recalé, corrige le cas qui casse")));
     }
     let why = match outcome {
         TurnOutcome::Failed { error } if error.starts_with(CALLS_EXHAUSTED) => {
@@ -545,6 +576,27 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
         TurnOutcome::AwaitingApproval { .. } => return Next::Ignore,
     };
     Next::Continue(brief(m, Some(why)))
+}
+
+/// Un cycle rouge de plus ; au-delà de [`RED_MAX`] de suite, la main au propriétaire avec
+/// le dernier verdict, au lieu de relancer tant que le budget tient.
+fn red_cycle(m: &mut Mission, verdict: &str) -> Option<Next> {
+    m.red += 1;
+    if m.red < RED_MAX {
+        return None;
+    }
+    let tail: String = {
+        let v: Vec<char> = verdict.trim().chars().collect();
+        v[v.len().saturating_sub(600)..].iter().collect()
+    };
+    Some(Next::Finish(
+        State::Waiting,
+        format!(
+            "⏸️ Mission en attente : {} vérifications rouges de suite. Dernier verdict : {tail}\n\
+             Relance un cycle par `/mission`, ou arrête-la.",
+            m.red
+        ),
+    ))
 }
 
 fn stopped(m: &Mission, why: &str) -> String {
@@ -880,6 +932,17 @@ pub async fn after_turn(
                 return;
             }
             let dedup = format!("mission:{session_id}:{}", m.turns);
+            // Le relais du dépôt (#424) suit la consigne : relu, il survit à la compaction.
+            let relay = m
+                .cwd
+                .as_deref()
+                .filter(|_| m.host.is_none())
+                .and_then(|c| dir_of(s, c))
+                .and_then(|d| relay::preamble(&d));
+            let text = match relay {
+                Some(r) => format!("{text}\n\n{r}"),
+                None => text,
+            };
             ports.enqueue(session_id, &text, &m.origin(), dedup).await;
         }
         Next::Finish(state, report) => {
@@ -925,6 +988,7 @@ async fn event(s: &Services, m: &Mission, kind: &str) {
     }
 }
 
+pub mod relay;
 pub mod worktree;
 
 #[cfg(test)]
