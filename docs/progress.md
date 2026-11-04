@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.91
+
+**Le prompt système ne propose plus `workflow_start` depuis un canal (#423).**
+
+- La règle de #35 (T0) disait de proposer un workflow avec `workflow_start`, refusé
+  depuis un canal depuis #302 : le modèle l'appelait, se faisait refuser, puis repassait
+  par `workflow_plan`. Elle dit maintenant `workflow_plan`, avec les mêmes `params` et
+  `brief`, et seulement pour un **pipeline** (déployer, dérouler un backlog, une tâche
+  planifiée). L'index des workflows (T1) disait la même chose : corrigé aussi.
+- Une demande de code dans un dépôt se traite dans la conversation, ou par `/mission`
+  si elle est longue, jamais par `tache` ou `build-verify`.
+- La règle tient en 455 octets, contre 456 avant.
+- Deux scénarios : « déploie la vitrine en staging » depuis Telegram propose un plan
+  `deploy-generic` sans appeler `workflow_start` ; « corrige le test qui casse » se fait
+  dans la session (lecture, `fs_edit` autorisé sur la carte), sans aucun `workflow_*`.
+
 ### 1.0.90
 
 **Un sous-agent en arrière-plan attend ton accord au lieu d'échouer (#422, épopée #398).**
