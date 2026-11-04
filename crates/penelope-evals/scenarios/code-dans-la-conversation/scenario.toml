@@ -1,0 +1,32 @@
+name = "code-dans-la-conversation"
+description = """La deuxième moitié de la règle de #423 : une demande de code (« corrige le test
+qui casse ») se traite dans la conversation, pas par `tache` ni `build-verify`. Le modèle lit
+le test et le module, corrige le module par `fs_edit`, que le propriétaire
+autorise sur sa carte, et répond ; aucun appel `workflow_*`, aucun run, aucun plan."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state FROM workflow_runs ORDER BY started_at, rowid"
+
+[[observe]]
+name = "plans"
+sql = "SELECT COUNT(*) AS n FROM kv WHERE k LIKE 'wf.plan.%'"
+
+[[files]]
+path = "calc/somme.py"
+content = "def somme(a, b):\n    return a - b\n"
+
+[[files]]
+path = "calc/test_somme.py"
+content = "from somme import somme\n\ndef test_somme():\n    assert somme(2, 3) == 5\n"
+
+[[steps]]
+kind = "telegram"
+text = "corrige le test qui casse dans calc"
+
+[[steps]]
+kind = "telegram"
+click = "Autoriser"

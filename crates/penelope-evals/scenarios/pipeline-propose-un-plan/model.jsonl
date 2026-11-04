@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "p1", "name": "workflow_plan", "arguments": {"id": "deploy-generic", "goal": "Déployer la vitrine en staging", "steps": [{"phase": "implementation", "title": "Construire et déployer en staging"}, {"phase": "verification", "title": "Vérifier la vitrine en staging"}], "params": {"environnement": "staging"}, "brief": "Le propriétaire veut la vitrine en staging."}}]}}
+{"text": "Plan v1 prêt : déploiement de la vitrine en staging, puis vérification. Lance-le d'un clic."}

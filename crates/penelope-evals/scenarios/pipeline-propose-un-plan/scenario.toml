@@ -1,0 +1,17 @@
+name = "pipeline-propose-un-plan"
+description = """La règle T0 de #35 corrigée par #423 : depuis Telegram, « déploie » correspond
+à un pipeline livré (`deploy-generic`). Le modèle complète le paramètre requis
+(`environnement`) et propose un plan avec `workflow_plan`, `params` et `brief` ; aucun appel
+à `workflow_start`, donc aucun refus dans le tour. La carte du plan attend le clic du
+propriétaire : aucun run ne part. Le prompt système (surface) porte la nouvelle règle."""
+
+[config]
+"models.routing.classifier" = false
+
+[[observe]]
+name = "runs"
+sql = "SELECT workflow_id, state FROM workflow_runs ORDER BY started_at, rowid"
+
+[[steps]]
+kind = "telegram"
+text = "déploie la vitrine en staging"

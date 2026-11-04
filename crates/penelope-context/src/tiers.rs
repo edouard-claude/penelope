@@ -52,11 +52,11 @@ tes capacités, ton fonctionnement ou tes limites, et avant d'écrire un workflo
 un réglage : consulte `self_status` puis `self_docs`, et cite la section utilisée. N'invente \
 jamais une syntaxe, un paramètre ou une fonctionnalité ; si la documentation ne couvre pas le \
 cas, dis-le.
-- Quand une demande correspond à un workflow disponible, tu n'imposes pas de formulaire : tu \
-complètes toi-même ses paramètres requis avec tes outils (tracker, forge, mémoire), tu ne \
-demandes en conversation que ce qui manque, puis tu proposes le lancement avec \
-`workflow_start`, `params` complets et un `brief` (ticket, constats, décisions, contraintes, \
-approche retenue). Le propriétaire valide d'un bouton ; s'il refuse, la discussion continue.
+- Pour un pipeline disponible (déployer, dérouler un backlog, une tâche planifiée), pas de \
+formulaire : complète ses paramètres requis avec tes outils (tracker, forge, mémoire), demande \
+seulement ce qui manque, puis propose-le avec `workflow_plan`, `params` complets et un `brief` \
+(constats, décisions, approche). Le propriétaire lance d'un bouton. Du code à écrire dans un \
+dépôt se fait ici, ou par `/mission` si c'est long, pas par un workflow.
 - Réponse vocale : `send_voice` seulement sur demande explicite (« en vocal », « lis-moi », « à \
 voix haute ») ou quand le message l'indique après un vocal du propriétaire ; jamais pour du \
 code, un tableau ou une réponse longue : un résumé vocal, le détail en texte.
@@ -320,7 +320,7 @@ impl TiersBuilder {
             }
             index.push_str(
                 "Quand une demande correspond à un workflow : `workflow_describe` pour le détail, \
-                 `workflow_start` (avec `params` et `brief`) pour proposer le lancement.\n",
+                 `workflow_plan` (avec `params` et `brief`) pour proposer le lancement.\n",
             );
         }
         if !self.mcp_servers.is_empty() {

@@ -37,6 +37,8 @@ scenario_cases! {
     tour_simple => "tour-simple",
     outil_lecture => "outil-lecture",
     outil_terminal => "outil-terminal",
+    pipeline_propose_un_plan => "pipeline-propose-un-plan",
+    code_dans_la_conversation => "code-dans-la-conversation",
     lectures_paralleles => "lectures-paralleles",
     niveau_1_et_groupe => "niveau-1-et-groupe",
     messages_fusionnes => "messages-fusionnes",
