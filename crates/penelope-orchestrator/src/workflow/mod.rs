@@ -239,6 +239,7 @@ mod step_shell_tool;
 mod step_user;
 mod step_verify;
 mod watch;
+pub mod worktree;
 
 pub use budget::{budget_view, effective_budget, raise_budget, runs_listing};
 use budget::{limit_reason, limits_now, set_caps};

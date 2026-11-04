@@ -224,6 +224,25 @@ fn each_rule_names_its_path_and_its_fault() {
     }
 }
 
+/// #397 : un run `worktree` ouvre son worktree dans le dépôt reçu en paramètre `repo`.
+#[test]
+fn a_worktree_workspace_needs_a_repo_parameter() {
+    let mut w = base();
+    w.settings.workspace = "worktree".into();
+    let r = validate(&w, None, &known());
+    assert!(
+        r.errors().iter().any(|i| i.path == "/settings/workspace"
+            && i.message.contains("demande un paramètre `repo`")),
+        "{:?}",
+        r.errors()
+    );
+    let mut repo = w.metadata.parameters[0].clone();
+    repo.id = "repo".into();
+    w.metadata.parameters.push(repo);
+    let r = validate(&w, None, &known());
+    assert!(r.is_valid(), "{:?}", r.errors());
+}
+
 /// Le nom du fichier fait foi pour l'identifiant.
 /// #191 : `context` n'admet que `run` et `fresh`, et seulement sur une étape `agent`.
 #[test]
@@ -272,7 +291,7 @@ fn context_is_run_or_fresh_on_an_agent_step_only() {
 fn delivery_names_one_of_its_actions_on_a_delivery_step_only() {
     let cases: &[(&str, Mutation)] = &[
         (
-            "attendu pull_request, ci, e2e, prod_report, prod_pull_request, reçu ``",
+            "attendu pull_request, ci, e2e, prod_report, prod_pull_request, sync_with_base, reçu ``",
             |w| second(w, step("delivery")),
         ),
         ("reçu `deploy`", |w| {

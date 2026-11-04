@@ -185,6 +185,9 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Wf(WfCmd::Runs) if !cli.json => {
             println!("{}", render_run_list(&value));
         }
+        Command::Wf(WfCmd::Worktrees { .. }) if !cli.json => {
+            println!("{}", render_worktrees(&value));
+        }
         Command::Session(SessionCmd::List) if !cli.json => {
             println!("{}", render_session_list(&value));
         }

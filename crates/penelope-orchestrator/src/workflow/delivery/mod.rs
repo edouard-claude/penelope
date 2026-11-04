@@ -15,7 +15,9 @@ use super::*;
 use penelope_kernel::effects::{EffectKind, UnknownDecision};
 use penelope_workflow::delivery::config::{self, CONFIG_PATH, Discovered, FileConfig, Missing};
 use penelope_workflow::delivery::verdicts::{CI_UNAVAILABLE_LIMIT, CiVerdict, ci_backoff_ms};
-use penelope_workflow::delivery::{CI, E2E, PROD_PULL_REQUEST, PROD_REPORT, PULL_REQUEST};
+use penelope_workflow::delivery::{
+    CI, E2E, PROD_PULL_REQUEST, PROD_REPORT, PULL_REQUEST, SYNC_WITH_BASE,
+};
 use std::path::{Path, PathBuf};
 
 mod comments;
@@ -23,6 +25,7 @@ mod e2e;
 mod forge;
 mod git;
 mod prod;
+mod sync;
 
 use forge::{Forge, ForgeError};
 
@@ -33,6 +36,7 @@ pub(super) async fn delivery_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutco
         E2E => e2e_stage(ctx).await?,
         PROD_REPORT => prod::report(ctx).await?,
         PROD_PULL_REQUEST => prod::pull_request(ctx).await?,
+        SYNC_WITH_BASE => sync::sync_with_base(ctx).await?,
         other => done(
             StepResult::Error,
             json!({"error": format!("action de livraison inconnue `{other}`")}),
@@ -136,6 +140,12 @@ async fn project_dir(ctx: &StepCtx<'_>) -> Option<PathBuf> {
         .and_then(|st| st["dir"].as_str().map(PathBuf::from))
     {
         return Some(dir);
+    }
+    // Le worktree du run (#397) passe avant tout dépôt déclaré : c'est lui qui porte la
+    // branche du run, le dépôt d'origine n'est pas à lui.
+    let workdir = ctx.workdir();
+    if workdir.starts_with(super::worktree::root(s)) && workdir.join(".git").exists() {
+        return Some(workdir);
     }
     let mut sessions = phase_sessions(s, &ctx.run.id).await;
     sessions.push(ctx.run.session_id.clone());

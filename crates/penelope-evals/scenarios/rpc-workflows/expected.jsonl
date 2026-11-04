@@ -11,6 +11,9 @@
 {"type":"outcome","step":11,"input":"rpc : wf.control","result":{"state":"running"}}
 {"type":"outcome","step":12,"input":"rpc : wf.control","result":{"state":"cancelled"}}
 {"type":"outcome","step":13,"input":"rpc : wf.control","error":{"code":-32603,"message":"opération inconnue : accélérer"}}
+{"type":"outcome","step":14,"input":"rpc : wf.worktrees","result":[]}
+{"type":"outcome","step":15,"input":"rpc : wf.worktrees","result":[]}
+{"type":"outcome","step":16,"input":"rpc : wf.worktrees","error":{"code":-32603,"message":"opération inconnue `effacer` : `list` ou `prune`"}}
 {"type":"session","id":"{{session:1}}","kind":"chat","title":"CLI","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"session","id":"{{session:2}}","kind":"workflow_run","title":"Construire puis vérifier","state":"active","parent":null,"model_alias":null,"episode":0}
 {"type":"event","session":"{{session:1}}","seq":1,"kind":"runtime.session.created","payload":{"kind":"chat","parent_id":null}}

@@ -335,6 +335,9 @@ pub(super) async fn finish(
             .session(&run.session_id),
         )
         .await;
+    if state.is_terminal() {
+        worktree::on_finish(s, run).await;
+    }
     if let (Some(run), Some(wf)) = (s.runs.get(&run.id).await?, workflow_of(s, run).await) {
         progress(d, &run, &wf, None).await;
     }

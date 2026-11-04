@@ -134,6 +134,33 @@ pub(super) fn render_run_list(v: &Value) -> String {
     output::table(&rows)
 }
 
+/// `penelope wf worktrees` (#397) : la liste, ou ce que `prune` a fait de chacun.
+pub(super) fn render_worktrees(v: &Value) -> String {
+    let list = v.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        return "Aucun worktree de run.".into();
+    }
+    let rows: Vec<Value> = list
+        .iter()
+        .map(|w| {
+            let detail = match (w["outcome"].as_str(), w["dirty"].as_bool()) {
+                (Some(o), _) => o.to_string(),
+                (None, Some(true)) => "modifications non commitées".into(),
+                (None, Some(false)) => "propre".into(),
+                (None, None) => "absent".into(),
+            };
+            json!({
+                "run": w["run"],
+                "état": w["state"].as_str().unwrap_or("-"),
+                "branche": w["branch"].as_str().unwrap_or("-"),
+                "chemin": w["path"],
+                "": detail,
+            })
+        })
+        .collect();
+    output::table(&rows)
+}
+
 /// Colonne « trousseau » de `penelope mcp list` : un serveur distant n'a pas de processus
 /// local, donc rien à dire (issue #122).
 pub(super) fn keychain_cell(s: &Value) -> &'static str {

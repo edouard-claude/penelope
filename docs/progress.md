@@ -12,6 +12,27 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.87
+
+**Un worktree git par run de workflow, et la base fusionnée à la demande (#397, épopée
+#398).**
+
+- **Worktree par run.** `settings.workspace: "worktree"`, avec un paramètre `repo` :
+  au démarrage, `git worktree add` ouvre `{data}/worktrees/<run>` sur une branche
+  `penelope/<run>`, qui devient l'espace du run et le dépôt que la livraison pousse. Deux
+  runs sur le même dépôt ne se marchent plus dessus. Un dépôt hors des workspaces fait
+  échouer le run en clair. Un sous-agent reçoit aussi le dépôt d'origine, où `git commit`
+  écrit ses objets.
+- **Fin du run.** Fini, échoué, annulé ou `/stop` : le worktree propre est retiré, la
+  branche reste ; un worktree avec des modifications non commitées est gardé.
+  `penelope wf worktrees list|prune` (`--force` pour les sales) les relit et les retire,
+  jamais celui d'un run vivant.
+- **`sync_with_base`.** Une action `delivery` qui récupère `branches.dev` et la fusionne :
+  `passed` si c'est propre, `failed` avec la liste des fichiers en conflit sinon, la fusion
+  laissée en cours pour l'étape qui les résout.
+- Pas encore : les dépendances réensemencées depuis un cache par dépôt, la prise de
+  contrôle d'un job en SSH, `penelope term`.
+
 ### 1.0.86
 
 **Un digest qui ne radote plus, et `mem split` sur les modèles Codex récents (#429).**

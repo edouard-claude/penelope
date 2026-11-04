@@ -61,6 +61,10 @@ pub async fn start_run_briefed(
         return Err(format!("profondeur de sous-workflow limitée à {MAX_DEPTH}"));
     }
     let params = resolve_params(&wf, params)?;
+    let repo = params[penelope_workflow::model::WORKTREE_REPO]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
 
     let concurrency = &wf.settings.concurrency;
     let admission = if parent.is_some() {
@@ -109,7 +113,22 @@ pub async fn start_run_briefed(
         Some(p) => s.runs.get(p).await.ok().flatten().and_then(|r| r.workdir),
         None => None,
     };
-    let workdir = workdir_for(s, &wf, &run.id, parent_workdir);
+    let workdir = if wf.settings.workspace == penelope_workflow::model::WORKTREE {
+        // Un worktree par run (#397) : sans lui, le run ne démarre pas, il échoue en clair.
+        match worktree::open(s, &run.id, &repo).await {
+            Ok(wt) => wt.path,
+            Err(e) => {
+                let why = format!("worktree non ouvert : {e}");
+                let _ = s
+                    .runs
+                    .set_state(&run.id, RunState::Failed, Some(&why))
+                    .await;
+                return Err(why);
+            }
+        }
+    } else {
+        workdir_for(s, &wf, &run.id, parent_workdir)
+    };
     std::fs::create_dir_all(&workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     s.runs
         .set_workdir(&run.id, &workdir.to_string_lossy())

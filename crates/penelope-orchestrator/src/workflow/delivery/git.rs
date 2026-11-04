@@ -69,3 +69,37 @@ pub async fn push(dir: &Path, remote: &str, branch: &str) -> Result<(), String> 
         .await
         .map(|_| ())
 }
+
+/// Récupère `branch` de `remote` (#397, `sync_with_base`).
+pub async fn fetch(dir: &Path, remote: &str, branch: &str) -> Result<(), String> {
+    git(dir, &["fetch", "--", remote, branch], PUSH)
+        .await
+        .map(|_| ())
+}
+
+/// Une fusion est en cours : `MERGE_HEAD` existe.
+pub async fn merging(dir: &Path) -> bool {
+    git(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], QUICK)
+        .await
+        .is_ok()
+}
+
+/// Fusionne `rev` dans la branche courante, sans éditeur.
+pub async fn merge(dir: &Path, rev: &str) -> Result<(), String> {
+    git(dir, &["merge", "--no-edit", rev], PUSH)
+        .await
+        .map(|_| ())
+}
+
+/// Les fichiers encore en conflit.
+pub async fn conflicts(dir: &Path) -> Vec<String> {
+    git(dir, &["diff", "--name-only", "--diff-filter=U"], QUICK)
+        .await
+        .map(|o| o.lines().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// Abandonne une fusion qui a échoué sans conflit (arbre sale, historique sans ancêtre).
+pub async fn merge_abort(dir: &Path) {
+    let _ = git(dir, &["merge", "--abort"], QUICK).await;
+}

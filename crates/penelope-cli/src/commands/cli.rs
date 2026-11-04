@@ -742,6 +742,14 @@ pub enum WfCmd {
     Trace {
         run: String,
     },
+    /// Worktrees des runs (#397) : `list`, ou `prune` pour retirer ceux des runs finis
+    /// (`--force` : aussi ceux qui ont des modifications non commitées).
+    Worktrees {
+        #[arg(default_value = "list", value_parser = ["list", "prune"])]
+        op: String,
+        #[arg(long)]
+        force: bool,
+    },
     /// `pause`, `resume`, `cancel`, `retry-step`, `skip-step`, `goto:<étape>`,
     /// `answer --choice <choix> [--input <texte>]` pour une étape qui pose une question, ou
     /// `budget --usd <montant> --tokens <nombre> --cached-tokens <nombre> --minutes <durée>

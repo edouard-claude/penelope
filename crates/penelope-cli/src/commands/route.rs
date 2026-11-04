@@ -126,6 +126,9 @@ pub fn route(cmd: &Command) -> CliResult<(&'static str, Value)> {
         Command::Wf(WfCmd::Show { id }) => (m::WF_SHOW, json!({"id": id})),
         Command::Wf(WfCmd::Runs) => (m::WF_RUNS, json!({})),
         Command::Wf(WfCmd::Trace { run }) => (m::WF_TRACE, json!({"run": run})),
+        Command::Wf(WfCmd::Worktrees { op, force }) => {
+            (m::WF_WORKTREES, json!({"op": op, "force": force}))
+        }
         Command::Wf(WfCmd::Run { id, params }) => {
             (m::WF_RUN, json!({"id": id, "params": wf_params(params)?}))
         }

@@ -3,7 +3,8 @@ description = """Les workflows par la socket locale, comme `penelope wf …` : l
 workflows livrés, la définition de `build-verify`, sa validation telle quelle puis celle
 d'un texte qui n'est pas un workflow ; un run démarré (`wf.run`) avec son objectif, un
 paramètre inconnu refusé, les runs, la trace, puis le pilotage : plafond relevé, pause,
-reprise, annulation, et une opération inconnue refusée. Le moteur de runs ne tourne pas
+reprise, annulation, et une opération inconnue refusée ; enfin les worktrees des runs
+(`wf.worktrees`), vides ici. Le moteur de runs ne tourne pas
 dans le harnais : le run reste à sa première étape, ce qui compte ici est ce que chaque
 commande de pilotage a écrit. Le monde après : le run annulé, sa session, ses
 événements."""
@@ -82,4 +83,22 @@ params = { run = "$run.id", op = "cancel" }
 kind = "rpc"
 method = "wf.control"
 params = { run = "$run.id", op = "accélérer" }
+error = true
+
+# Worktrees des runs (#397) : aucun run `worktree` dans le harnais, la liste est vide et
+# `prune` n'a rien à retirer ; une opération inconnue est refusée.
+[[steps]]
+kind = "rpc"
+method = "wf.worktrees"
+params = { op = "list" }
+
+[[steps]]
+kind = "rpc"
+method = "wf.worktrees"
+params = { op = "prune", force = true }
+
+[[steps]]
+kind = "rpc"
+method = "wf.worktrees"
+params = { op = "effacer" }
 error = true
