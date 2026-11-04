@@ -12,6 +12,26 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.94
+
+**OAuth MCP : le jeton se renouvelle sur une connexion HTTP vivante, sans course de
+rotation (#431).**
+
+- Une recherche Slack rendait HTTP 401 alors que le serveur restait « prêt » : la
+  connexion HTTP gardait l'en-tête du lancement, et seul un serveur stdio (`oauth_issuer`)
+  était relancé avant l'échéance. Toute autorisation obtenue par `mcp auth` a maintenant
+  son échéance suivie : cinq minutes avant (au lieu d'une), la connexion repart avec un
+  jeton neuf.
+- Un seul renouvellement à la fois par serveur, le grant relu sous le verrou : avec la
+  rotation à usage unique, deux appels concurrents ne se disputent plus le même jeton de
+  rafraîchissement, et le jeton tourné est gardé.
+- Un jeton refusé par la ressource alors que l'horloge le croyait valide (révoqué,
+  tourné ailleurs) est renouvelé, la connexion rouverte, l'appel rejoué une fois.
+- Un renouvellement refusé par le serveur d'autorisation range le serveur en
+  « autorisation requise », avec la commande à lancer ; jamais le jeton dans le message.
+- Pas encore : la lecture réelle de Slack après renouvellement, à faire sur la machine
+  du propriétaire.
+
 ### 1.0.93
 
 **L'atlas du vault à jour à chaque rechargement (#428).**

@@ -241,9 +241,12 @@ impl McpSupervisor {
         let mut live = slot.live.lock().await;
         let keychain = keychain_open(&self.services, &slot.config());
         if let Some(l) = live.as_ref() {
-            // Un jeton OAuth injecté au lancement (#405) ne se renouvelle pas dans le
-            // processus : une minute avant son expiration, le serveur repart avec un neuf.
-            let expired = l.expires_ms.is_some_and(|e| self.now_ms() + 60_000 >= e);
+            // Un jeton OAuth ne se renouvelle pas dans une connexion ouverte : quelques
+            // minutes avant son expiration, elle repart avec un jeton neuf, en stdio
+            // (#405) comme en HTTP (#431 : Slack gardait l'en-tête du lancement).
+            let expired = l
+                .expires_ms
+                .is_some_and(|e| self.now_ms() + penelope_mcp::oauth::REFRESH_MARGIN_MS >= e);
             if l.keychain == keychain && !expired {
                 return Ok(l.client.clone());
             }
@@ -298,10 +301,9 @@ impl McpSupervisor {
                     i.capabilities =
                         serde_json::to_value(client.capabilities()).unwrap_or(Value::Null);
                 });
-                let expires_ms = (!cfg.oauth_issuer.is_empty())
-                    .then(|| crate::auth::expiry(&self.services, &cfg.name))
-                    .flatten()
-                    .filter(|e| *e != i64::MAX);
+                // Toute autorisation obtenue par `mcp auth` a son échéance, stdio ou HTTP.
+                let expires_ms =
+                    crate::auth::expiry(&self.services, &cfg.name).filter(|e| *e != i64::MAX);
                 *live = Some(Live {
                     client: client.clone(),
                     pump,

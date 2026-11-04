@@ -539,6 +539,20 @@ pub async fn authorization_header(
     check_endpoint(server_url).map_err(|_| {
         format!("jeton OAuth de `{server}` refusé : {server_url} n'est pas servi en HTTPS")
     })?;
+    let _ = raw;
+    // Un seul renouvellement à la fois par autorisation (#431) : avec la rotation, un
+    // jeton de rafraîchissement ne sert qu'une fois, deux appels concurrents se le
+    // disputaient. Le grant est relu sous le verrou : le second voit le jeton du premier.
+    let lock = grant_lock(server);
+    let _held = lock.lock().await;
+    let Some(raw) = s
+        .platform
+        .secrets
+        .get(&secret_name(server))
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
     let mut grant: Grant = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let now = s.clock.now_ms();
     if grant.tokens.needs_refresh(now) {
@@ -563,7 +577,19 @@ pub async fn authorization_header(
                 .map(|(id, secret)| (id.as_str(), secret.as_str())),
         )
         .await
-        .map_err(|e| format!("rafraîchissement du jeton de `{server}` : {e}"))?;
+        .map_err(|e| {
+            // Un refus du serveur d'autorisation (jeton révoqué, déjà consommé, client
+            // retiré) ne se répare pas en réessayant : le serveur passe en « autorisation
+            // requise » et le propriétaire est invité à refaire `mcp auth`.
+            if e.contains("HTTP 400") || e.contains("HTTP 401") {
+                format!(
+                    "{AUTH_REQUIRED} : le renouvellement du jeton de `{server}` est refusé \
+                     ({e}) ; `penelope mcp auth {server}`, ou `/mcp auth {server}` dans la conversation"
+                )
+            } else {
+                format!("rafraîchissement du jeton de `{server}` : {e}")
+            }
+        })?;
         let mut tokens = Tokens::parse(&v, now).map_err(|e| e.to_string())?;
         // Rotation : un nouveau jeton de rafraîchissement remplace l'ancien, sinon on le garde.
         if tokens.refresh_token.is_none() {
@@ -608,6 +634,44 @@ pub fn expiry(s: &Services, server: &str) -> Option<i64> {
         .flatten()
         .and_then(|raw| serde_json::from_str::<Grant>(&raw).ok())
         .map(|g| g.tokens.expires_at_ms)
+}
+
+/// Le verrou de renouvellement d'une autorisation, un par serveur.
+fn grant_lock(server: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<BTreeMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .entry(server.to_string())
+        .or_default()
+        .clone()
+}
+
+/// Le serveur a refusé un jeton que l'horloge croyait valide (révoqué, tourné ailleurs) :
+/// il sera renouvelé à la prochaine ouverture (#431). `false` : rien à renouveler.
+pub async fn invalidate(s: &Services, server: &str) -> bool {
+    let lock = grant_lock(server);
+    let _held = lock.lock().await;
+    let Some(mut grant) = s
+        .platform
+        .secrets
+        .get(&secret_name(server))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Grant>(&raw).ok())
+    else {
+        return false;
+    };
+    if grant.tokens.refresh_token.is_none() {
+        return false;
+    }
+    grant.tokens.expires_at_ms = 0;
+    serde_json::to_string(&grant)
+        .ok()
+        .is_some_and(|raw| s.platform.secrets.set(&secret_name(server), &raw).is_ok())
 }
 
 /// Ce que dit une erreur de lancement quand l'autorisation manque : le cycle de vie la
@@ -779,5 +843,7 @@ pub async fn reconnect(mcp: Option<Arc<dyn McpAdmin>>, server: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod refresh_tests;
 #[cfg(test)]
 mod tests;
