@@ -194,6 +194,8 @@ pub mod method {
     pub const WF_RUNS: &str = "wf.runs";
     pub const WF_TRACE: &str = "wf.trace";
     pub const WF_CONTROL: &str = "wf.control";
+    /// Worktrees des runs (#397) : `op` = `list` ou `prune` (`force` pour les sales).
+    pub const WF_WORKTREES: &str = "wf.worktrees";
     /// Plan conversationnel d'une session : révisions, empreinte, runs lancés (#191).
     pub const WF_PLAN_SHOW: &str = "wf.plan.show";
     /// « Vas-y » : approuve la révision nommée (version et empreinte) et lance son run,
@@ -341,6 +343,7 @@ pub mod method {
         WF_RUNS,
         WF_TRACE,
         WF_CONTROL,
+        WF_WORKTREES,
         WF_PLAN_SHOW,
         WF_PLAN_GO,
         SCHEDULE_LIST,

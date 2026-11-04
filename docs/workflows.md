@@ -201,9 +201,21 @@ continuer avec un plafond neuf. Il lui est accordé au plus `maxTurns` fois
 | `coalesce` | Il fusionne avec le run en cours |
 | `drop` | Il est abandonné |
 
-`workspace` vaut `ephemeral` (répertoire jeté à la fin) ou `persistent:<nom>` (répertoire
-réutilisé d'un run à l'autre, purgé selon la rétention configurée). Un sous-workflow
-travaille dans l'espace de son parent, sauf s'il demande un espace persistant.
+`workspace` vaut `ephemeral` (répertoire jeté à la fin), `persistent:<nom>` (répertoire
+réutilisé d'un run à l'autre, purgé selon la rétention configurée) ou `worktree`. Un
+sous-workflow travaille dans l'espace de son parent, sauf s'il demande un espace
+persistant ou un worktree.
+
+`worktree` (#397) demande un paramètre `repo`, le dépôt du run (chemin absolu, `~/…`, ou
+relatif aux workspaces ; sa racine doit être dans un workspace autorisé). Au démarrage,
+`git worktree add` ouvre `{data}/worktrees/<run>` sur une branche `penelope/<run>` partie
+de `HEAD` : deux runs sur le même dépôt travaillent chacun sur sa branche, et la livraison
+pousse depuis le worktree. À la fin du run (fini, échoué, annulé), le worktree est retiré
+s'il est propre ; la branche reste pour la PR. Un worktree gardé se relit avec
+`penelope wf worktrees list` et se retire avec `penelope wf worktrees prune` (`--force`
+pour ceux qui ont des modifications non commitées ; le worktree d'un run vivant n'est
+jamais retiré). Le worktree ne voit que ce qui est commité dans le dépôt :
+`.penelope/delivery.toml` doit être suivi.
 
 `forms` déclare les formulaires des étapes `user` (voir plus bas) : un JSON Schema d'objet
 par identifiant.
@@ -222,7 +234,7 @@ par identifiant.
 | `foreach` | `items` et `workflowId` (obligatoires), `params`, `onError`, `pauseEvery`, `pauseAfter`, `itemLabel`, `itemNoun`, `itemBudget` | Une liste ordonnée, un sous-workflow par élément, dans l'ordre (voir « Dérouler une liste ») |
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
-| `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») |
+| `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`, `sync_with_base`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») ; `sync_with_base` récupère `branches.dev` et la fusionne dans la branche du run : `passed` si la fusion est propre, `failed` avec `conflicts` (les fichiers) sinon, la fusion laissée en cours pour l'étape qui résout et commite |
 
 `context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
 run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres
@@ -372,6 +384,11 @@ penelope wf runs
 
 ```bash
 penelope wf trace <run>
+```
+
+```bash
+penelope wf worktrees list          # worktrees des runs `worktree` (#397)
+penelope wf worktrees prune --force # retire ceux des runs finis, sales compris
 ```
 
 ```bash

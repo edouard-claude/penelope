@@ -78,6 +78,11 @@ impl Default for Parameter {
     }
 }
 
+/// `settings.workspace` d'un run qui travaille dans son propre worktree git (#397).
+pub const WORKTREE: &str = "worktree";
+/// Le paramètre qui nomme le dépôt d'un run `worktree`.
+pub const WORKTREE_REPO: &str = "repo";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -85,7 +90,7 @@ pub struct Settings {
     pub max_iterations: u32,
     pub budget: Budget,
     pub concurrency: Concurrency,
-    /// `ephemeral` ou `persistent:<nom>`.
+    /// `ephemeral`, `worktree` (un worktree git par run, #397) ou `persistent:<nom>`.
     pub workspace: String,
     /// Outil du tracker, pour les workflows livrés (§12.10).
     pub tracker: String,

@@ -37,7 +37,18 @@ pub const E2E: &str = "e2e";
 /// Gate de production (#193) : le bilan vérifié, puis la PR dev → prod approuvée.
 pub const PROD_REPORT: &str = "prod_report";
 pub const PROD_PULL_REQUEST: &str = "prod_pull_request";
-pub const ACTIONS: &[&str] = &[PULL_REQUEST, CI, E2E, PROD_REPORT, PROD_PULL_REQUEST];
+/// Fusionne la branche de base dans la branche du run (#397) : `passed` si la fusion est
+/// propre, `failed` avec les fichiers en conflit sinon, la fusion laissée en cours pour
+/// l'étape qui les résout.
+pub const SYNC_WITH_BASE: &str = "sync_with_base";
+pub const ACTIONS: &[&str] = &[
+    PULL_REQUEST,
+    CI,
+    E2E,
+    PROD_REPORT,
+    PROD_PULL_REQUEST,
+    SYNC_WITH_BASE,
+];
 
 /// Première étape de la livraison, où va la dernière revue acceptée.
 pub const ENTRY: &str = "livraison-pr";

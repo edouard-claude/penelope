@@ -156,12 +156,31 @@ pub fn validate(w: &Workflow, file_stem: Option<&str>, known: &Known) -> Report 
             format!("valeur inconnue : `{}`", w.settings.concurrency.admission),
         );
     }
-    if !(w.settings.workspace == "ephemeral" || w.settings.workspace.starts_with("persistent:")) {
+    if !(w.settings.workspace == "ephemeral"
+        || w.settings.workspace == crate::model::WORKTREE
+        || w.settings.workspace.starts_with("persistent:"))
+    {
         r.error(
             "/settings/workspace",
             format!(
-                "attendu `ephemeral` ou `persistent:<nom>`, reçu `{}`",
+                "attendu `ephemeral`, `worktree` ou `persistent:<nom>`, reçu `{}`",
                 w.settings.workspace
+            ),
+        );
+    }
+    // Un worktree s'ouvre dans le dépôt que le run reçoit en paramètre (#397).
+    if w.settings.workspace == crate::model::WORKTREE
+        && !w
+            .metadata
+            .parameters
+            .iter()
+            .any(|p| p.id == crate::model::WORKTREE_REPO)
+    {
+        r.error(
+            "/settings/workspace",
+            format!(
+                "`worktree` demande un paramètre `{}` : le dépôt où ouvrir le worktree du run",
+                crate::model::WORKTREE_REPO
             ),
         );
     }

@@ -308,6 +308,11 @@ pub fn remote_name(cfg: &FileConfig) -> String {
         .unwrap_or_else(|| "origin".into())
 }
 
+/// Une branche déclarée, espaces retirés ; vide comme absente.
+pub fn non_empty_branch(v: &Option<String>) -> Option<String> {
+    non_empty(v)
+}
+
 pub(super) fn non_empty(v: &Option<String>) -> Option<String> {
     v.as_deref()
         .map(str::trim)

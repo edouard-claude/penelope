@@ -224,6 +224,25 @@ fn each_rule_names_its_path_and_its_fault() {
     }
 }
 
+/// #397 : un run `worktree` ouvre son worktree dans le dépôt reçu en paramètre `repo`.
+#[test]
+fn a_worktree_workspace_needs_a_repo_parameter() {
+    let mut w = base();
+    w.settings.workspace = "worktree".into();
+    let r = validate(&w, None, &known());
+    assert!(
+        r.errors().iter().any(|i| i.path == "/settings/workspace"
+            && i.message.contains("demande un paramètre `repo`")),
+        "{:?}",
+        r.errors()
+    );
+    let mut repo = w.metadata.parameters[0].clone();
+    repo.id = "repo".into();
+    w.metadata.parameters.push(repo);
+    let r = validate(&w, None, &known());
+    assert!(r.is_valid(), "{:?}", r.errors());
+}
+
 /// Le nom du fichier fait foi pour l'identifiant.
 /// #191 : `context` n'admet que `run` et `fresh`, et seulement sur une étape `agent`.
 #[test]

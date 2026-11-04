@@ -568,7 +568,7 @@ pub(super) async fn sub_agent_step(ctx: &StepCtx<'_>) -> anyhow::Result<StepOutc
                 prompt: &asked,
                 model_id: &model_id,
                 tools: &step.tools,
-                workspaces: vec![ctx.workdir()],
+                workspaces: worktree::with_repo(ctx.s(), ctx.workdir()).await,
                 limits: Some(call_limits(ctx)),
             },
             ctx.cancel,

@@ -55,6 +55,7 @@ impl Rpc {
                 let id = required_str(p, "run")?;
                 Ok(json!(s.runs.trace(&id).await?))
             }
+            method::WF_WORKTREES => penelope_orchestrator::workflow::worktree::rpc(s, p).await,
             method::WF_RUN => {
                 let id = required_str(p, "id")?;
                 let params = p.get("params").cloned().unwrap_or(json!({}));
