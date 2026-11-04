@@ -337,12 +337,19 @@ async fn three_red_cycles_in_a_row_hand_back_with_the_last_verdict() {
         "la relance dit pourquoi"
     );
     after_turn(&s, &ports, "s1", &answered("Corrigé. MISSION TERMINÉE")).await;
-    assert_eq!(ports.queued.lock().unwrap().len(), 2, "pas de troisième relance");
+    assert_eq!(
+        ports.queued.lock().unwrap().len(),
+        2,
+        "pas de troisième relance"
+    );
     let m = load(&s, "s1").await.unwrap();
     assert_eq!(m.state, State::Waiting);
     let report = &ports.notified.lock().unwrap()[0];
     assert!(report.contains("3 vérifications rouges"), "{report}");
-    assert!(report.contains("cas vide : panique"), "le dernier verdict : {report}");
+    assert!(
+        report.contains("cas vide : panique"),
+        "le dernier verdict : {report}"
+    );
 }
 
 #[tokio::test]
@@ -376,18 +383,33 @@ async fn a_relaunch_reads_the_relay_files_back() {
     )
     .await
     .unwrap();
-    assert!(text.contains("kind: review") && text.contains("kind: test"), "{text}");
+    assert!(
+        text.contains("kind: review") && text.contains("kind: test"),
+        "{text}"
+    );
     assert!(text.contains(".penelope/mission/plan.md"), "{text}");
     let exclude = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
     assert!(exclude.contains("/.penelope/mission/"));
     assert_eq!(m.red, 0);
 
     std::fs::create_dir_all(repo.join(relay::DIR)).unwrap();
-    std::fs::write(repo.join(relay::DIR).join("plan.md"), "2. brancher le rapport\n").unwrap();
+    std::fs::write(
+        repo.join(relay::DIR).join("plan.md"),
+        "2. brancher le rapport\n",
+    )
+    .unwrap();
     let ports = Ports::default();
     after_turn(&s, &ports, "s1", &exhausted()).await;
     let queued = ports.queued.lock().unwrap().clone();
-    assert_eq!(*ports.compacted.lock().unwrap(), 1, "compacté avant la relance");
-    assert!(queued[0].1.contains("<<<\n2. brancher le rapport"), "{}", queued[0].1);
+    assert_eq!(
+        *ports.compacted.lock().unwrap(),
+        1,
+        "compacté avant la relance"
+    );
+    assert!(
+        queued[0].1.contains("<<<\n2. brancher le rapport"),
+        "{}",
+        queued[0].1
+    );
     assert!(queued[0].1.starts_with("[mission] "), "la consigne d'abord");
 }
