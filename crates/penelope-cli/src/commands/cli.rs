@@ -911,6 +911,13 @@ pub enum VaultCmd {
     /// Lint du wiki : liens non résolus, orphelines, impasses, alias et noms en double,
     /// identifiants de bloc, propriétés ; entrées expirées et contradictions à trancher.
     Lint,
+    /// Sert l'atlas du vault (graphe des notes et des liens), recalculé quand le vault
+    /// change, sans daemon (#428).
+    Atlas {
+        /// Adresse d'écoute ; le réseau local se demande explicitement.
+        #[arg(long, default_value = "127.0.0.1:8082")]
+        listen: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

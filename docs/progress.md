@@ -12,6 +12,26 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.93
+
+**L'atlas du vault à jour à chaque rechargement (#428).**
+
+- `penelope vault atlas [--listen 127.0.0.1:8082]` sert le graphe des notes et de leurs
+  liens, sans daemon. Le serveur du 19/10 servait une page compilée avec ses données :
+  rafraîchir ne montrait jamais une note nouvelle. Chaque GET relit l'empreinte du vault
+  (métadonnées seules) et recalcule seulement si elle a changé, sous un verrou : deux
+  rechargements concurrents voient le même atlas.
+- Le calcul (`penelope_memory::atlas`) reprend le périmètre et le résolveur du wiki
+  (noms, chemins, alias ; ni `log.md` ni `DREAMS.md`, #413), sans modèle, avec un
+  placement déterministe. Une cible introuvable est une référence ; les chemins qui
+  contiennent « secret » sont exclus.
+- La page dit l'heure du dernier calcul. Si le vault ne se lit plus, elle garde le dernier
+  atlas, marqué périmé, sans rien dire de plus que « lecture du vault impossible ».
+- Deux routes seulement (`/`, `/atlas.json`), en GET ou HEAD ; aucun fichier du vault
+  servi. Écoute locale par défaut ; le réseau local se demande par `--listen`.
+- Sur le vault réel (320 notes, 538 liens) : 6 ms par rechargement sans changement,
+  26 Mo de mémoire.
+
 ### 1.0.92
 
 **Les workflows pour les pipelines, les missions pour le code (#425, décision 0025).**

@@ -1443,6 +1443,7 @@ dependencies = [
  "penelope-hitl",
  "penelope-kernel",
  "penelope-llm",
+ "penelope-memory",
  "penelope-observe",
  "penelope-ops",
  "penelope-orchestrator",
