@@ -2959,6 +2959,22 @@ uid en identifiants de bloc, `alias` en `aliases`, noms d'accueil et d'audit (wi
 réécrits), originaux déplacés dans `attachments/`, propriétés posées ; les uid et leur
 provenance ne changent pas. La skill livrée `wiki-markdown` donne ces règles au modèle.
 
+**L'atlas du vault.** Le graphe des notes et de leurs liens, dans le navigateur, sans
+daemon :
+
+```bash
+penelope vault atlas                           # http://127.0.0.1:8082
+penelope vault atlas --listen 192.168.0.10:8082   # le réseau local, explicitement
+```
+
+Chaque rechargement de la page relit le vault : une note créée, renommée ou supprimée,
+un lien changé, paraissent sans redémarrer. Le calcul n'est refait que si le vault a
+changé (son empreinte ne lit que les métadonnées), sans modèle, avec le résolveur du wiki
+(noms, chemins, alias). Hors atlas : dossiers cachés, `archive/`, `attachments/`,
+`log.md`, `DREAMS.md` et tout chemin contenant « secret ». La page dit l'heure du dernier
+calcul ; si le vault ne se lit plus, elle garde le dernier atlas et le dit périmé. Deux
+routes seulement (`/` et `/atlas.json`), en lecture ; aucun fichier du vault n'est servi.
+
 **Recherche par le sens.** Le rappel mémoire, `mem_search`, le déclenchement des
 intentions et `tool_search` croisent les mots et les vecteurs : une entrée sur
 « l'automobile » répond à une question sur « la voiture ». Les vecteurs viennent de

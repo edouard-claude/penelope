@@ -73,6 +73,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Dataset(cmd) => return dataset::run(&cli, cmd),
         Command::Plugin { cmd } => return plugin::run(&cli, cmd),
         Command::Job { cmd } => return job_attach::run(&cli, cmd).await,
+        Command::Vault(VaultCmd::Atlas { listen }) => return atlas::run(&cli, listen),
         Command::Term { share } => return term::run(&cli, *share),
         Command::Doctor => return doctor(&cli).await,
         Command::Config(ConfigCmd::Validate { file }) => {
@@ -307,6 +308,7 @@ async fn daemon(cli: &Cli) -> CliResult<()> {
 }
 
 mod approval_stats;
+mod atlas;
 mod backup_setup;
 #[cfg(test)]
 mod backup_tests;

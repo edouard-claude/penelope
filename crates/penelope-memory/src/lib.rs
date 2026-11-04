@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod atlas;
 pub mod candidates;
 pub mod consolidation;
 pub mod edit;
