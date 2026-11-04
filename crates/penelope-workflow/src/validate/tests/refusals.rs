@@ -291,7 +291,7 @@ fn context_is_run_or_fresh_on_an_agent_step_only() {
 fn delivery_names_one_of_its_actions_on_a_delivery_step_only() {
     let cases: &[(&str, Mutation)] = &[
         (
-            "attendu pull_request, ci, e2e, prod_report, prod_pull_request, reçu ``",
+            "attendu pull_request, ci, e2e, prod_report, prod_pull_request, sync_with_base, reçu ``",
             |w| second(w, step("delivery")),
         ),
         ("reçu `deploy`", |w| {
