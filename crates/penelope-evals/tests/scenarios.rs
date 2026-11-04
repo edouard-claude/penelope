@@ -36,6 +36,7 @@ macro_rules! scenario_cases {
 scenario_cases! {
     tour_simple => "tour-simple",
     outil_lecture => "outil-lecture",
+    outil_terminal => "outil-terminal",
     lectures_paralleles => "lectures-paralleles",
     niveau_1_et_groupe => "niveau-1-et-groupe",
     messages_fusionnes => "messages-fusionnes",

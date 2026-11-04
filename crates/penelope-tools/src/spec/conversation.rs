@@ -195,6 +195,23 @@ pub(super) fn jobs() -> Vec<ToolSpec> {
             false,
         ),
         spec(
+            "read_terminal",
+            RiskClass::Read,
+            "Lit les dernières lignes d'un terminal que le propriétaire a ouvert avec \
+             `penelope term` et accepté de partager : ce qu'il a lancé, ses erreurs. Lecture \
+             seule. Sans `terminal`, rend l'écran du seul terminal partagé, ou la liste.",
+            obj(
+                json!({
+                    "terminal": {"type":"string","description":"Identifiant du terminal ; vide : le seul partagé."},
+                    "lines": {"type":"integer","minimum":1,"maximum":200,"description":"Lignes rendues (40 par défaut)."},
+                }),
+                &[],
+            ),
+            true,
+            false,
+            false,
+        ),
+        spec(
             "job_status",
             RiskClass::Read,
             "État d'un job lancé en arrière-plan : `working`, `completed`, `failed` ou \

@@ -161,6 +161,13 @@ pub enum Command {
         cmd: JobCmd,
     },
 
+    /// Ouvre ton shell en le partageant avec Pénélope, qui le lit par `read_terminal`
+    /// (lecture seule) sur ton accord ; `--share` le donne d'avance (#397).
+    Term {
+        #[arg(long)]
+        share: bool,
+    },
+
     /// Plugins au format Claude Code déposés dans `{data}/plugins` (#393), sans daemon.
     Plugin {
         #[command(subcommand)]

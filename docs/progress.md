@@ -12,6 +12,22 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.89
+
+**Un terminal du propriétaire que l'agent peut lire (#397, épopée #398). L'issue est
+close.**
+
+- `penelope term` ouvre ton shell et demande d'abord si Pénélope peut le lire ;
+  `--share` donne l'accord d'avance. Accepté, `script` copie l'écran dans
+  `{state}/terms/<id>.log` (dossier 0700, fichiers 0600) ; à la fermeture, la copie et la
+  fiche sont effacées. Refusé, le shell s'ouvre sans copie.
+- `read_terminal` (à la demande, lecture) rend les dernières lignes (40 par défaut, 200
+  au plus), sans séquences de terminal, citées comme données non fiables. Sans
+  `terminal`, il lit le seul ouvert, ou rend la liste. L'agent n'écrit jamais dans un
+  terminal du propriétaire.
+- Reste hors de ce lot, écrit dans #397 : les dépendances réensemencées depuis un cache
+  par dépôt pour les worktrees.
+
 ### 1.0.88
 
 **Prendre la main sur un terminal de l'agent depuis SSH (#397, épopée #398).**
@@ -26,7 +42,7 @@ La charte et les spécifications sont dans `design/v1/`.
   avec la consigne d'attendre plutôt que d'annuler.
 - Correctif : le relais d'entrée d'une commande prenait son `stdin` même sans rien à
   écrire.
-- Pas encore : `penelope term` et `read_terminal`.
+- `penelope term` et `read_terminal` : dans la 1.0.89.
 
 ### 1.0.87
 

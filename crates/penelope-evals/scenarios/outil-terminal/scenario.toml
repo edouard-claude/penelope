@@ -1,0 +1,21 @@
+name = "outil-terminal"
+description = """Un terminal que le propriétaire a ouvert avec `penelope term` et accepté de
+partager (#397) : sa fiche et la copie de son écran sont semées dans `{state}/terms`, avec
+des couleurs. Le propriétaire demande pourquoi son build casse ; le modèle lit le terminal
+par `read_terminal` sans le désigner (il n'y en a qu'un), reçoit les dernières lignes
+nettoyées et citées comme données, et répond sans rien relancer ni écrire."""
+pin_model = "main"
+
+[[files]]
+root = "terms"
+path = "a1b2c3d4.json"
+content = '{"id":"a1b2c3d4","title":"zsh","started_at":"2026-01-01T09:00:00Z"}'
+
+[[files]]
+root = "terms"
+path = "a1b2c3d4.log"
+content = "$ cargo build\r\n   Compiling demo v0.1.0\r\n\u001b[1m\u001b[31merror[E0425]\u001b[0m: cannot find value `cfg` in this scope\r\n --> src/main.rs:4:5\r\n$ "
+
+[[steps]]
+kind = "message"
+text = "regarde mon terminal : pourquoi mon build casse ?"

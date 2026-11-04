@@ -104,7 +104,8 @@ pub(crate) fn family_of(name: &str) -> Option<Family> {
         return Some(Family::Mcp);
     }
     Some(match name {
-        "shell_exec" => Family::Shell,
+        // Un terminal du propriétaire lu (#397) : du shell, comme ce qu'il y a lancé.
+        "shell_exec" | "read_terminal" => Family::Shell,
         "fs_read" | "fs_list" | "fs_write" | "fs_edit" | "fs_search" | "artifact_read" => {
             Family::Files
         }

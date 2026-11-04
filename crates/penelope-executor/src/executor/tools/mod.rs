@@ -55,9 +55,9 @@ impl NativeToolExecutor {
             | "workflow_status" | "workflow_control" | "workflow_author" | "sub_agent_spawn" => {
                 self.workflow_tools(name, args, cancel).await
             }
-            "job_status" | "job_wait" | "job_cancel" | "job_list" | "session_notes"
-            | "session_metadata" | "ask_user" | "step_done" | "return_value" | "image_inspect"
-            | "image_generate" => self.misc_tools(name, args, cancel).await,
+            "job_status" | "job_wait" | "job_cancel" | "job_list" | "read_terminal"
+            | "session_notes" | "session_metadata" | "ask_user" | "step_done" | "return_value"
+            | "image_inspect" | "image_generate" => self.misc_tools(name, args, cancel).await,
             other => Err(ToolError::Unknown(other.to_string())),
         }
     }

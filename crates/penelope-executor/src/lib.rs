@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod mcp_media;
 pub mod selfdocs;
 pub mod selfknow;
+pub mod terminals;
 pub mod tools_on_demand;
 pub mod vision;
 pub mod voice;

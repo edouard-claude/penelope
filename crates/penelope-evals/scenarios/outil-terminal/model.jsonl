@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "t1", "name": "read_terminal", "arguments": {"lines": 20}}]}}
+{"text": "Ton build casse sur `error[E0425]` : `cfg` n'est pas défini à la ligne 4 de `src/main.rs`. Il manque sa déclaration (ou un `let cfg = …`) avant cet usage."}
