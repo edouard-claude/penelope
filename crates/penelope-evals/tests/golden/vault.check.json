@@ -5,13 +5,25 @@
     "result": {
       "files": "integer",
       "ok": "bool",
-      "issues": [],
+      "issues": [
+        {
+          "file": "string",
+          "severity": "string",
+          "message": "string"
+        }
+      ],
       "inventory": {
         "files": "integer",
         "indexed_files": "integer",
         "entries": "integer",
         "not_indexed": [],
         "excluded": [
+          {
+            "path": "string",
+            "reason": "string"
+          }
+        ],
+        "stale": [
           {
             "path": "string",
             "reason": "string"

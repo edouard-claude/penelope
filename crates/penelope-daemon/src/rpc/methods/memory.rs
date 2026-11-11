@@ -75,17 +75,18 @@ impl Rpc {
                 penelope_vault::vault_ops::migrate_wiki(s, &vault)
                     .await
                     .map_err(anyhow::Error::msg)?;
-                let n = penelope_vault::vault_ops::reindex(s, &vault)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
+                let prune = p.get("prune").and_then(|v| v.as_bool()) == Some(true);
+                let done = penelope_vault::vault_ops::reindex_report(s, &vault, prune).await;
+                let mut out = done.map_err(anyhow::Error::msg)?.to_json();
                 // `embeddings` : tous les vecteurs recalculés avec le modèle courant.
                 if p.get("embeddings").and_then(|v| v.as_bool()) == Some(true) {
-                    let report =
-                        penelope_vault::embeddings::backfill(&self.daemon.embedder(), true).await?;
-                    return Ok(json!({"entries": n, "embeddings": report}));
+                    let embedder = self.daemon.embedder();
+                    out["embeddings"] =
+                        json!(penelope_vault::embeddings::backfill(&embedder, true).await?);
+                    return Ok(out);
                 }
                 penelope_vault::embeddings::spawn_backfill(self.daemon.embedder());
-                Ok(json!({"entries": n}))
+                Ok(out)
             }
             method::MEM_RETRY_REJECTED => Ok(json!({
                 "retried": s.candidates.retry_origin_rejections().await?,

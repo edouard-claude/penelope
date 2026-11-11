@@ -1,4 +1,4 @@
-{"type":"outcome","step":1,"input":"rpc : mem.reindex","result":{"entries":3}}
+{"type":"outcome","step":1,"input":"rpc : mem.reindex","result":{"entries":3,"retired":0}}
 {"type":"outcome","step":2,"input":"rpc : mem.search","result":{"/*/uid":["01J9C","01J9A"],"/*/text":["Martin préfère être appelé le matin.","Le client Martin est basé à Lyon."],"/*/level":["cure","coeur"],"/*/file":["clients/martin.md","memoire.md"]}}
 {"type":"outcome","step":3,"input":"rpc : mem.show","result":{"uid":"01J9A","file":"memoire.md","anchor":null,"level":"coeur","etype":"fait","slug":null,"text":"Le client Martin est basé à Lyon.","quand":null,"importance":null,"projet":null,"confiance":null,"statut":"active","depuis":null,"maj":"2026-01-01","pinned":true,"declencheurs":[],"content_hash":"{{hash}}","retired_at":null}}
 {"type":"outcome","step":4,"input":"rpc : mem.signals","result":{"uid":"01J9A","fichier":"memoire.md","texte":"Le client Martin est basé à Lyon.","rappels":0,"rappels_utiles":0,"vu_sans_etre_retenu":0,"succes":0,"contradictions":0,"dernier_rappel":null,"requetes_distinctes":0,"facteur_usage":1.0}}

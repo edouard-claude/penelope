@@ -372,7 +372,10 @@ fn mem_route(cmd: &MemCmd) -> (&'static str, Value) {
         MemCmd::Show { uid } => (m::MEM_SHOW, json!({"uid": uid})),
         MemCmd::History { uid, file } => (m::MEM_HISTORY, json!({"uid": uid, "file": file})),
         MemCmd::Restore { id } => (m::MEM_RESTORE, json!({"id": id})),
-        MemCmd::Reindex { embeddings } => (m::MEM_REINDEX, json!({"embeddings": embeddings})),
+        MemCmd::Reindex { embeddings, prune } => (
+            m::MEM_REINDEX,
+            json!({"embeddings": embeddings, "prune": prune}),
+        ),
         MemCmd::Forget { uid } => (m::MEM_FORGET, json!({"uid": uid})),
         MemCmd::Candidates => (m::MEM_CANDIDATES, json!({})),
         MemCmd::Split { uid } => (m::MEM_SPLIT, json!({"uid": uid})),

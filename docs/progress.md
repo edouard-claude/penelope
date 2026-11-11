@@ -12,6 +12,37 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.103
+
+**Index mémoire : une entrée effacée du vault n'est plus rappelée après réindexation
+(#449).**
+
+- `reindex` ne faisait que des `upsert` : une ligne effacée à la main, une note
+  supprimée restaient actives dans l'index, rappelées et injectées. Le propriétaire qui
+  corrigeait sa mémoire dans son éditeur n'était pas obéi, et `mem restore` laissait
+  vivantes les entrées ajoutées depuis la pré-image. Trouvé à la relecture du code.
+- La passe confronte maintenant l'index à ce qu'elle a relu (`vault_ops::drift`) et
+  retire ce que le vault ne porte plus, comme `mem_forget` : statut `retiree`,
+  provenance et signaux gardés. La comparaison porte sur toute la passe : une ligne
+  déplacée d'une note à l'autre garde son entrée ; remise à la main, elle retrouve ses
+  signaux.
+- Seul ce qui a été relu compte : une note illisible, cachée, archivée ou restée dans le
+  nuage (`.nom.md.icloud`) ne fait rien retirer. Les passages d'un document ne partent
+  qu'avec sa fiche `sources/`.
+- Garde : une passe qui retirerait plus du quart de l'index (au-delà de cinq entrées), ou
+  qui n'a rien pu relire, ne retire rien, le journalise et le rend dans son bilan ;
+  `penelope mem reindex --prune` confirme. Un vault démonté ressemble à un vault vidé.
+- `penelope mem reindex` rend `retired`, `retired_files` et, retenue, `held` avec la
+  commande à lancer. `penelope vault check` (« hors vault »), `penelope doctor` (« Vault
+  indexé ») et `penelope mem audit` (axe Qualité, hors barème) comptent les entrées
+  d'index sans ligne dans le vault.
+- Tests : `vault_ops::drift::tests` (ligne effacée puis remise, ligne déplacée, note
+  supprimée, illisible ou non synchronisée, garde et confirmation).
+- **Pas fait ici** : la réindexation reste une commande, aucune passe automatique ne
+  suit les éditions du vault ; un document ingéré raccourci garde ses anciens passages
+  tant que sa fiche existe ; `store rebuild`, `mem restore` et le renommage d'un sujet
+  réindexent sans confirmation possible (retenus par la garde, ils le journalisent).
+
 ### 1.0.102
 
 **Vault : une note illisible n'est plus prise pour une note vide, et rien ne l'écrase

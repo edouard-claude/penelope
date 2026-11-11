@@ -56,6 +56,8 @@ struct Facts {
     /// Problèmes du lint du wiki (liens, identifiants de bloc, propriétés, noms).
     lint_problems: i64,
     undefined_concepts: i64,
+    /// Entrées de l'index sans ligne dans le vault (#449).
+    orphans: i64,
     contradictions: i64,
     vectors: i64,
 }
@@ -118,6 +120,12 @@ async fn facts(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<F
     }
     let vault = penelope_app::helpers::vault_dir(s);
     f.lint_problems = penelope_memory::wiki::lint(&vault).problems() as i64;
+    let scan = crate::vault_ops::drift::Scan::of(&vault);
+    f.orphans = crate::vault_ops::drift::drift(s, &vault, &scan)
+        .await
+        .map_err(anyhow::Error::msg)?
+        .gone
+        .len() as i64;
     let pending = vault.join("concepts/_a-definir.md");
     f.undefined_concepts = std::fs::read_to_string(pending)
         .map(|raw| {
@@ -259,7 +267,7 @@ fn axes(f: &Facts) -> Vec<Axis> {
         max: 20,
         why: format!(
             "{}/{} entrée(s) avec provenance, {} lien(s) mort(s), {} problème(s) de lint, \
-             {} concept(s) à définir, {} contradiction(s) ouverte(s), {}/{} vecteur(s)",
+             {} concept(s) à définir, {} contradiction(s) ouverte(s), {}/{} vecteur(s){}",
             f.with_provenance,
             f.entries,
             f.dead_links,
@@ -267,10 +275,17 @@ fn axes(f: &Facts) -> Vec<Axis> {
             f.undefined_concepts,
             f.contradictions,
             f.vectors,
-            f.entries
+            f.entries,
+            // Hors barème : dit seulement quand il y en a (#449).
+            match f.orphans {
+                0 => String::new(),
+                n => format!(", {n} entrée(s) d'index sans ligne dans le vault"),
+            }
         ),
         next: if f.contradictions > 0 {
             "Trancher les contradictions en attente (`/approvals`)".into()
+        } else if f.orphans > 0 {
+            "`penelope mem reindex` : sortir de l'index ce que le vault ne porte plus".into()
         } else if f.entries > 0 && f.vectors < f.entries {
             "`penelope mem reindex --embeddings` : vecteurs manquants".into()
         } else if f.dead_links > 0 || f.lint_problems > 0 {

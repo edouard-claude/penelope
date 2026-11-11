@@ -854,6 +854,10 @@ pub enum MemCmd {
         /// Recalcule aussi tous les vecteurs (mémoire, intentions, outils MCP).
         #[arg(long)]
         embeddings: bool,
+        /// Confirme le retrait des entrées que le vault ne porte plus, quand la passe en
+        /// retirerait plus du quart de l'index et s'est retenue.
+        #[arg(long)]
+        prune: bool,
     },
     Forget {
         uid: String,

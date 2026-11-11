@@ -80,6 +80,8 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
     std::fs::write(vault.join("profil.md"), healthy).unwrap();
     let restored = restore(s, id).await.unwrap();
     assert_eq!(restored["file"], "profil.md");
+    // #449 : l'entrée que la pré-image ne porte pas sort de l'index avec sa ligne.
+    assert_eq!(s.memory.get(&uid).await.unwrap().unwrap().statut, "retiree");
     assert!(
         !std::fs::read_to_string(vault.join("profil.md"))
             .unwrap()
