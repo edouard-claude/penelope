@@ -26,7 +26,6 @@ use crate::bus::Origin;
 use crate::outcome::{CALLS_EXHAUSTED, TurnOutcome};
 use crate::services::Services;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Mot de fin d'une mission réussie, dans la réponse du modèle.
 pub const DONE: &str = "MISSION TERMINÉE";
@@ -45,10 +44,6 @@ pub const REJECTED: &str = "VERDICT : recalé";
 pub const DEFAULT_BUDGET_USD: f64 = 20.0;
 /// Durée par défaut d'une mission, en heures.
 pub const DEFAULT_HOURS: f64 = 8.0;
-/// Délai de la commande de vérification.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-/// Sortie de la vérification renvoyée au modèle, en caractères (la fin, là où est l'erreur).
-const CHECK_TAIL: usize = 6_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -182,6 +177,25 @@ pub async fn load(s: &Services, session_id: &str) -> Option<Mission> {
 pub async fn save(s: &Services, m: &Mission) -> anyhow::Result<()> {
     s.kv_set(&key(&m.session_id), &serde_json::to_string(m)?)
         .await
+}
+
+/// Écrit `m` si la mission enregistrée est encore en cours ; sinon rend faux sans rien
+/// écrire. Toute transition d'une mission lancée passe par ici (#455) : entre la lecture
+/// de l'état et son écriture, il y a une vérification de vingt minutes ou une compaction,
+/// et l'arrêt écrit pendant ce temps ne doit pas être recouvert par l'état d'avant.
+async fn advance(s: &Services, m: &Mission) -> anyhow::Result<bool> {
+    let (k, v) = (key(&m.session_id), serde_json::to_string(m)?);
+    Ok(s.store
+        .write(move |tx| {
+            let running = penelope_store::kv_get(tx, &k)?
+                .and_then(|raw| serde_json::from_str::<Mission>(&raw).ok())
+                .is_some_and(|stored| stored.state == State::Running);
+            if running {
+                penelope_store::kv_set(tx, &k, &v)?;
+            }
+            Ok(running)
+        })
+        .await?)
 }
 
 /// La session porte une mission en cours : ses tours partent sans carte et son budget
@@ -377,7 +391,14 @@ pub async fn stop(s: &Services, session_id: &str) -> anyhow::Result<Mission> {
     if m.state == State::Running {
         m.state = State::Stopped;
         m.note = "arrêtée par le propriétaire".into();
-        save(s, &m).await?;
+        if !advance(s, &m).await? {
+            // Finie entre-temps (verdict vert, budget) : c'est cet état-là qui est vrai.
+            return load(s, session_id)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("mission illisible"));
+        }
+        // La vérification en cours meurt avec la mission : son verdict ne relance rien.
+        check::interrupt(s, session_id);
         finished(s, &m).await;
     }
     Ok(m)
@@ -394,8 +415,10 @@ pub async fn block(s: &Services, session_id: &str, reason: &str) -> anyhow::Resu
     }
     m.state = State::Blocked;
     m.note = format!("🧱 Mission bloquée : {reason}");
-    save(s, &m).await?;
-    finished(s, &m).await;
+    if advance(s, &m).await? {
+        check::interrupt(s, session_id);
+        finished(s, &m).await;
+    }
     Ok(())
 }
 
@@ -489,19 +512,20 @@ pub async fn decide(s: &Services, m: &mut Mission, outcome: &TurnOutcome) -> Nex
                 m.red = 0;
                 return Next::Finish(State::Done, format!("🏁 Mission terminée : {}", m.goal));
             };
-            let checked = match &m.host {
-                Some(host) => run_check_remote(s, host, &check, m.cwd.as_deref()).await,
-                None => run_check(s, &check, m.cwd.as_deref()).await,
-            };
-            match checked {
-                Ok(()) => {
+            match check::verify(s, m, &check).await {
+                // `/stop` ou l'arrêt du daemon : la mission s'arrête, comme pour un tour
+                // annulé. Après un `/mission stop`, l'état est déjà écrit et rien ne suit.
+                Verdict::Interrupted => {
+                    return Next::Finish(State::Stopped, stopped(m, "vérification interrompue"));
+                }
+                Verdict::Green => {
                     m.red = 0;
                     return Next::Finish(
                         State::Done,
                         format!("🏁 Mission terminée, `{check}` est vert : {}", m.goal),
                     );
                 }
-                Err(output) => {
+                Verdict::Red(output) => {
                     if let Some(why) = over {
                         return Next::Finish(State::Budget, stopped(m, &why));
                     }
@@ -604,131 +628,6 @@ fn stopped(m: &Mission, why: &str) -> String {
         "⏹️ Mission arrêtée ({why}) après {} tours : {}",
         m.turns, m.goal
     )
-}
-
-/// La vérification d'une mission `--host` (#395), sur l'hôte, dans `cwd`.
-pub async fn run_check_remote(
-    s: &Services,
-    host: &str,
-    check: &str,
-    cwd: Option<&str>,
-) -> Result<(), String> {
-    let root = cwd.ok_or("une mission `--host` a toujours son `--cwd`")?;
-    let req = remote_request(
-        s,
-        host,
-        root,
-        "shell_exec",
-        // Réseau ouvert, comme la vérification locale : les dépendances d'un `cargo test`.
-        serde_json::json!({"command": check, "network": true}),
-        CHECK_TIMEOUT,
-    );
-    let out = crate::child::remote::call(s, host, &req, &penelope_llm::CancelToken::new())
-        .await
-        .map_err(|e| format!("vérification impossible : {e}"))?;
-    let code = out["exitCode"].as_i64().unwrap_or(-1);
-    if code == 0 {
-        return Ok(());
-    }
-    let text = format!(
-        "{}{}",
-        out["stdout"].as_str().unwrap_or_default(),
-        out["stderr"].as_str().unwrap_or_default()
-    );
-    let chars: Vec<char> = text.chars().collect();
-    let tail: String = chars[chars.len().saturating_sub(CHECK_TAIL)..]
-        .iter()
-        .collect();
-    Err(format!("code {code}\n{tail}"))
-}
-
-/// Un appel d'outil pour l'hôte d'une mission : sa racine, ses motifs masqués, et le
-/// profil du shell (`full` seulement pour un hôte déclaré dans `runners.remote_full_for`).
-pub fn remote_request(
-    s: &Services,
-    host: &str,
-    root: &str,
-    tool: &str,
-    args: serde_json::Value,
-    timeout: std::time::Duration,
-) -> penelope_tools::remote::ToolRequest {
-    let cfg = s.config.config();
-    let full = cfg.runners.remote_full_for.iter().any(|h| h == host);
-    penelope_tools::remote::ToolRequest {
-        tool: tool.into(),
-        network: args
-            .get("network")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            || cfg.sandbox.shell_network,
-        args,
-        root: root.into(),
-        hide: cfg.sandbox.hide.clone(),
-        // Sur cette machine (`@local`), les chemins développés ; sur un hôte, les entrées
-        // en `~/…` et absolues, développées là-bas.
-        deny_read: if host == crate::child::remote::LOCAL {
-            crate::helpers::denied_reads(s)
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect()
-        } else {
-            cfg.sandbox.deny_read.clone()
-        },
-        profile: if full {
-            "full".into()
-        } else {
-            cfg.sandbox.default_profile.clone()
-        },
-        timeout_ms: timeout.as_millis() as u64,
-        max_output_bytes: cfg.tools.max_output_bytes,
-        env: Vec::new(),
-    }
-}
-
-/// Lance la vérification, sans bac à sable (la commande est celle du propriétaire) ;
-/// `Err` porte la fin de sa sortie.
-pub async fn run_check(s: &Services, check: &str, cwd: Option<&str>) -> Result<(), String> {
-    // Revérifié à chaque lancement : un lien posé depuis le départ ne le sort pas des
-    // workspaces (TOCTOU, revue de sécurité du 14/10).
-    let cwd = match cwd {
-        None => None,
-        Some(c) => Some(dir_of(s, c).ok_or_else(|| {
-            format!("`{c}` n'est plus dans un workspace autorisé : vérification refusée")
-        })?),
-    };
-    // Le bac à sable du shell (#366, revue de sécurité) : la commande est celle du
-    // propriétaire, mais elle tourne dans un dépôt que l'agent a modifié. Le réseau est
-    // ouvert (dépendances d'un `cargo test`), les lectures refusées restent refusées.
-    let cfg = s.config.config();
-    let dir = cwd.clone().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let profile = penelope_tools::shell::profile_with_denied_reads(
-        &cfg.sandbox.default_profile,
-        &dir,
-        true,
-        &crate::helpers::denied_reads(s),
-    );
-    let out = penelope_tools::shell::exec(
-        &s.platform.processes,
-        check,
-        penelope_tools::shell::ExecOptions {
-            profile: Some(&profile),
-            cwd: cwd.as_deref(),
-            timeout: CHECK_TIMEOUT,
-            max_output_bytes: 1024 * 1024,
-            ..Default::default()
-        },
-    )
-    .await
-    .map_err(|e| format!("vérification impossible : {e}"))?;
-    if out.exit_code == 0 {
-        return Ok(());
-    }
-    let text = format!("{}{}", out.stdout, out.stderr);
-    let chars: Vec<char> = text.chars().collect();
-    let tail: String = chars[chars.len().saturating_sub(CHECK_TAIL)..]
-        .iter()
-        .collect();
-    Err(format!("code {}\n{tail}", out.exit_code))
 }
 
 /// Le dossier d'une mission, canonique, s'il est dans un workspace autorisé.
@@ -922,9 +821,14 @@ pub async fn after_turn(
                 .unwrap_or_default()
                 .trim_start_matches("[mission] ")
                 .to_string();
-            if let Err(e) = save(s, &m).await {
-                tracing::error!(error = %e, session = session_id, "mission non enregistrée");
-                return;
+            // Arrêtée ou bloquée pendant la vérification : rien n'est écrit ni relancé.
+            match advance(s, &m).await {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(e) => {
+                    tracing::error!(error = %e, session = session_id, "mission non enregistrée");
+                    return;
+                }
             }
             ports.compact(session_id).await;
             // Un état relu après la compaction : un `mission stop` pendant ce temps gagne.
@@ -948,8 +852,14 @@ pub async fn after_turn(
         Next::Finish(state, report) => {
             m.state = state;
             m.note = report.clone();
-            if let Err(e) = save(s, &m).await {
-                tracing::error!(error = %e, session = session_id, "mission non enregistrée");
+            match advance(s, &m).await {
+                Ok(true) => {}
+                // L'arrêt du propriétaire a déjà clos la mission et prévenu : son état
+                // reste, même si la vérification rend son verdict au même instant.
+                Ok(false) => return,
+                Err(e) => {
+                    tracing::error!(error = %e, session = session_id, "mission non enregistrée");
+                }
             }
             finished(s, &m).await;
             ports.notify(&m.origin(), &report).await;
@@ -988,8 +898,10 @@ async fn event(s: &Services, m: &Mission, kind: &str) {
     }
 }
 
+pub mod check;
 pub mod relay;
 pub mod worktree;
+pub use check::{Verdict, remote_request, run_check, run_check_remote};
 
 #[cfg(test)]
 mod tests;

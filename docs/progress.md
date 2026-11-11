@@ -12,6 +12,33 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.109
+
+**Mission : un `/mission stop` pendant la vérification `--check` tient, et tue la
+vérification (#455).**
+
+- La vérification tourne après la fin du tour, jusqu'à vingt minutes, et plus rien ne
+  portait alors de jeton d'annulation. `/mission stop` écrivait « arrêtée » et répondait ;
+  la vérification continuait, rendait son verdict, et `after_turn` réécrivait l'état lu
+  **avant** elle, encore en cours : rouge, la mission repartait pour un tour, verte, elle
+  s'annonçait terminée après avoir été dite arrêtée. Un blocage posé par un hook (#384)
+  se perdait de la même façon.
+- Toute transition d'une mission lancée est une écriture conditionnelle (`advance`) : dans
+  la même transaction, elle relit l'état et n'écrit que s'il est encore « en cours ».
+  Relance, fin, arrêt et blocage y passent ; une transition qui arrive après une autre ne
+  recouvre rien, n'envoie rien, ne met aucun tour en file.
+- La vérification s'inscrit au registre des jobs du processus sous le nom de sa session
+  (`mission/check.rs`). `/mission stop` et un blocage tuent son groupe de processus ;
+  `/stop` et l'arrêt du daemon aussi, et la mission s'arrête alors avec un compte rendu
+  (« vérification interrompue »), comme pour un tour annulé.
+- Tranché : un arrêt pendant une vérification gagne, même si elle aurait été verte.
+  C'est l'état que le propriétaire a lu en réponse à sa commande.
+- `doctor` et `self_status` comptent les jobs « dans ce processus » un par un (ceux de la
+  table qu'un jeton couvre ici), plus par la taille du registre : la vérification d'une
+  mission y figure sans être un job de la table.
+- `mission.rs` approchait le plafond de 1 000 lignes : la vérification (locale, distante,
+  sa requête) vit dans `mission/check.rs`, sans changement de signature publique.
+
 ### 1.0.108
 
 **Fichiers pid : ils partent avec leur processus, et le ramassage des orphelins ne tue

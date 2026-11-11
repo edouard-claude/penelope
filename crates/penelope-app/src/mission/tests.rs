@@ -413,3 +413,135 @@ async fn a_relaunch_reads_the_relay_files_back() {
     );
     assert!(queued[0].1.starts_with("[mission] "), "la consigne d'abord");
 }
+
+/// Attend que la vérification de `s1` tourne.
+async fn checking(s: &Services) {
+    for _ in 0..500 {
+        if s.jobs.of_session("s1") == 1 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("la vérification n'a pas démarré");
+}
+
+/// Le tour répond « terminé », et `during` se passe pendant que la vérification tourne.
+async fn stopped_during_the_check(
+    s: &Services,
+    ports: &Ports,
+    during: impl std::future::Future<Output = ()>,
+) {
+    let outcome = answered("Fini. MISSION TERMINÉE");
+    let both = async {
+        tokio::join!(after_turn(s, ports, "s1", &outcome), async {
+            checking(s).await;
+            during.await;
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(15), both)
+        .await
+        .expect("la vérification a survécu à l'arrêt");
+    assert!(s.jobs.is_empty(), "vérification encore inscrite");
+    assert!(ports.queued.lock().unwrap().is_empty(), "un tour est parti");
+}
+
+/// #455 : la vérification dure jusqu'à vingt minutes, après la fin du tour. Un
+/// `/mission stop` écrivait « arrêtée », la vérification finissait rouge et l'état
+/// d'avant, encore en cours, recouvrait l'arrêt : la mission repartait.
+#[tokio::test]
+async fn a_stop_during_the_check_wins_and_kills_it() {
+    let (_d, s) = services().await;
+    let dir = tempfile::tempdir().unwrap();
+    let noted = dir.path().join("pid");
+    let check = format!("echo $$ > {}; sleep 30; exit 1", noted.display());
+    started(&s, Some(&check)).await;
+    let ports = Ports::default();
+    stopped_during_the_check(&s, &ports, async {
+        while !noted.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(stop(&s, "s1").await.unwrap().state, State::Stopped);
+    })
+    .await;
+    let pid: u32 = std::fs::read_to_string(&noted)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let mut waited = 0;
+    while penelope_platform::process::process_exists(pid) && waited < 500 {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        waited += 1;
+    }
+    assert!(waited < 500, "la vérification {pid} tourne encore");
+    let m = load(&s, "s1").await.unwrap();
+    assert_eq!(
+        (m.state, m.note.as_str()),
+        (State::Stopped, "arrêtée par le propriétaire")
+    );
+    assert!(
+        ports.notified.lock().unwrap().is_empty(),
+        "l'arrêt a déjà répondu"
+    );
+}
+
+/// Un blocage posé par un hook (#384) pendant la vérification tient de la même façon.
+#[tokio::test]
+async fn a_block_during_the_check_wins_and_kills_it() {
+    let (_d, s) = services().await;
+    started(&s, Some("sleep 30; exit 1")).await;
+    let ports = Ports::default();
+    stopped_during_the_check(&s, &ports, async {
+        block(&s, "s1", "un hook demande ton avis").await.unwrap();
+    })
+    .await;
+    let m = load(&s, "s1").await.unwrap();
+    assert_eq!(m.state, State::Blocked);
+    assert!(m.note.contains("un hook demande ton avis"), "{}", m.note);
+}
+
+/// `/stop` coupe les jobs de la session : la vérification en est un, et la mission
+/// s'arrête comme pour un tour annulé, avec un compte rendu.
+#[tokio::test]
+async fn a_plain_stop_during_the_check_stops_the_mission() {
+    let (_d, s) = services().await;
+    started(&s, Some("sleep 30; exit 1")).await;
+    let ports = Ports::default();
+    stopped_during_the_check(&s, &ports, async {
+        assert_eq!(s.jobs.cancel_session("s1"), 1);
+    })
+    .await;
+    assert_eq!(load(&s, "s1").await.unwrap().state, State::Stopped);
+    let notified = ports.notified.lock().unwrap().clone();
+    assert_eq!(notified.len(), 1);
+    assert!(
+        notified[0].contains("vérification interrompue"),
+        "{notified:?}"
+    );
+}
+
+/// L'écriture elle-même est conditionnelle : un état écrit pendant la vérification n'est
+/// recouvert ni par une relance (verdict rouge) ni par une fin (verdict vert). Arrêtée
+/// puis verte au même instant, la mission reste arrêtée : c'est ce que le propriétaire a lu.
+#[tokio::test]
+async fn a_verdict_never_overwrites_a_state_written_during_the_check() {
+    for check in ["sleep 1; exit 1", "sleep 1"] {
+        let (_d, s) = services().await;
+        let mut m = started(&s, Some(check)).await;
+        let ports = Ports::default();
+        stopped_during_the_check(&s, &ports, async {
+            // Écrit sans interrompre la vérification : son verdict arrive quand même.
+            m.state = State::Stopped;
+            m.note = "arrêtée".into();
+            save(&s, &m).await.unwrap();
+        })
+        .await;
+        let after = load(&s, "s1").await.unwrap();
+        assert_eq!(
+            (after.state, after.note.as_str(), after.turns),
+            (State::Stopped, "arrêtée", 0),
+            "`{check}`"
+        );
+        assert!(ports.notified.lock().unwrap().is_empty(), "`{check}`");
+    }
+}

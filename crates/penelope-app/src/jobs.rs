@@ -77,6 +77,13 @@ impl Running {
         })
     }
 
+    /// Vrai si ce job a son jeton ici. Le registre porte aussi la vérification d'une
+    /// mission (#455), qui n'est pas un job de la table : qui compare les deux demande
+    /// job par job, pas un total.
+    pub fn covers(&self, job: &str) -> bool {
+        self.with(|m| m.contains_key(job))
+    }
+
     /// Jobs de cette session qui tournent ici.
     pub fn of_session(&self, session: &str) -> usize {
         self.with(|m| m.values().filter(|(s, _)| s == session).count())
