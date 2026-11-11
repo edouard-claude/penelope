@@ -16,6 +16,7 @@ mod credits;
 mod effects;
 mod fallback;
 mod guards;
+mod hooks;
 mod judge;
 mod perseverance;
 mod policy;

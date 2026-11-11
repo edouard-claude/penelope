@@ -91,6 +91,15 @@ verdict JSON :
   modifié repasse toute la politique, et finit au moins aussi strict que l'original ;
 - `{"verdict": "continue"}` ou code 0 : rien ne change.
 
+Quand l'appel réécrit demande une carte, la carte montre les arguments **réécrits** (et
+son motif, ceux d'avant), et l'accord vaut pour ceux-là : la demande en garde l'empreinte.
+Une fois l'accord donné, l'appel repasse ses hooks ; il part si la réécriture redonne ce
+que la carte a montré, et une carte nouvelle est posée sinon (le hook a changé de réponse,
+ou a été retiré entre-temps). Le modèle, lui, ne voit pas son appel changer dans le
+transcript : le résultat commence par une ligne qui dit ce qui est parti,
+``[hook `nom`] Arguments modifiés avant l'exécution. Exécuté : {…}``, secrets masqués
+(#446). Un hook qui réécrit doit donc répondre la même chose à la même entrée.
+
 Le plus strict l'emporte toujours (`ca_9_7_hook_cannot_loosen`) ; la couche `hook` est
 nommée dans le motif de la carte et le jeu de décisions. Un `allow` n'existe pas : un JSON
 qui le dit est une erreur du hook, tranchée par `on_failure` (`block` refuse l'appel).

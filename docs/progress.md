@@ -12,6 +12,42 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.100
+
+**Un hook qui réécrit les arguments : l'accord vaut pour ce que la carte a montré, et
+c'est cela qui part (#446).**
+
+- Un hook `pre_tool` qui répond `args` réécrit l'appel en mémoire ; le transcript garde ce
+  que le modèle a émis. Quand l'appel réécrit demandait une carte, la carte montrait bien
+  les arguments réécrits (`git push --force-with-lease`), mais la reprise relisait l'appel
+  dans le transcript et retrouvait l'accord par le seul identifiant de l'appel, avant les
+  hooks : c'est l'appel d'origine (`git push --force`) qui partait. Trouvé à la relecture
+  du code, rejoué par un test ; non observé en production, aucun hook n'étant
+  installé sur l'instance du propriétaire.
+- La demande d'accord porte l'empreinte des arguments montrés (`args_digest`, SHA-256 du
+  JSON canonique, prise avant le masquage des secrets ; les arguments eux-mêmes restent
+  masqués dans la demande). À la reprise, un accord ne vaut que pour l'appel qui a cette
+  empreinte : sinon l'appel repasse la politique et ses hooks, et part sans nouvelle
+  carte si la réécriture redonne ce qui a été approuvé
+  (`penelope_agent::pipeline::hooks`). Si le hook répond autre chose, ou a été retiré, une
+  carte nouvelle montre ce qui partirait cette fois.
+- Le résultat d'un appel réécrit commence par
+  ``[hook `nom`] Arguments modifiés avant l'exécution. Exécuté : {…}`` : le modèle, qui
+  relit dans le transcript l'appel qu'il a émis, sait ce qui est vraiment parti. Vrai
+  aussi sans carte. Un appel réécrit ne part plus dans un lot parallèle.
+- Une demande posée avant la mise à jour n'a pas d'empreinte : elle vaut comme avant, une
+  fois.
+- `ApprovalStore::find_for_call` départage deux demandes du même appel posées à la même
+  milliseconde par l'ordre d'insertion : la dernière l'emporte.
+- Tests : `tests::hooks` de `penelope-agent` (l'appel approuvé part tel que la carte l'a
+  montré ; un accord ne couvre pas d'autres arguments ; la note sans carte ; la demande
+  sans empreinte), `the_last_request_of_a_call_is_the_one_found`, et le scénario
+  `hooks-reecriture-approuvee`, de bout en bout par la socket. `hooks-avant-outil` et
+  `rpc-approbations` régénérés (la note, l'empreinte).
+- **Pas fait ici** : un `ask` d'un hook fait toujours perdre la réécriture d'un autre hook
+  sur le même appel (« une carte forcée passe avant des arguments modifiés », dans
+  `ExecHookGate`) ; les étapes d'outil d'un workflow ne passent pas par `pre_tool`.
+
 ### 1.0.99
 
 **Une double confirmation se donne à chaque fois : plus de fenêtre sur sa carte, et

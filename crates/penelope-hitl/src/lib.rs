@@ -474,6 +474,9 @@ impl ApprovalStore {
     ///
     /// C'est ce qui permet de **reprendre** un tour suspendu : l'appel reste dans
     /// l'historique, et la décision est retrouvée par l'identifiant de l'appel.
+    /// Un appel peut en porter plusieurs (#446 : un accord donné à d'autres arguments que
+    /// ceux qui partiraient est suivi d'une carte nouvelle) ; à date égale, la dernière
+    /// insérée l'emporte.
     pub async fn find_for_call(
         &self,
         session_id: &str,
@@ -485,7 +488,7 @@ impl ApprovalStore {
             .read(move |c| {
                 let mut st = c.prepare(&format!(
                     "{SELECT} WHERE session_id = ?1 AND json_extract(payload, '$.call_id') = ?2
-                     ORDER BY created_at DESC LIMIT 1"
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1"
                 ))?;
                 let mut rows = st.query(params![sid, cid])?;
                 match rows.next()? {

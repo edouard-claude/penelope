@@ -63,6 +63,7 @@ scenario_cases! {
     commande_mission => "commande-mission",
     commande_secrets => "commande-secrets",
     hooks_avant_outil => "hooks-avant-outil",
+    hooks_reecriture_approuvee => "hooks-reecriture-approuvee",
     hooks_fin_de_tour_et_mission => "hooks-fin-de-tour-et-mission",
     hooks_ouverture_et_message => "hooks-ouverture-et-message",
     commandes_sessions => "commandes-sessions",

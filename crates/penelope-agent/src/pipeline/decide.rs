@@ -240,6 +240,14 @@ impl CallGuard for PriorDecision {
                 approval_id: a.id.0.clone(),
             }),
             ApprovalState::Approved => {
+                // L'accord vaut pour les arguments de sa carte (#446). Un appel qu'un hook
+                // avait réécrit revient ici tel que le modèle l'a émis : il repasse la
+                // politique et ses hooks, et l'accord est retrouvé après eux
+                // (`AgentLoop::approved_as`), ou une carte nouvelle est posée.
+                let args = crate::effective_arguments(&d.call.name, &d.call.arguments);
+                if !super::hooks::covers(&a, &args) {
+                    return Ok(None);
+                }
                 // Approuvé : on exécute, sans redemander.
                 let _ = cx.detector.observe(&d.call.name, &d.call.arguments);
                 GuardStop::Approved

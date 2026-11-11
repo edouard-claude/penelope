@@ -3,6 +3,7 @@
 use super::*;
 
 pub(super) mod decide;
+pub(super) mod hooks;
 pub(super) mod judge;
 pub(super) mod policy;
 pub(super) mod sample;
@@ -12,6 +13,7 @@ use decide::{
     DescribedCall, GuardContext, GuardStop, Refusal, Suspension, call_chain, nested_ask,
     run_call_guards,
 };
+use hooks::Gated;
 use judge::JudgeStep;
 use policy::PolicyStage;
 pub use policy::{ApprovalMode, declared_allow, local_draft_allow};
@@ -57,12 +59,14 @@ pub(crate) enum Step {
     /// Résultat connu sans exécuter : refus, avertissement du harnais.
     Record(ToolCall, String),
     /// À exécuter ; `parallel` : lecture autorisée d'office, qui peut partir avec ses
-    /// voisines ; `id` : l'identité de l'appel pour le ledger et le jeu de décisions.
+    /// voisines ; `id` : l'identité de l'appel pour le ledger et le jeu de décisions ;
+    /// `note` : ce qu'un hook a changé à l'appel, dit au modèle en tête du résultat (#446).
     Execute {
         call: ToolCall,
         info: CallInfo,
         parallel: bool,
         id: CallId,
+        note: Option<String>,
     },
 }
 
@@ -205,6 +209,7 @@ impl AgentLoop {
                     info,
                     parallel: true,
                     id,
+                    ..
                 } => {
                     let mut batch = vec![(call, info, id)];
                     while let Some(Step::Execute { parallel: true, .. }) = steps.peek() {
@@ -234,12 +239,21 @@ impl AgentLoop {
                         recorded += 1;
                     }
                 }
-                Step::Execute { call, info, id, .. } => {
+                Step::Execute {
+                    call,
+                    info,
+                    id,
+                    note,
+                    ..
+                } => {
                     sink.emit(TurnEvent::ToolCall {
                         name: call.name.clone(),
                         args: penelope_observe::redact_json(&call.arguments),
                     });
-                    let outcome = self.run_effect(spec, execute, &call, &info, &id).await?;
+                    let mut outcome = self.run_effect(spec, execute, &call, &info, &id).await?;
+                    if let Some(note) = note {
+                        outcome.text = format!("{note}\n\n{}", outcome.text);
+                    }
                     shown.note(execute, &outcome.value);
                     self.finish_call(spec, conv, sink, &call, &info, &id, outcome, &mut nudge)
                         .await?;
@@ -372,6 +386,7 @@ impl AgentLoop {
                     info: described.info,
                     parallel: false,
                     id: described.context.call_id,
+                    note: None,
                 }));
             }
         }
@@ -398,7 +413,7 @@ impl AgentLoop {
         }
         // 4 bis. Hooks `pre_tool` du propriétaire (#384) : après la politique, ils ne
         // peuvent que resserrer ; des arguments modifiés repassent la politique.
-        let (call, effective_args, verdict) = match self
+        let (call, effective_args, verdict, note) = match self
             .pre_tool_hooks(
                 spec,
                 policy_workspace.as_deref(),
@@ -409,9 +424,32 @@ impl AgentLoop {
             )
             .await?
         {
-            Gated::Go(call, args, verdict) => (call, args, verdict),
+            Gated::Go {
+                call,
+                args,
+                verdict,
+                rewritten_by,
+            } => {
+                let note = rewritten_by.map(|hook| hooks::rewrite_note(&hook, &args));
+                (call, args, verdict, note)
+            }
             Gated::Refused(call, text) => return Ok(Decided::Step(Step::Record(call, text))),
         };
+        // 4 quater. Reprise d'un appel réécrit (#446) : le transcript l'a rendu tel que le
+        // modèle l'a émis, ses hooks viennent de repasser. L'accord déjà donné vaut si la
+        // réécriture redonne les arguments de sa carte ; sinon une carte nouvelle les montre.
+        if note.is_some()
+            && verdict.decision != PolicyDecision::Deny
+            && self.approved_as(spec, &context, &effective_args).await?
+        {
+            return Ok(Decided::Step(Step::Execute {
+                call,
+                info,
+                parallel: false,
+                id: context.call_id,
+                note,
+            }));
+        }
 
         if let Some(refusal) = nested_ask(&context, verdict.decision, &verdict.reason) {
             return Ok(Decided::Step(Step::Record(call, refusal.text())));
@@ -445,6 +483,7 @@ impl AgentLoop {
                     info,
                     parallel: false,
                     id: context.call_id,
+                    note,
                 }));
             }
             JudgeStep::Card(judged) => judged,
@@ -484,6 +523,8 @@ impl AgentLoop {
                             "why_from": why.as_ref().map(|(_, f)| f),
                             "double": double,
                             "call_id": context.call_id.0,
+                            // Ce que l'accord couvre (#446) : ces arguments, avant masquage.
+                            "args_digest": hooks::args_digest(&effective_args),
                             "turn_id": spec.turn_id,
                             "judged": judged,
                         }),
@@ -517,140 +558,18 @@ impl AgentLoop {
             }
             PolicyDecision::Auto => self.sample_call(spec, &seen, Issue::Auto).await,
         }
-        // Lecture pure autorisée d'office : elle peut partir avec ses voisines.
-        let parallel =
-            info.risk == RiskClass::Read && PARALLEL_SAFE.contains(&info.effective_name.as_str());
+        // Lecture pure autorisée d'office : elle peut partir avec ses voisines, sauf
+        // réécrite par un hook, dont le résultat porte une note.
+        let parallel = note.is_none()
+            && info.risk == RiskClass::Read
+            && PARALLEL_SAFE.contains(&info.effective_name.as_str());
         Ok(Decided::Step(Step::Execute {
             call,
             info,
             parallel,
             id: context.call_id,
+            note,
         }))
-    }
-
-    /// Les hooks `pre_tool` d'un appel (#384) : refus, carte forcée (en tour autonome, la
-    /// mission passe bloquée), ou arguments modifiés qui repassent toute la politique, le
-    /// plus strict l'emportant toujours.
-    async fn pre_tool_hooks(
-        &self,
-        spec: &TurnSpec,
-        workspace: Option<&std::path::Path>,
-        info: &CallInfo,
-        call: ToolCall,
-        effective_args: Value,
-        verdict: policy::Verdict,
-    ) -> anyhow::Result<Gated> {
-        use penelope_app::hook_gate::PreToolGate;
-        use policy::{HookPull, VerdictLayer, stricter, with_hook};
-        let s = &self.services;
-        let gate = s
-            .hooks
-            .pre_tool(
-                &spec.session_id,
-                spec.run_id.as_deref(),
-                &info.effective_name,
-                &effective_args,
-            )
-            .await;
-        match gate {
-            PreToolGate::Continue => {
-                let decision = with_hook(verdict.decision, HookPull::Continue);
-                Ok(Gated::Go(
-                    call,
-                    effective_args,
-                    policy::Verdict {
-                        decision,
-                        ..verdict
-                    },
-                ))
-            }
-            PreToolGate::Deny { hook, reason } => {
-                debug_assert_eq!(
-                    with_hook(verdict.decision, HookPull::Deny),
-                    PolicyDecision::Deny
-                );
-                tracing::info!(session = %spec.session_id, hook = %hook, "appel refusé par un hook");
-                Ok(Gated::Refused(
-                    call,
-                    Refusal::Policy {
-                        reason: format!("refusé par le hook `{hook}` : {reason}"),
-                    }
-                    .text(),
-                ))
-            }
-            PreToolGate::Ask { hook, reason } => {
-                let unattended = s
-                    .modes
-                    .of_turn(&spec.session_id, spec.run_id.as_deref())
-                    .await
-                    == ApprovalMode::Unattended;
-                if unattended {
-                    // Personne pour répondre à la carte : la mission le dit et s'arrête.
-                    let why = format!("le hook `{hook}` demande l'avis du propriétaire : {reason}");
-                    s.hooks
-                        .blocked(&spec.session_id, spec.run_id.as_deref(), &why)
-                        .await;
-                    return Ok(Gated::Refused(
-                        call,
-                        Refusal::Policy {
-                            reason: format!("{why} ; rien ne part sans lui"),
-                        }
-                        .text(),
-                    ));
-                }
-                let decision = with_hook(verdict.decision, HookPull::Ask);
-                Ok(Gated::Go(
-                    call,
-                    effective_args,
-                    policy::Verdict {
-                        decision,
-                        layer: VerdictLayer::Hook { name: hook.clone() },
-                        reason: format!("hook `{hook}` : {reason}"),
-                    },
-                ))
-            }
-            PreToolGate::Args { hook, args } => {
-                // Le même outil seulement : par `tool_call`, l'outil visé ne change pas.
-                let renamed = call.name == "tool_call"
-                    && args
-                        .get("name")
-                        .is_some_and(|n| Some(n) != call.arguments.get("name"));
-                if renamed {
-                    return Ok(Gated::Refused(
-                        call,
-                        Refusal::Policy {
-                            reason: format!(
-                                "le hook `{hook}` change l'outil appelé : erreur de hook, appel refusé"
-                            ),
-                        }
-                        .text(),
-                    ));
-                }
-                let mut modified = call.clone();
-                if call.name == "tool_call" {
-                    modified.arguments["args"] = args.clone();
-                } else {
-                    modified.arguments = args.clone();
-                }
-                let new_args = crate::effective_arguments(&modified.name, &modified.arguments);
-                let again = PolicyStage::evaluate(s, spec, workspace, info, &new_args).await?;
-                tracing::info!(session = %spec.session_id, hook = %hook, before = %effective_args, after = %new_args, "arguments modifiés par un hook");
-                let decision = stricter(verdict.decision, again.decision);
-                Ok(Gated::Go(
-                    modified,
-                    new_args,
-                    policy::Verdict {
-                        decision,
-                        layer: VerdictLayer::Hook { name: hook.clone() },
-                        reason: format!(
-                            "hook `{hook}` : arguments modifiés (avant : {}) ; {}",
-                            penelope_observe::redact_json(&effective_args),
-                            again.reason
-                        ),
-                    },
-                ))
-            }
-        }
     }
 
     /// Identité d'un appel pour la carte d'approbation, le ledger d'effets et le jeu de
@@ -963,14 +882,6 @@ pub fn effect_kind(tool: &str) -> EffectKind {
         "send_message" | "send_file" => EffectKind::Telegram,
         _ => EffectKind::Tool,
     }
-}
-
-/// L'issue des hooks `pre_tool` d'un appel (#384).
-enum Gated {
-    /// L'appel continue, peut-être modifié, avec sa décision resserrée.
-    Go(ToolCall, Value, policy::Verdict),
-    /// L'appel s'arrête là ; le texte va au modèle.
-    Refused(ToolCall, String),
 }
 
 /// Vrai si les arguments portent une référence `{"$file_base64": …}` (#310).
