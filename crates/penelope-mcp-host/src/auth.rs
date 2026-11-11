@@ -517,6 +517,8 @@ pub async fn complete(s: &Services, callback: &str) -> Result<String, String> {
             json!({"server": server, "issuer": grant.issuer, "scope": grant.tokens.scope}),
         ))
         .await;
+    // L'alerte « hors d'usage » ne survit pas à l'autorisation (#466).
+    penelope_app::mcp_watch::forget(s, &server).await;
     Ok(server)
 }
 

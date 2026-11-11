@@ -557,42 +557,11 @@ pub async fn maintenance_pass(d: &Daemon) -> anyhow::Result<()> {
         }
     }
 
-    // Serveurs MCP qui attendent une autorisation : le propriétaire reçoit le lien, une
-    // fois par jour au plus (§8.5). Le lien expire : pendant les heures calmes il n'est
-    // pas produit, il part frais au premier passage après la plage (#296).
-    if let Some(sup) = d.slots.mcp_supervisor()
-        && !penelope_app::quiet::is_quiet(s)
-    {
-        for st in sup.statuses().await {
-            if st.state != penelope_mcp::ServerState::AuthRequired {
-                continue;
-            }
-            let key = format!("mcp.oauth.notified.{}", st.name);
-            let now = s.clock.now_ms();
-            let recent = s
-                .kv_get(&key)
-                .await?
-                .and_then(|v| v.parse::<i64>().ok())
-                .is_some_and(|t| now - t < 24 * 3_600_000);
-            if recent {
-                continue;
-            }
-            s.kv_set(&key, &now.to_string()).await?;
-            let Some(cfg) = sup.config_of(&st.name).await else {
-                continue;
-            };
-            match penelope_mcp_host::auth::start(&d.services, &cfg, None).await {
-                Ok(start) => {
-                    if let Some(m) = d.slots.messenger() {
-                        let origin = penelope_app::helpers::owner_origin_of(&d.services);
-                        let _ = m
-                            .send_text(&origin, &penelope_mcp_host::auth::prompt_text(&start))
-                            .await;
-                    }
-                }
-                Err(e) => tracing::warn!(server = %st.name, error = %e, "autorisation MCP"),
-            }
-        }
+    // Serveurs MCP hors d'usage (autorisation requise, panne durable) : dits une fois,
+    // puis rappelés par le digest (#466). Pas avant le premier chargement de `mcp.d`.
+    if let Some(sup) = d.slots.mcp_supervisor().filter(|sup| sup.loaded()) {
+        let m = d.slots.messenger();
+        penelope_app::mcp_watch::tick(s, &sup.statuses().await, m.as_deref()).await;
     }
 
     // Workspaces éphémères des runs terminés depuis longtemps (§12.7). Un workspace

@@ -27,6 +27,11 @@ pub trait ProviderSource: Send + Sync {
 pub trait McpAdmin: McpGateway {
     /// Relit les déclarations si le disque ou la politique des plugins a changé (#393).
     async fn refresh(&self) {}
+    /// `mcp.d` a été lu au moins une fois : avant, [`McpAdmin::statuses`] est vide sans
+    /// qu'aucun serveur n'ait été retiré (#466).
+    fn loaded(&self) -> bool {
+        true
+    }
     async fn statuses(&self) -> Vec<ServerStatus>;
     /// Déclarations invalides lors du dernier chargement : (fichier, erreur).
     fn invalid(&self) -> Vec<(String, String)>;

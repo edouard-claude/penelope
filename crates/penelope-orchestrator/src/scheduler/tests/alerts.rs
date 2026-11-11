@@ -147,3 +147,37 @@ async fn a_tick_rearms_a_schedule_without_next_run_and_alerts_once_when_it_canno
     let rearmed = events.iter().filter(|e| e.kind == "schedule.rearmed");
     assert_eq!(rearmed.count(), 1);
 }
+
+/// #466 : un serveur MCP hors d'usage tient sa ligne au digest du matin tant que ça dure,
+/// et la perd quand il revient.
+#[tokio::test]
+async fn the_morning_digest_reminds_of_mcp_servers_out_of_use() {
+    let (d, clock, _rec) = harness().await;
+    let s = &d.services;
+    let status = |state: &str| -> penelope_mcp::ServerStatus {
+        serde_json::from_value(json!({
+            "name": "agenda", "state": state, "transport": "stdio", "protocol": null,
+            "tool_count": 12, "failures": 1, "last_error": "jeton révoqué", "last_ok": null,
+            "p50_ms": 0.0, "p95_ms": 0.0, "calls": 0, "errors": 0, "running": false,
+            "lazy": true
+        }))
+        .unwrap()
+    };
+    penelope_app::mcp_watch::tick(s, &[status("auth_required")], None).await;
+    clock.advance_days(3);
+    let digest = penelope_dream::digest_text(&d.dream(), digest_inputs(s).await, None)
+        .await
+        .unwrap();
+    assert!(
+        digest.contains(
+            "Serveurs MCP : ❌ `agenda` (autorisation requise depuis 3 j, `/mcp auth agenda`)"
+        ),
+        "{digest}"
+    );
+
+    penelope_app::mcp_watch::tick(s, &[status("ready")], None).await;
+    let digest = penelope_dream::digest_text(&d.dream(), digest_inputs(s).await, None)
+        .await
+        .unwrap();
+    assert!(!digest.contains("Serveurs MCP"), "{digest}");
+}

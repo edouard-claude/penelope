@@ -82,10 +82,12 @@ pub async fn mcp_checks(s: &Services, sup: &dyn McpAdmin) -> Vec<DoctorCheck> {
                         .take(300)
                         .collect::<String>()
                 ),
-                Some(format!(
-                    "penelope mcp logs {0} ; penelope mcp restart {0}",
-                    st.name
-                )),
+                // Relancer un serveur sans jeton ne lui en rend pas un (#466).
+                Some(if st.state == AuthRequired {
+                    format!("penelope mcp auth {}", st.name)
+                } else {
+                    format!("penelope mcp logs {0} ; penelope mcp restart {0}", st.name)
+                }),
             ),
         });
         // #122 : un serveur qui joint le trousseau se voit, et la raison avec.

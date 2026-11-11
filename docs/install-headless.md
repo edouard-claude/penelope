@@ -2123,8 +2123,9 @@ essaie une connexion à blanc, jusqu'à l'appel d'un outil en lecture sans argum
 `edit <nom> <champ> <valeur>`, `enable`, `disable` et `rm` modifient `mcp.d` ; `penelope
 doctor` signale les serveurs en panne et les secrets manquants.
 
-Un serveur HTTP protégé par OAuth passe en « autorisation requise » : Pénélope envoie
-le lien sur Telegram (une fois par jour au plus), ou `/mcp auth <nom>` le redemande.
+Un serveur protégé par OAuth passe en « autorisation requise » : Pénélope le dit une
+fois, avec la cause, puis le digest du matin le rappelle tant que ça dure (1.0.120,
+#466) ; `/mcp auth <nom>` donne le lien.
 Après l'autorisation, le navigateur du téléphone tombe sur une page `127.0.0.1` en
 erreur : copier l'adresse complète de la barre et la coller dans la conversation suffit
 (valable 10 minutes, une seule fois). Par un tunnel SSH `-L 8765:127.0.0.1:8765`, le

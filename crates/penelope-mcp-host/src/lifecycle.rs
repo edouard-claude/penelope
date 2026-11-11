@@ -16,6 +16,7 @@ impl McpSupervisor {
             invalid: std::sync::Mutex::new(Vec::new()),
             max_failures,
             notices: std::sync::Mutex::new(Vec::new()),
+            loaded: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -150,6 +151,9 @@ impl McpSupervisor {
                 }
             }
         }
+        // Les serveurs sont en place : une liste vide veut désormais dire « aucun ».
+        self.loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
 
         for slot in &to_stop {
             self.stop_slot(slot).await;

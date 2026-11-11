@@ -523,6 +523,9 @@ impl penelope_app::ports::McpAdmin for McpSupervisor {
         McpSupervisor::refresh(self).await
     }
 
+    fn loaded(&self) -> bool {
+        self.loaded.load(std::sync::atomic::Ordering::Relaxed)
+    }
     async fn statuses(&self) -> Vec<ServerStatus> {
         McpSupervisor::statuses(self).await
     }
