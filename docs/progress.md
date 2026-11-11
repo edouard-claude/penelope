@@ -12,6 +12,64 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.122
+
+**Base : `doctor` n'accuse plus un fichier sain, la cause du « lecteur qui ment » (#468).**
+
+#158 avait appris à `doctor` à ne pas croire un lecteur du pool qui rend « malformed
+inverted index for FTS5 » : une connexion neuve tranche, le lecteur est fermé. La cause
+restait inconnue et le symptôme revenait. L'issue proposait un test de charge pour la
+chercher, et en attendant une relance des requêtes et un recyclage des lecteurs.
+
+La cause tient en vingt lignes, sans charge, à tous les coups :
+
+- FTS5 garde, par connexion, la structure de son index. Une recherche (`MATCH`) la
+  revalide contre le fichier ; le contrôle d'intégrité la prend telle quelle.
+- Une connexion qui a cherché, **ou qui s'est déjà contrôlée**, puis voit une autre
+  connexion écrire dans l'index, même une seule ligne, rend donc au contrôle suivant
+  « fts5: corruption found reading blob … » ou « checksum mismatch » sur un fichier sain.
+  Une recherche sur cette connexion, et le contrôle redit `ok`.
+- Le daemon vit exactement ainsi : quatre lecteurs qui cherchent, un écrivain qui range
+  chaque message dans `messages_fts`. Le contrôle de `doctor` empruntait un lecteur du
+  pool : passé le premier, presque chaque `doctor` accusait.
+- **Les recherches, elles, n'ont jamais menti** : aucune requête n'échoue ni ne rend un
+  résultat faux sur une telle connexion, et les quinze jours de journaux gardés n'ont
+  pas une ligne d'erreur FTS5. Rien n'était abîmé, rien n'était à rejouer.
+
+Ce qui change :
+
+- **Le contrôle d'intégrité lit le fichier par une connexion ouverte pour lui**
+  (`Store::integrity`, `integrity_report`), jamais par un lecteur du pool. Elle n'a rien
+  en cache, et n'occupe ni le pool ni l'écrivain, comme la sauvegarde (#77).
+- **`doctor` n'a plus de verdict « lecteur qui ment »**, ni son remède `penelope restart`
+  qui ne réparait rien. Restent trois verdicts : intègre, index de recherche à
+  reconstruire (`penelope store rebuild`), données atteintes (restauration).
+- **Le pool ne perd plus de lecteur.** Chaque faux verdict en fermait un sans le
+  remplacer : au quatrième, la lecture qui trouvait le pool vide attendait cinq secondes
+  avant d'ouvrir une connexion, et le pool repartait d'une seule. `with_audit` et les
+  compteurs d'âge et de service des lecteurs, qui ne servaient qu'à ce diagnostic, sont
+  retirés.
+
+Tests : `a_reader_that_searched_before_a_write_does_not_accuse_the_file` (les quatre
+lecteurs cherchent, l'écrivain range un message, le contrôle dit `ok` ; un second
+contrôle après une autre écriture aussi ; les recherches rendent le bon compte ; le pool
+garde ses quatre lecteurs), `a_sound_database_is_sound`, `an_index_fault_names_the_table`,
+`a_fault_after_opening_is_seen_and_names_the_table` (un index vraiment abîmé reste vu, et
+le verdict ne s'use pas) ; `searching_then_writing_does_not_turn_the_database_check_red`
+(`doctor` reste vert sur trois passages). Les deux premiers échouent sans le correctif.
+
+Pas fait ici :
+
+- La relance d'une requête après réouverture du lecteur, le compteur dans `doctor` et le
+  journal de l'écriture en cours : sans objet, aucune requête ne voit cette erreur.
+- Le recyclage des lecteurs par âge ou par nombre de requêtes : l'âge n'y était pour
+  rien, une connexion d'une seconde ment autant qu'une de six jours. Pas de coût ajouté
+  au rappel.
+- Le test de charge de dix minutes : la cause est déterministe, le test la rejoue en
+  quelques millisecondes.
+- Le signalement à SQLite : le comportement se reproduit hors de Pénélope (3.54) ; à
+  faire à part.
+
 ### 1.0.121
 
 **Planifications : une exécution qui n'a rien à dire ne dit rien (#467).**

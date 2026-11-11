@@ -167,16 +167,18 @@ pub async fn open_forms_check(s: &Services) -> DoctorCheck {
     )
 }
 
-/// #158 : l'intégrité de la base, **confirmée avant d'accuser**.
+/// L'intégrité de la base : celle du **fichier**, lue par une connexion neuve.
 ///
 /// Le 21/09, trois `doctor` d'affilée ont rendu « malformed inverted index for FTS5 », sur
 /// une table différente à chaque fois, avec pour seule correction proposée
 /// `penelope restore --latest` : onze heures de conversations perdues si le propriétaire
-/// la suivait — et l'option n'existe même pas (`penelope restore <fichier>`). Le fichier
-/// était intègre : sept connexions neuves le relisaient sans rien trouver. Seul un lecteur
-/// du pool, ouvert depuis des heures, mentait.
+/// la suivait, et l'option n'existe même pas (`penelope restore <fichier>`). Le fichier
+/// était intègre (#158). La cause est venue plus tard (#468) : le contrôle tournait sur un
+/// lecteur du pool, et une connexion qui a déjà cherché dans un index FTS5 l'accuse à tort
+/// dès qu'une autre y écrit. `Store::integrity` ouvre donc la sienne.
 ///
-/// D'où trois verdicts au lieu d'un, et jamais de restauration proposée pour un index.
+/// Restent trois verdicts : sain, index dérivé à reconstruire, données atteintes. Jamais
+/// de restauration proposée pour un index.
 pub fn integrity_check_of(s: &Services) -> DoctorCheck {
     const ID: &str = "db";
     const LABEL: &str = "Base SQLite";
@@ -185,30 +187,11 @@ pub fn integrity_check_of(s: &Services) -> DoctorCheck {
         Err(e) => return DoctorCheck::fail(ID, LABEL, e.to_string(), None).critical(),
     };
 
-    if report.sound() && report.pool == "ok" {
+    if report.sound() {
         return DoctorCheck::ok(ID, LABEL, "intègre");
     }
 
-    // Le fichier dément le lecteur : ce n'est pas la base qui est malade, c'est une
-    // connexion. Elle vient d'être fermée ; les suivantes repartiront d'une neuve.
-    if report.reader_lied() {
-        return DoctorCheck::fail(
-            ID,
-            LABEL,
-            format!(
-                "le fichier est intègre — un lecteur du pool rendait un verdict faux \
-                 (connexion ouverte depuis {} s, {} requêtes servies) : « {} ». Cette \
-                 connexion a été fermée et sera remplacée ; un redémarrage les renouvelle \
-                 toutes.",
-                report.reader.age_s,
-                report.reader.served,
-                first_line(&report.pool)
-            ),
-            Some("penelope restart".into()),
-        );
-    }
-
-    // Les deux sont d'accord, mais sur des index dérivés seulement : rien de perdu.
+    // Des index dérivés seulement : rien de perdu.
     if let Some(tables) = report.fts_only() {
         return DoctorCheck::fail(
             ID,
@@ -253,11 +236,6 @@ fn latest_archive(dir: &std::path::Path) -> Option<String> {
         .collect();
     names.sort();
     names.pop()
-}
-
-/// La première ligne d'un verdict, pour un message qui tient sur une ligne.
-fn first_line(verdict: &str) -> &str {
-    verdict.lines().next().unwrap_or(verdict).trim()
 }
 
 /// #148 : le magasin de secrets acceptait les clés d'API et refusait un `Grant` de 4 Ko,
