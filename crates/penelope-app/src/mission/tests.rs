@@ -545,3 +545,161 @@ async fn a_verdict_never_overwrites_a_state_written_during_the_check() {
         assert!(ports.notified.lock().unwrap().is_empty(), "`{check}`");
     }
 }
+
+/// Un tour de la mission en cours d'exécution : en file, pris par un exécuteur.
+async fn turning(s: &Services) {
+    use penelope_kernel::turn::TurnKind;
+    s.turns
+        .enqueue(
+            "s1",
+            TurnKind::Message,
+            serde_json::json!({"text": "au travail"}),
+            Some("mission:s1:0".into()),
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(s.turns.claim("essai").await.unwrap().is_some());
+}
+
+/// #456 : le run d'une mission passe en pause pendant qu'elle travaille. Elle finit son
+/// tour, en autonomie, puis se range avec la consigne du tour suivant au lieu de le
+/// lancer ; à la reprise elle repart du même point, son échéance reculée de l'attente.
+#[tokio::test]
+async fn a_held_mission_ends_its_turn_then_waits_and_resumes_where_it_was() {
+    let (_d, s) = services().await;
+    let before = started(&s, None).await;
+    turning(&s).await;
+    let held = hold(&s, "s1", "r_1", "son run est en pause").await.unwrap();
+    assert_eq!(held, Held::Turning);
+    assert!(is_running(&s, "s1").await, "le tour en cours finit");
+
+    let ports = Ports::default();
+    after_turn(&s, &ports, "s1", &exhausted()).await;
+    assert!(ports.queued.lock().unwrap().is_empty(), "un tour est parti");
+    let notified = ports.notified.lock().unwrap().clone();
+    assert_eq!(notified.len(), 1);
+    assert!(
+        notified[0].contains("en attente (son run est en pause)"),
+        "{notified:?}"
+    );
+    let mut parked = load(&s, "s1").await.unwrap();
+    assert!(parked.parked() && parked.live());
+    assert_eq!((parked.state, parked.turns), (State::Waiting, 1));
+    assert!(
+        !is_running(&s, "s1").await,
+        "plus d'autonomie une fois rangée"
+    );
+    assert!(
+        parked
+            .summary(0.0, s.clock.now_ms())
+            .contains("en attente de son run")
+    );
+    // Rangée, elle n'est pas finie : la session ne prend pas une autre mission.
+    let again = Request {
+        goal: "autre chose".into(),
+        ..Default::default()
+    };
+    assert!(start(&s, "s1", again, &Origin::Cli).await.is_err());
+    assert_eq!(hold(&s, "s1", "r_1", "encore").await.unwrap(), Held::Parked);
+
+    // Une minute d'attente : l'échéance recule d'autant.
+    parked.hold.as_mut().unwrap().at_ms -= 60_000;
+    save(&s, &parked).await.unwrap();
+    let next = release(&s, "s1").await.unwrap().expect("une relance");
+    assert!(
+        next.text.contains("ajouter la commande rapport"),
+        "{}",
+        next.text
+    );
+    assert!(
+        next.dedup.starts_with("mission:s1:1:reprise:"),
+        "{}",
+        next.dedup
+    );
+    let resumed = load(&s, "s1").await.unwrap();
+    assert_eq!((resumed.state, resumed.turns), (State::Running, 1));
+    assert!(resumed.hold.is_none());
+    assert!(resumed.deadline_ms >= before.deadline_ms + 60_000);
+    assert!(
+        release(&s, "s1").await.unwrap().is_none(),
+        "une seule relance"
+    );
+}
+
+/// Entre deux tours, rien n'est à finir : la relance en file est annulée et la mission
+/// rangée tout de suite. La reprise repart de l'objectif.
+#[tokio::test]
+async fn a_mission_between_two_turns_waits_at_once() {
+    use penelope_kernel::turn::TurnKind;
+    let (_d, s) = services().await;
+    started(&s, None).await;
+    s.turns
+        .enqueue(
+            "s1",
+            TurnKind::Message,
+            serde_json::json!({"text": "au travail"}),
+            Some("mission:s1:0".into()),
+            0,
+        )
+        .await
+        .unwrap();
+    let held = hold(&s, "s1", "r_1", "son run a atteint une borne")
+        .await
+        .unwrap();
+    assert_eq!(held, Held::Parked);
+    assert_eq!(s.turns.queued_for("s1").await.unwrap(), 0);
+    assert!(load(&s, "s1").await.unwrap().parked());
+    let next = release(&s, "s1").await.unwrap().expect("une relance");
+    assert!(
+        next.text.contains("reprise après l'attente de son run"),
+        "{}",
+        next.text
+    );
+    assert!(
+        next.text.contains("ajouter la commande rapport"),
+        "{}",
+        next.text
+    );
+}
+
+/// Une mission qui finit pendant son dernier tour a fini : son état final gagne sur la
+/// demande d'attente, et aucune reprise ne la relance.
+#[tokio::test]
+async fn a_mission_that_ends_during_its_held_turn_is_finished_not_parked() {
+    let (_d, s) = services().await;
+    started(&s, None).await;
+    turning(&s).await;
+    assert_eq!(hold(&s, "s1", "r_1", "pause").await.unwrap(), Held::Turning);
+    let ports = Ports::default();
+    after_turn(&s, &ports, "s1", &answered("Fini. MISSION TERMINÉE")).await;
+    let done = load(&s, "s1").await.unwrap();
+    assert_eq!(done.state, State::Done);
+    assert!(done.hold.is_none() && !done.live());
+    assert_eq!(hold(&s, "s1", "r_1", "pause").await.unwrap(), Held::Settled);
+    assert!(release(&s, "s1").await.unwrap().is_none());
+    assert_eq!(load(&s, "s1").await.unwrap().state, State::Done);
+}
+
+/// Une mission rangée s'arrête comme une mission en cours ; et l'attente qu'une mission
+/// rend d'elle-même au propriétaire n'est ni rangée ni relancée par un run.
+#[tokio::test]
+async fn a_parked_mission_stops_and_the_owners_wait_is_left_alone() {
+    let (_d, s) = services().await;
+    started(&s, None).await;
+    assert_eq!(hold(&s, "s1", "r_1", "pause").await.unwrap(), Held::Parked);
+    let stopped = stop(&s, "s1").await.unwrap();
+    assert_eq!(stopped.state, State::Stopped);
+    assert!(stopped.hold.is_none());
+    assert!(release(&s, "s1").await.unwrap().is_none());
+
+    let (_d, s) = services().await;
+    let mut m = started(&s, None).await;
+    m.state = State::Waiting;
+    save(&s, &m).await.unwrap();
+    assert_eq!(hold(&s, "s1", "r_1", "pause").await.unwrap(), Held::Settled);
+    assert!(release(&s, "s1").await.unwrap().is_none());
+    let waiting = load(&s, "s1").await.unwrap();
+    assert_eq!(waiting.state, State::Waiting);
+    assert!(!waiting.parked() && !waiting.live());
+}

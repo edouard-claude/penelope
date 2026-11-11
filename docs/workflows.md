@@ -176,6 +176,23 @@ impossible, toujours bloqué : … » avec la commande qui la relève, sans chan
 il n'annonce plus `running` pour se rebloquer la seconde d'après (#337). Relever le
 plafond de la session (`session budget`) ne relève pas celui d'un run.
 
+**La mission d'une étape `mission` suit son run (#456).** Ses tours tournent dans sa
+propre session, mais c'est le run qui les paie : leur usage entre dans sa dépense, en
+dollars comme en tokens, et la mission garde en plus son budget à elle
+(`budget.maxUsd` de l'étape, 20 $ par défaut). La borne la plus basse des deux arrête.
+
+- Run en **pause**, ou **bloqué** par une borne : la mission finit son tour en cours, puis
+  attend (`/mission` dit « en attente de son run ») ; aucun tour ne part, rien n'est
+  dépensé. Elle n'est pas arrêtée : `resume` la relance dans la même session, au même
+  point, son échéance reculée du temps d'attente. La pause d'une liste (`foreach`) vaut
+  pour les missions de ses sous-runs.
+- Un run qui atteint une borne pendant un tour de sa mission attend la fin de ce tour
+  avant de se bloquer ; le motif nomme alors la mission. Si elle a fini pendant ce tour,
+  l'étape rend son résultat au lieu de laisser un run bloqué sur une tâche terminée.
+- Relever le budget du run ne relève pas celui de la mission, et inversement.
+- La dépense d'un run parent ne compte toujours pas celle de ses sous-runs : chaque
+  sous-run a son budget (`itemBudget`).
+
 ### Plafond d'appels d'une étape
 
 Un tour d'étape `agent` ou `sub_agent` a droit à `maxCalls` appels au modèle
@@ -235,7 +252,7 @@ par identifiant.
 | `wait` | `on` | Attend un événement, un cron, un délai ou une tâche MCP |
 | `verify` | `verifier` ou `checks`, `criteriaKey` | Vérifications mécaniques puis jugement du modèle ; `project_tests` relit la commande validée dans `session_metadata.verification`, sinon celle de `project` |
 | `delivery` | `delivery` (`pull_request`, `ci`, `e2e`, `prod_report`, `prod_pull_request`, `sync_with_base`) | Livraison en dev : PR vers la branche de développement, verdict de la CI, vérification externe de l'environnement de dev (voir « Livraison en dev ») ; bilan vérifié et PR dev → prod après approbation humaine (voir « Gate de production ») ; `sync_with_base` récupère `branches.dev` et la fusionne dans la branche du run : `passed` si la fusion est propre, `failed` avec `conflicts` (les fichiers) sinon, la fusion laissée en cours pour l'étape qui résout et commite |
-| `mission` | `prompt` (l'objectif, obligatoire), `cwd` (le dépôt, dans un workspace autorisé), `command` (la commande qui prouve la fin), `budget.maxUsd` | Confie une tâche de code à une mission (décision 0025) dans une session neuve, sur le canal du run, et attend sa fin : `success` si elle est terminée, `failure` sinon, avec son état et son résumé. Annuler le run arrête sa mission |
+| `mission` | `prompt` (l'objectif, obligatoire), `cwd` (le dépôt, dans un workspace autorisé), `command` (la commande qui prouve la fin), `budget.maxUsd` | Confie une tâche de code à une mission (décision 0025) dans une session neuve, sur le canal du run, et attend sa fin : `success` si elle est terminée, `failure` sinon, avec son état et son résumé. Annuler le run, ou passer l'étape, arrête sa mission ; le mettre en pause ou le voir bloqué par une borne la met en attente, et sa dépense compte dans le budget du run (voir « Budget ») |
 
 `context: fresh` donne à chaque visite de l'étape une session neuve, fille de celle du
 run : l'agent ne voit ni la conversation du propriétaire ni les échanges des autres

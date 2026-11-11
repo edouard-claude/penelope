@@ -140,6 +140,162 @@ async fn cancelling_the_backlog_stops_the_mission_of_its_story() {
     assert_eq!(s.turns.queued_for(&first[0].0).await.unwrap(), 0);
 }
 
+/// Un run d'une seule étape `mission`, budget du run à 1 $, celui de la mission à 10 $.
+async fn start_one(e: &Env) -> Run {
+    let repo = depot(e);
+    let mut raw = wf(
+        "une-mission",
+        "m",
+        json!([{
+            "id": "m", "type": "mission", "prompt": "écrire le parseur",
+            "cwd": repo.to_string_lossy(), "budget": {"maxUsd": 10.0},
+            "transitions": [
+                {"goto": "$done", "condition": {"type": "step_result", "result": "success"}},
+                {"goto": "$blocked"}]
+        }]),
+    );
+    raw["settings"]["budget"] = json!({"maxUsd": 1.0, "maxTokens": 0, "maxWallMs": 0});
+    install(&e.d, raw).await;
+    start_run(&e.d, "une-mission", json!({}), &owner(), None, 0)
+        .await
+        .unwrap()
+}
+
+/// Deux dollars dépensés par les tours de la mission : dans sa session, sans `run_id`.
+async fn spend(s: &Services, session: &str) {
+    s.budget
+        .record(penelope_kernel::budget::UsageRecord {
+            session_id: Some(session.to_string()),
+            model: "m".into(),
+            provider: "p".into(),
+            prompt: 1_000,
+            completion: 100,
+            cost_usd: 2.0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+}
+
+async fn state_of(s: &Services, run: &Run) -> RunState {
+    s.runs.get(&run.id).await.unwrap().unwrap().state
+}
+
+/// #456 : la liste en pause, la mission de sa story codait et dépensait encore. Elle
+/// attend avec le run, sans être arrêtée, et la reprise la relance dans la même session.
+#[tokio::test]
+async fn pausing_the_list_parks_its_mission_and_resuming_relaunches_it() {
+    use penelope_workflow::Control;
+    let e = env().await;
+    let s = &e.d.services;
+    let run = start_list(&e).await;
+    pump(&e.d).await;
+    let session = missions(s).await[0].0.clone();
+    control(&e.d, &run.id, &Control::Pause).await.unwrap();
+    // Aucun tour en cours : la relance en file est annulée, la mission rangée.
+    assert!(mission::load(s, &session).await.unwrap().parked());
+    assert_eq!(s.turns.queued_for(&session).await.unwrap(), 0);
+    // La story, elle, est toujours pilotée : elle ne relance rien tant que la liste attend.
+    pump(&e.d).await;
+    assert!(mission::load(s, &session).await.unwrap().parked());
+    assert_eq!(s.turns.queued_for(&session).await.unwrap(), 0);
+
+    control(&e.d, &run.id, &Control::Resume).await.unwrap();
+    pump(&e.d).await;
+    let resumed = mission::load(s, &session).await.unwrap();
+    assert_eq!(resumed.state, State::Running);
+    assert!(resumed.hold.is_none());
+    assert_eq!(s.turns.queued_for(&session).await.unwrap(), 1);
+    assert_eq!(missions(s).await.len(), 1, "la même mission, pas une autre");
+
+    finish(s, &session, State::Done).await;
+    pump(&e.d).await;
+    assert_eq!(missions(s).await.len(), 2, "la liste continue");
+}
+
+/// #456 : les tours de la mission tournent dans sa session et le run ne les comptait pas.
+/// Ils entrent dans sa dépense ; au-delà de son budget il se bloque, sa mission attend et
+/// le motif la nomme. Le budget relevé, la reprise la relance.
+#[tokio::test]
+async fn a_run_pays_for_its_mission_and_blocks_with_it() {
+    use penelope_workflow::Control;
+    let e = env().await;
+    let s = &e.d.services;
+    let run = start_one(&e).await;
+    pump(&e.d).await;
+    let session = missions(s).await[0].0.clone();
+    assert_eq!(state_of(s, &run).await, RunState::Running);
+    spend(s, &session).await;
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Blocked);
+    let blocked = s.runs.get(&run.id).await.unwrap().unwrap();
+    assert!(
+        (blocked.spent_usd - 2.0).abs() < 1e-9,
+        "{}",
+        blocked.spent_usd
+    );
+    let why = blocked.error.clone().unwrap_or_default();
+    assert!(
+        why.contains("budget de 1.00 $") && why.contains(&session),
+        "{why}"
+    );
+    let parked = mission::load(s, &session).await.unwrap();
+    assert!(parked.parked(), "bloquée avec son run, pas arrêtée");
+    assert_eq!(s.turns.queued_for(&session).await.unwrap(), 0);
+
+    assert!(control(&e.d, &run.id, &Control::Resume).await.is_err());
+    raise_budget(&e.d, &run.id, &json!({"usd": 5.0}))
+        .await
+        .unwrap();
+    control(&e.d, &run.id, &Control::Resume).await.unwrap();
+    pump(&e.d).await;
+    assert_eq!(state_of(s, &run).await, RunState::Running);
+    assert_eq!(
+        mission::load(s, &session).await.unwrap().state,
+        State::Running
+    );
+    assert_eq!(s.turns.queued_for(&session).await.unwrap(), 1);
+}
+
+/// Le tour en cours finit avant le blocage : le run attend la mission, et si elle a fini
+/// pendant ce tour, son étape rend le résultat au lieu de laisser un run bloqué sur une
+/// tâche terminée.
+#[tokio::test]
+async fn a_run_over_budget_lets_the_turn_end_and_concludes_a_finished_mission() {
+    let e = env().await;
+    let s = &e.d.services;
+    let run = start_one(&e).await;
+    pump(&e.d).await;
+    let session = missions(s).await[0].0.clone();
+    assert!(s.turns.claim("essai").await.unwrap().is_some());
+    spend(s, &session).await;
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Running);
+    let asked = mission::load(s, &session).await.unwrap();
+    assert_eq!(asked.state, State::Running, "son tour finit");
+    assert!(asked.hold.is_some(), "puis elle attendra");
+
+    finish(s, &session, State::Done).await;
+    assert_eq!(drive(&e.d, &run.id).await.unwrap(), RunState::Done);
+}
+
+/// Annuler un run en pause arrête la mission rangée ; passer l'étape `mission` aussi.
+#[tokio::test]
+async fn cancelling_or_skipping_stops_a_parked_mission() {
+    use penelope_workflow::Control;
+    for last in [Control::Cancel, Control::SkipStep] {
+        let e = env().await;
+        let s = &e.d.services;
+        let run = start_one(&e).await;
+        pump(&e.d).await;
+        let session = missions(s).await[0].0.clone();
+        control(&e.d, &run.id, &Control::Pause).await.unwrap();
+        assert!(mission::load(s, &session).await.unwrap().parked());
+        control(&e.d, &run.id, &last).await.unwrap();
+        let stopped = mission::load(s, &session).await.unwrap();
+        assert_eq!(stopped.state, State::Stopped, "{last:?}");
+        assert!(stopped.hold.is_none(), "{last:?}");
+    }
+}
+
 #[tokio::test]
 async fn an_instance_tache_still_loads_and_is_reported() {
     let e = env().await;
