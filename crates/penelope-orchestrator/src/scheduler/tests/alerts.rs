@@ -86,3 +86,64 @@ async fn a_failing_schedule_alerts_on_first_failure_new_reason_and_steps_only() 
         "chaque échec reste dans le journal, alerté ou non"
     );
 }
+
+/// #458 : une planification active sans prochain tir ne partait plus jamais, en silence.
+/// Le passage la recalcule ; celle dont le calcul échoue prévient le propriétaire une
+/// fois, et le dit au doctor.
+#[tokio::test]
+async fn a_tick_rearms_a_schedule_without_next_run_and_alerts_once_when_it_cannot() {
+    let (d, _clock, rec) = harness().await;
+    let s = &d.services;
+    let prompt = |label: &str| json!({"type": "prompt", "label": label, "prompt": "Veille"});
+    let lost = s
+        .schedules
+        .create(
+            TriggerKind::Cron,
+            json!({"expr": "0 8 * * *", "tz": "Europe/Paris"}),
+            prompt("Veille du matin"),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let never = s
+        .schedules
+        .create(
+            TriggerKind::Cron,
+            json!({"expr": "0 0 30 2 *"}),
+            prompt("Trente février"),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    s.store
+        .write(|tx| {
+            tx.execute("UPDATE schedules SET next_run = NULL", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let ports = d.scheduler();
+    let before = rec.texts().len();
+    for _ in 0..3 {
+        let report = tick(&d, &ports).await.unwrap();
+        assert!(report.fired.is_empty(), "{report:?}");
+    }
+    let found = s.schedules.get(&lost.id).await.unwrap().unwrap();
+    assert!(found.next_run.is_some(), "{found:?}");
+    let alerts: Vec<String> = rec.texts()[before..].to_vec();
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert!(
+        alerts[0].contains("« Trente février »") && alerts[0].contains("aucun prochain tir"),
+        "{alerts:?}"
+    );
+    let stuck = s.schedules.get(&never.id).await.unwrap().unwrap();
+    assert_eq!(
+        stuck.last_error.as_deref(),
+        Some(penelope_workflow::schedules::NO_NEXT_RUN)
+    );
+    let doctor = penelope_ops::doctor::schedules_check(s).await;
+    assert!(doctor.detail.contains(&never.id), "{doctor:?}");
+    let events = s.events.range(0, 1000).await.unwrap();
+    let rearmed = events.iter().filter(|e| e.kind == "schedule.rearmed");
+    assert_eq!(rearmed.count(), 1);
+}

@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.112
+
+**Planifications : un cron traverse les changements d'heure, et une planification sans
+prochain tir est recalculée (#458).**
+
+Le calcul du prochain tir avançait en heure locale. Sur l'heure ambiguë du dernier
+dimanche d'octobre (02:00 à 03:00, qui revient deux fois), construire « 02:00 » ne rend
+rien et le calcul sortait sans résultat : `0 8 * * *` à Paris perdait son prochain tir
+dès le samedi, la planification restait « active » et ne repartait jamais, sans erreur.
+La consolidation nocturne, le digest et la sauvegarde (`memory.dreaming_cron`,
+`memory.digest_cron`, `backup.cron`) s'arrêtaient de même. Latent sur une instance sans
+heure d'été ; au printemps, une heure absente (02:30) sautait son jour en silence.
+
+- `Cron::next_after` avance en UTC et convertit pour comparer : un instant UTC a
+  toujours une heure locale. Il saute au lendemain ou à l'heure suivante quand la date
+  ou l'heure ne conviennent pas, sans jamais traverser un changement de décalage
+  autrement que minute par minute.
+- Règle écrite et testée : une heure locale **ambiguë** tire une fois, la première ; une
+  heure locale **absente** tire une fois, à l'instant du saut ; un cron à toutes les
+  heures suit le temps réel (il tire dans les deux passages de l'heure répétée).
+- `ScheduleStore::rearm`, appelé à chaque passage de l'ordonnanceur (le premier après le
+  démarrage compris) : une planification à horloge active dont `next_run` est vide est
+  recalculée (événement `schedule.rearmed`). Si le calcul échoue encore, `last_error` le
+  dit, le propriétaire est prévenu une fois et `doctor` la montre. Une planification en
+  pause ou poussée par un événement n'est pas touchée.
+- **À savoir en installant** : une planification active qui ne peut jamais tirer (le
+  30 février) envoie une alerte au premier passage. C'est le signal qui manquait, pas une
+  régression.
+- Tests sur les dates réelles de 2026 (25 octobre, 29 mars à Paris ; Lord Howe et son
+  saut d'une demi-heure ; Kolkata et son décalage de 5 h 30) : un tir par jour, jamais
+  zéro, jamais deux, y compris pour un recalcul fait pendant l'heure ambiguë.
+
 ### 1.0.111
 
 **MCP : un serveur paresseux s'arrête enfin après `idle_timeout`, et n'est plus sondé
