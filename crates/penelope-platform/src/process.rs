@@ -4,6 +4,9 @@
 //! PID pour la récupération des orphelins au démarrage, résolution des exécutables via
 //! PATH et PATHEXT.
 //!
+//! Un fichier PID vit le temps de son processus : il est retiré dès que celui-ci a fini,
+//! et il porte sa date de lancement, sans laquelle le ramassage ne tue personne (#454).
+//!
 //! Aucune dépendance `libc` : le groupe de processus est posé par
 //! `std::os::unix::process::CommandExt::process_group`, qui est `safe`, et l'arrêt de
 //! l'arbre passe par `/bin/kill` (exécutable, jamais un shell).
@@ -13,7 +16,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+mod identity;
 mod tools;
+pub use identity::{is_same, started_at};
 pub use tools::{
     binary_version, create_tar_gz, extract_tar_gz, extract_tar_gz_bytes, extract_tar_gz_from,
     list_tar_gz_bytes, list_tar_gz_from, tar_gz_entries, tar_gz_entries_from,
@@ -360,6 +365,19 @@ pub struct Child {
     pid_file: Option<PathBuf>,
 }
 
+/// Le fichier PID part avec le processus, quelle que soit la voie : fin normale, arrêt
+/// demandé, groupe tué après un délai (#454). Seul un enfant abandonné vivant garde le
+/// sien : c'est lui que le démarrage suivant doit retrouver.
+impl Drop for Child {
+    fn drop(&mut self) {
+        if let Some(p) = self.pid_file.take()
+            && !matches!(self.inner.try_wait(), Ok(None))
+        {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 impl Child {
     pub fn stdin(&mut self) -> Option<tokio::process::ChildStdin> {
         self.inner.stdin.take()
@@ -385,7 +403,8 @@ pub trait ProcessHost: Send + Sync {
     /// après `grace`.
     async fn terminate(&self, child: &mut Child, grace: std::time::Duration) -> Result<()>;
 
-    /// Récupère les orphelins laissés par un crash du daemon.
+    /// Récupère les orphelins laissés par un crash du daemon : tue le groupe de chaque
+    /// processus noté qui tourne encore, et lui seul (même pid, même date de lancement).
     fn reap_orphans(&self, pid_dir: &Path) -> Result<Vec<u32>>;
 }
 
@@ -470,8 +489,8 @@ impl ProcessHost for UnixProcessHost {
             Some(tag) => {
                 std::fs::create_dir_all(&self.pid_dir)?;
                 let p = self.pid_dir.join(format!("{tag}.pid"));
-                std::fs::write(&p, pid.to_string())?;
-                Some(p)
+                let at = tokio::task::spawn_blocking(move || started_at(pid)).await;
+                identity::note(&p, pid, at.ok().flatten())?.then_some(p)
             }
             None => None,
         };
@@ -512,7 +531,7 @@ impl ProcessHost for UnixProcessHost {
             }
         }
         let _ = child.inner.wait().await;
-        if let Some(p) = &child.pid_file {
+        if let Some(p) = child.pid_file.take() {
             let _ = std::fs::remove_file(p);
         }
         Ok(())
@@ -530,11 +549,12 @@ impl ProcessHost for UnixProcessHost {
             let Ok(raw) = std::fs::read_to_string(e.path()) else {
                 continue;
             };
-            let Ok(pid) = raw.trim().parse::<u32>() else {
-                let _ = std::fs::remove_file(e.path());
-                continue;
-            };
-            if process_exists(pid) {
+            // Un pid vivant ne suffit pas : le système l'a peut-être redonné. Seul le
+            // processus lancé à la date notée est le nôtre ; un fichier à l'ancien format
+            // (le pid seul), illisible ou repris par un autre est retiré sans rien tuer.
+            if let Some((pid, at)) = identity::noted(&raw)
+                && is_same(pid, at)
+            {
                 let _ = std::process::Command::new("/bin/kill")
                     .args(group_kill_args("KILL", pid))
                     .stdout(Stdio::null())

@@ -645,3 +645,39 @@ async fn what_is_typed_into_the_keyboard_reaches_the_command() {
     assert_eq!(out.stdout.trim(), "bonjour", "{out:?}");
     assert!(!fifo.exists(), "le tube est retiré avec la commande");
 }
+
+/// #454 : chaque commande laissait son fichier pid, 270 en six jours, et le démarrage
+/// suivant aurait tué le groupe de tout pid redonné entre-temps à un autre processus.
+#[tokio::test]
+#[cfg(unix)]
+async fn a_hundred_commands_leave_no_pid_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let pids = dir.path().join("pids");
+    let host = penelope_platform::UnixProcessHost::new(&pids);
+    let left = || std::fs::read_dir(&pids).map(|d| d.count()).unwrap_or(0);
+    for i in 0..100 {
+        let out = exec(&host, &format!("echo {i}"), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(out.stdout.trim(), i.to_string());
+    }
+    assert_eq!(left(), 0, "fin normale");
+
+    // Délai dépassé : le groupe est tué, le fichier part avec lui.
+    let opts = ExecOptions {
+        timeout: std::time::Duration::from_millis(300),
+        ..ExecOptions::default()
+    };
+    let slow = tokio::spawn(async move {
+        let host = host;
+        exec(&host, "sleep 30", opts).await
+    });
+    let mut seen = 0;
+    while !slow.is_finished() {
+        seen = seen.max(left());
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(matches!(slow.await.unwrap(), Err(ToolError::Timeout(_))));
+    assert_eq!(seen, 1, "la commande en cours est déclarée au ramassage");
+    assert_eq!(left(), 0, "délai dépassé");
+}

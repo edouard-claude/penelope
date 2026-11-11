@@ -550,8 +550,12 @@ Un jeton rendu sous `authed_user` (réponse de `oauth.v2.access`) est lu là.
   cassé ne mange pas la machine.
 - Éviction LRU au-delà de `mcp.max_processes` (24 par défaut).
 - Quantiles de latence et taux d'erreur par serveur, visibles dans `penelope doctor`.
-- Au démarrage, les processus orphelins d'une vie antérieure sont tués à partir des PID
-  laissés dans `state/mcp-pids`.
+- Au démarrage, les processus orphelins d'une vie antérieure sont tués à partir des
+  fichiers laissés dans `state/mcp-pids`. Un fichier porte le pid et sa date de
+  lancement, et part avec son processus : seul un processus resté vivant après un crash
+  du daemon en laisse un. Le ramassage ne tue que si le pid est encore le processus lancé
+  à cette date ; un numéro que le système a redonné à un autre n'est pas touché (1.0.108,
+  #454).
 - Au réveil de la machine (1.0.3, #228), avant que les créneaux en retard ne partent, une
   passe de santé relance les serveurs dégradés, en échec ou en attente de reprise, et
   journalise le résultat avec la sonde du canal (`host.health`, champ `mcp_restarted` :

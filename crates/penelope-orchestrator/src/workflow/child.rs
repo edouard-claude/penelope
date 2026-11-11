@@ -141,13 +141,9 @@ async fn launch(
     penelope_app::child::registry::write(
         &state,
         &penelope_app::child::registry::Entry {
-            id: id.into(),
-            pid,
-            session_id: job.session_id.clone(),
             job_id: penelope_executor::jobs::live::current_job(),
-            effect_id: None,
             extra: extra.clone(),
-            started_ms: s.clock.now_ms(),
+            ..penelope_app::child::registry::Entry::of(id, pid, &job.session_id, s.clock.now_ms())
         },
     )
     .map_err(|e| e.to_string())?;
@@ -294,7 +290,9 @@ pub async fn reattach_all(cx: &Context) {
             continue;
         };
         let Some(job_id) = e.job_id.clone() else {
-            if penelope_platform::process::process_exists(e.pid) {
+            // Seul l'enfant de la fiche est arrêté : un pid redonné à un autre processus
+            // depuis (redémarrage de la machine, fiche ancienne) ne l'est pas (#454).
+            if e.is_ours() {
                 penelope_platform::process::terminate_group(e.pid, Duration::from_secs(2)).await;
             }
             penelope_app::child::registry::remove(&state, &e.id);

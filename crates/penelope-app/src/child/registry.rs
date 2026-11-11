@@ -20,6 +20,43 @@ pub struct Entry {
     #[serde(default)]
     pub extra: serde_json::Value,
     pub started_ms: i64,
+    /// Date de lancement du pid, lue au système (#454) : sans elle, rien ne dit que ce
+    /// pid est encore l'enfant. Absente d'une fiche écrite avant la 1.0.108.
+    #[serde(default)]
+    pub pid_started: Option<String>,
+}
+
+impl Entry {
+    /// La fiche d'un enfant qu'on vient de lancer.
+    pub fn of(id: &str, pid: u32, session_id: &str, started_ms: i64) -> Entry {
+        Entry {
+            id: id.into(),
+            pid,
+            session_id: session_id.into(),
+            job_id: None,
+            effect_id: None,
+            extra: serde_json::Value::Null,
+            started_ms,
+            pid_started: penelope_platform::process::started_at(pid),
+        }
+    }
+
+    /// Vrai si ce pid est encore l'enfant de la fiche, et pas un processus à qui le
+    /// système a redonné le numéro. Une fiche sans date de lancement ne le prouve pas :
+    /// elle ne fait tuer personne.
+    pub fn is_ours(&self) -> bool {
+        self.pid_started
+            .as_deref()
+            .is_some_and(|at| penelope_platform::process::is_same(self.pid, at))
+    }
+
+    /// Vrai si l'enfant tourne encore. Une fiche d'avant la 1.0.108 n'a que son pid.
+    pub fn alive(&self) -> bool {
+        match &self.pid_started {
+            Some(_) => self.is_ours(),
+            None => penelope_platform::process::process_exists(self.pid),
+        }
+    }
 }
 
 pub fn dir(state: &Path) -> PathBuf {
@@ -85,7 +122,7 @@ pub fn live_jobs(state: &Path) -> Vec<String> {
     list(state)
         .into_iter()
         .filter(|e| {
-            penelope_platform::process::process_exists(e.pid)
+            e.alive()
                 || socket(state, &e.id).is_some_and(|s| super::socket::read_result(&s).is_some())
         })
         .filter_map(|e| e.job_id)
@@ -100,13 +137,9 @@ mod tests {
     fn an_entry_is_written_listed_and_removed() {
         let state = tempfile::tempdir().unwrap();
         let e = Entry {
-            id: "c1".into(),
-            pid: std::process::id(),
-            session_id: "s".into(),
             job_id: Some("tj_1".into()),
-            effect_id: None,
             extra: serde_json::json!({"kind": "explore"}),
-            started_ms: 1,
+            ..Entry::of("c1", std::process::id(), "s", 1)
         };
         write(state.path(), &e).unwrap();
         assert_eq!(list(state.path()), vec![e.clone()]);
@@ -118,5 +151,33 @@ mod tests {
         remove(state.path(), "c1");
         assert!(list(state.path()).is_empty());
         assert!(socket(state.path(), "../x").is_none());
+    }
+
+    /// #454 : un pid vivant n'est l'enfant de la fiche que s'il a été lancé à la date
+    /// notée. Le système redonne les numéros, et une fiche survit à un redémarrage.
+    #[test]
+    fn a_pid_given_to_another_process_is_not_the_child() {
+        let state = tempfile::tempdir().unwrap();
+        let ours = Entry {
+            job_id: Some("tj_1".into()),
+            ..Entry::of("c1", std::process::id(), "s", 1)
+        };
+        assert!(ours.pid_started.is_some());
+        assert!(ours.is_ours() && ours.alive());
+
+        let reused = Entry {
+            pid_started: Some("Thu Jan 1 00:00:00 1970".into()),
+            ..ours.clone()
+        };
+        assert!(!reused.is_ours() && !reused.alive());
+        write(state.path(), &reused).unwrap();
+        assert!(live_jobs(state.path()).is_empty());
+
+        // Une fiche d'avant la 1.0.108 : lue, vivante par son pid, mais jamais tuée.
+        let old: Entry = serde_json::from_value(serde_json::json!({
+            "id": "c0", "pid": std::process::id(), "session_id": "s", "started_ms": 1
+        }))
+        .unwrap();
+        assert!(old.alive() && !old.is_ours());
     }
 }
