@@ -126,8 +126,18 @@ impl EventAccumulator for StreamAccumulator {
     fn push_payload(&mut self, data: &str) -> Vec<StreamChunk> {
         StreamAccumulator::push_payload(self, data)
     }
-    /// `chat/completions` : on clôt proprement avec ce qui a été reçu.
+    /// `chat/completions` : un `finish_reason` reçu sans `[DONE]` est une fin propre, on
+    /// clôt avec ce qui a été reçu. Sans lui, la connexion est tombée en route : le dire
+    /// permet de rejouer l'appel, au lieu de garder pour réponse un texte tronqué ou un
+    /// vide (#467).
     fn on_eof(&mut self) -> Vec<StreamChunk> {
+        if self.finish.is_none() {
+            return vec![StreamChunk::Error {
+                message: "flux fermé sans marque de fin (ni `finish_reason` ni `[DONE]`)".into(),
+                retryable: true,
+                error_type: None,
+            }];
+        }
         StreamAccumulator::push_payload(self, "[DONE]")
     }
 }

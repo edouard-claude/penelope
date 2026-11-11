@@ -264,7 +264,9 @@ pub(super) fn time() -> Vec<ToolSpec> {
              planification identique déjà active est signalée (`doublons`). Un prompt peut \
              déclarer dans target son `livrable` (`message`, `fichier:<chemin>`, `run`) : sans \
              lui, l'exécution compte comme un échec ; et son `etat` (chemin du fichier « déjà \
-             vu »), remis tel qu'avant si rien n'est livré. Pendant les heures calmes du \
+             vu »), remis tel qu'avant si rien n'est livré. Un prompt qui ne doit écrire \
+             qu'en cas de nouveauté le dit en toutes lettres et ne déclare pas le livrable \
+             `message` : son exécution finit alors sans rien envoyer. Pendant les heures calmes du \
              propriétaire, une planification attend la fin de la plage, sauf `\"urgent\": \
              true` dans spec (un réveil, un train) : la réponse de création le dit \
              (`heures_calmes`) quand le premier passage tombe dedans, propose `urgent` au \

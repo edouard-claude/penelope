@@ -316,6 +316,7 @@ impl Daemon {
         let outcome = AgentLoop::new(crate::agent::judged(&s, self.providers.clone()), provider)
             .with_providers(self.providers.clone())
             .with_inbox(inbox)
+            .may_end_silent(penelope_orchestrator::scheduler::may_end_silent(&s, &session).await)
             .run_conversation_as(&spec, Some(meta), &conv, &exec, sink)
             .await;
         // Estimation locale ou prompt réellement facturé : l'un ou l'autre au-delà du seuil

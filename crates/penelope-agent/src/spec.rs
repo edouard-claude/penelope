@@ -27,6 +27,8 @@ pub struct AgentLoop {
     pub(crate) inbox: Option<Arc<dyn Inbox>>,
     /// Fournisseurs des modèles de repli (#259) ; `None` : le repli passe par `provider`.
     pub(crate) providers: Option<Arc<dyn FallbackProviders>>,
+    /// Le tour peut finir sans réponse (#467) : voir [`AgentLoop::may_end_silent`].
+    pub(crate) silent_end: bool,
 }
 
 /// Appels au modèle par tour : au-delà, le tour s'arrête ; « Continuer » en redonne
@@ -45,6 +47,7 @@ impl AgentLoop {
             max_iterations: TURN_CALLS,
             inbox: None,
             providers: None,
+            silent_end: false,
         }
     }
 
@@ -58,6 +61,17 @@ impl AgentLoop {
     /// Réclame les messages arrivés pendant le tour aux points de contrôle (§3.4).
     pub fn with_inbox(mut self, inbox: Option<Arc<dyn Inbox>>) -> Self {
         self.inbox = inbox;
+        self
+    }
+
+    /// Personne n'attend la réponse de ce tour (l'exécution d'une planification) et rien
+    /// ne l'oblige à écrire : après au moins un outil exécuté, une réponse sans texte ni
+    /// appel d'outil, finie normalement, est sa fin, pas une panne à relancer (#467). Un
+    /// prompt planifié qui dit « n'envoie rien s'il n'y a rien de neuf » était relancé
+    /// avec « réponds maintenant, en texte », et le propriétaire recevait le « rien de
+    /// neuf » qu'il avait demandé de ne pas recevoir.
+    pub fn may_end_silent(mut self, silent: bool) -> Self {
+        self.silent_end = silent;
         self
     }
 

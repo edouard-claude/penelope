@@ -471,6 +471,47 @@ fn the_stream_yields_text_a_tool_call_and_usage() {
     assert!(acc.on_eof().is_empty(), "flux clos proprement");
 }
 
+/// #467 : la forme des réponses vides relevées en production, du raisonnement puis
+/// `response.completed` sans texte ni appel. Le décodeur n'a rien jeté : c'est une fin
+/// `Stop` sans contenu, et les types d'événements reçus restent lisibles, sans leur
+/// contenu, pour le jour où le serveur parlerait dans un événement que l'on ne lit pas.
+#[test]
+fn a_completed_answer_without_text_keeps_the_kinds_of_events_it_received() {
+    let mut acc = ResponsesAccumulator::plain();
+    let out = chunks(
+        &mut acc,
+        &[
+            json!({"type": "response.created", "response": {"id": "resp_1", "model": "m"}}),
+            json!({"type": "response.output_item.added", "item": {"type": "reasoning"}}),
+            json!({"type": "response.output_item.done", "item": {
+                "type": "reasoning", "encrypted_content": "secret chiffré"}}),
+            json!({"type": "response.output_item.done", "item": {
+                "type": "message", "content": [{"type": "output_text", "text": ""}]}}),
+            json!({"type": "response.completed", "response": {
+                "id": "resp_1", "status": "completed",
+                "usage": {"input_tokens": 58_000, "output_tokens": 4}}}),
+        ],
+    );
+    assert!(
+        !out.iter()
+            .any(|c| matches!(c, StreamChunk::Delta { .. } | StreamChunk::ToolCall(_))),
+        "{out:?}"
+    );
+    assert!(matches!(
+        out.last(),
+        Some(StreamChunk::Done {
+            finish: FinishReason::Stop
+        })
+    ));
+    assert_eq!(
+        acc.seen_events(),
+        "response.completed×1 response.created×1 response.output_item.added:reasoning×1 \
+         response.output_item.done:message×1 response.output_item.done:reasoning×1"
+    );
+    assert!(!acc.seen_events().contains("secret"));
+    assert!(acc.on_eof().is_empty());
+}
+
 /// #142 : une fermeture sans `response.completed` est une coupure, pas une fin.
 #[test]
 fn a_stream_cut_before_completion_is_an_error() {

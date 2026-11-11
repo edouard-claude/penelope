@@ -136,6 +136,25 @@ pub(super) async fn missing_deliverable(
     None
 }
 
+/// Un tour de cette session peut finir sans message (#467) : c'est l'exécution d'une
+/// planification, que personne ne regarde, et son livrable déclaré n'est pas un message.
+/// « N'envoie rien s'il n'y a rien de neuf » se dit alors par une réponse vide, que la
+/// boucle ne relance plus. Une conversation, elle, attend toujours sa réponse, relance
+/// d'une tâche de fond comprise ; `"livrable": "message"` garde la relance.
+pub async fn may_end_silent(s: &Services, session: &penelope_kernel::session::Session) -> bool {
+    if session.kind != penelope_kernel::session::SessionKind::Scheduled {
+        return false;
+    }
+    let key = penelope_hitl::policy::schedule_key(session.id.as_str());
+    let Ok(Some(schedule)) = s.kv_get(&key).await else {
+        return true;
+    };
+    !matches!(
+        s.schedules.get(&schedule).await,
+        Ok(Some(sched)) if sched.target["livrable"].as_str().map(str::trim) == Some("message")
+    )
+}
+
 /// Fin du tour d'un prompt planifié, livrable compris (issue #120) : une exécution qui
 /// répond sans livrer ce qu'elle a promis est un échec, prévenu comme ceux de #39, et
 /// l'état qu'elle a consommé est remis pour que la suivante reprenne les mêmes éléments.

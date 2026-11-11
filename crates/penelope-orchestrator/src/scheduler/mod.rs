@@ -384,7 +384,9 @@ pub use fire::{alert, create, label, recovered};
 pub use origin::{destination, due_today, listing, place_name, relocate, retarget};
 use origin::{due_today_dated, target_origin};
 use outcome::{cancelled_triggers, save_state};
-pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};
+pub use outcome::{
+    final_already_sent, may_end_silent, repeats, trigger_outcome, trigger_outcome_of,
+};
 use quiet::Batch;
 use templating::{items_lines, substitute, template_params, tool_payload};
 pub use triggers::mcp_subscribe::{SubscribeState, resource_payload, subscription_state};

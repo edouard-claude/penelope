@@ -276,7 +276,9 @@ async fn run_and_deliver(daemon: &Arc<Daemon>, turn: Turn, heartbeat: Duration) 
     // Un tour de mission arrêté par son plafond ne se livre pas : la mission relance (#364).
     let absorbed =
         penelope_app::mission::absorbs(&daemon.services, &turn.session_id, &outcome).await;
-    if !repeated && !burst_card_sent && !absorbed {
+    // Une exécution planifiée qui n'a rien à dire ne livre rien (#467).
+    let silent = matches!(&outcome, TurnOutcome::Answered { text, .. } if text.trim().is_empty());
+    if !repeated && !burst_card_sent && !absorbed && !silent {
         daemon.deliver(&turn, &origin, &outcome).await;
     }
     daemon
