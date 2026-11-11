@@ -118,6 +118,7 @@ impl ContextEngine {
             validated,
             &crate::anchors::render(&job.anchors),
             &job.verbatim_users,
+            job.task.as_deref(),
         );
         let tokens_self = self.estimator.text_tokens(model_id, &rendered);
 

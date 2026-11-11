@@ -269,6 +269,7 @@ fn summary_schema_and_render() {
         &good,
         "Ancres :\n- chemin : facture.rs\n",
         &["où en est-on ?".into()],
+        None,
     );
     assert!(txt.contains("### Objectif"));
     assert!(txt.contains("### Prochaines étapes"));
@@ -404,6 +405,7 @@ fn sections_only_strips_mechanical_blocks() {
         &json!({"objectif": "migrer la base", "fait": "export"}),
         "Ancres :\n- chemin : db/schema.sql\n",
         &["on migre ce soir".into()],
+        None,
     );
     let body = summary_sections_only(&rendered);
     assert!(body.starts_with("### Objectif"));
@@ -541,4 +543,212 @@ fn level2_second_pass_stubs_old_results() {
         );
     }
     assert_eq!(proj[3].text(), "la suite");
+}
+
+/// Un appel d'outil et son résultat, aux adresses `seq` et `seq + 1`.
+fn tool_pair(seq: i64, tokens: u64) -> Vec<Entry> {
+    let id = format!("c{seq}");
+    vec![
+        Entry::new(
+            seq,
+            ChatMessage::assistant("").with_tool_calls(vec![ToolCall {
+                id: id.clone(),
+                name: "shell_exec".into(),
+                arguments: json!({}),
+            }]),
+            100,
+        ),
+        Entry::new(
+            seq + 1,
+            ChatMessage::tool_result(id, "shell_exec", "sortie"),
+            tokens - 100,
+        ),
+    ]
+}
+
+/// Un message du propriétaire suivi de `pairs` appels d'outils de 1 500 tokens.
+fn tool_turn(from_seq: i64, pairs: i64) -> Vec<Entry> {
+    let mut entries = vec![Entry::new(
+        from_seq,
+        ChatMessage::user("audite le dépôt"),
+        200,
+    )];
+    for i in 0..pairs {
+        entries.extend(tool_pair(from_seq + 1 + i * 2, 1_500));
+    }
+    entries
+}
+
+/// La coupe d'avant #460 : la queue garde deux messages du propriétaire, quoi qu'ils
+/// coûtent.
+fn cut_before_460(entries: &[Entry], p: &CompactionParams) -> (usize, u64) {
+    let (mut tail, mut users, mut boundary) = (0u64, 0usize, entries.len());
+    for g in group(entries).iter().rev() {
+        let tokens: u64 = entries[g.range.clone()].iter().map(|e| e.tokens).sum();
+        if tail + tokens > p.tail_budget() && users >= p.min_tail_user_messages {
+            break;
+        }
+        tail += tokens;
+        users += entries[g.range.clone()]
+            .iter()
+            .filter(|e| e.role() == Role::User)
+            .count();
+        boundary = g.range.start;
+    }
+    (boundary, tail)
+}
+
+/// #460 : un message du propriétaire puis 40 appels d'outils. Il n'y a pas de second
+/// message à garder : la queue revient à son budget, coupée après un résultat complet, et
+/// la tête part au résumé avec la consigne.
+#[test]
+fn a_long_tool_turn_is_cut_at_a_tool_boundary() {
+    let p = params(100_000); // queue : 10 000 tokens
+    let entries = tool_turn(1, 40);
+    assert_eq!(cut_before_460(&entries, &p).0, 0, "avant : rien à résumer");
+
+    let (boundary, tail) = natural_split(&entries, &p);
+    assert_eq!(tail, 9_000, "six appels entiers sous le budget");
+    assert_eq!(boundary, entries.len() - 12);
+    assert!(
+        !entries[boundary].message.tool_calls.is_empty(),
+        "la queue s'ouvre sur un appel, pas sur un résultat"
+    );
+    let tail_messages: Vec<ChatMessage> = entries[boundary..]
+        .iter()
+        .map(|e| e.message.clone())
+        .collect();
+    assert!(pairs_are_valid(&tail_messages));
+    let head: Vec<ChatMessage> = entries[..boundary]
+        .iter()
+        .map(|e| e.message.clone())
+        .collect();
+    assert!(pairs_are_valid(&head));
+    assert_eq!(split_for_summary(&entries, &p), (boundary, tail));
+}
+
+/// #460 : une conversation ordinaire garde la coupe qu'elle avait, tours d'outils
+/// compris, tant que cette coupe laisse de quoi faire un résumé.
+#[test]
+fn an_ordinary_conversation_keeps_its_cut() {
+    let p = params(100_000);
+    let chat: Vec<Entry> = (0..40)
+        .map(|i| match i % 2 {
+            0 => Entry::new(i, ChatMessage::user(format!("q{i}")), 3_000),
+            _ => Entry::new(i, ChatMessage::assistant("r"), 3_000),
+        })
+        .collect();
+    let short: Vec<Entry> = (1..=6)
+        .map(|i| Entry::new(i, ChatMessage::user(format!("m{i}")), 500))
+        .collect();
+    // Trois tours avec des outils : les deux derniers pèsent 30 000 tokens, trois fois le
+    // budget, et restent entiers dans la queue.
+    let mut tools = Vec::new();
+    for turn in 0..3 {
+        tools.extend(tool_turn(turn * 100 + 1, 10));
+        tools.push(Entry::new(
+            turn * 100 + 50,
+            ChatMessage::assistant("fait"),
+            100,
+        ));
+    }
+    for (name, entries) in [("échanges", chat), ("courte", short), ("outils", tools)] {
+        assert_eq!(
+            natural_split(&entries, &p),
+            cut_before_460(&entries, &p),
+            "{name}"
+        );
+    }
+}
+
+/// #460 : deux longs tours d'outils après un bonjour. Les deux messages du propriétaire
+/// tiendraient la queue à 60 000 tokens pour 300 à résumer : le budget reprend la main.
+/// Dès que la tête vaut un résumé, la garantie des deux messages revient.
+#[test]
+fn two_heavy_turns_are_cut_when_nothing_else_is_left() {
+    let p = params(100_000);
+    let mut entries = vec![
+        Entry::new(1, ChatMessage::user("bonjour"), 100),
+        Entry::new(2, ChatMessage::assistant("bonjour"), 200),
+    ];
+    entries.extend(tool_turn(10, 20));
+    entries.extend(tool_turn(60, 20));
+    assert_eq!(cut_before_460(&entries, &p), (2, 60_400));
+    let (boundary, tail) = natural_split(&entries, &p);
+    assert_eq!((boundary, tail), (entries.len() - 12, 9_000));
+
+    let mut longer = vec![
+        Entry::new(1, ChatMessage::user("contexte"), 1_500),
+        Entry::new(2, ChatMessage::assistant("noté"), 1_500),
+    ];
+    longer.extend(entries.iter().skip(2).cloned());
+    assert_eq!(natural_split(&longer, &p), cut_before_460(&longer, &p));
+    assert_eq!(natural_split(&longer, &p).0, 2);
+}
+
+/// #460 : un seul appel d'outils plus gros que le budget n'a pas de frontière, et un
+/// résumé déjà publié en tête de la projection n'est pas « de quoi résumer ».
+#[test]
+fn one_oversized_group_has_no_boundary_and_a_summary_is_not_a_head() {
+    let p = params(100_000);
+    let alone = tool_pair(1, 30_000);
+    assert_eq!(natural_split(&alone, &p), (0, 30_000));
+
+    let mut projected = vec![Entry::new(
+        0,
+        ChatMessage::system("Résumé de la conversation antérieure"),
+        5_000,
+    )];
+    projected.extend(tool_turn(1, 40).into_iter().skip(1));
+    let (boundary, tail) = natural_split(&projected, &p);
+    assert_eq!((boundary, tail), (projected.len() - 12, 9_000));
+}
+
+/// #460 : la consigne ouvre le résumé, citée ligne à ligne ; le résumeur ne la relit pas
+/// comme une section, même si elle contient un titre de section.
+#[test]
+fn the_task_opens_the_summary_and_is_never_resummarised() {
+    let task = "Audite le dépôt.\n\n### Objectif\nTout corriger, puis ouvrir la PR.";
+    let rendered = render_summary(
+        &json!({"objectif": "audit du dépôt", "fait": "lecture de src/"}),
+        "Ancres :\n- chemin : src/lib.rs\n",
+        &["avant ça, regarde le README".into()],
+        Some(task),
+    );
+    assert!(
+        rendered.starts_with(&format!(
+            "{SUMMARY_HEADER}\n\n{TASK_HEADER}\n> Audite le dépôt.\n> \n> ### Objectif\n> \
+             Tout corriger, puis ouvrir la PR.\n\n### Objectif\naudit du dépôt\n"
+        )),
+        "{rendered}"
+    );
+    let body = summary_sections_only(&rendered);
+    assert!(body.starts_with("### Objectif\naudit du dépôt"), "{body}");
+    assert!(!body.contains("Tout corriger"), "{body}");
+    assert!(!body.contains("README") && !body.contains("src/lib.rs"));
+
+    // Sans consigne, rien ne change ; une consigne vide n'ouvre pas de bloc.
+    let plain = render_summary(&json!({"objectif": "x", "fait": "y"}), "", &[], Some("  "));
+    assert!(!plain.contains(TASK_HEADER));
+}
+
+/// #460 : une consigne plus longue que le budget de la queue garde son début, sa fin et
+/// l'adresse qui la rend entière.
+#[test]
+fn an_oversized_task_keeps_its_ends_and_its_address() {
+    let text = format!("DEBUT {} FIN", "x".repeat(40_000));
+    let short = Entry::new(7, ChatMessage::user("corrige le test"), 5);
+    assert_eq!(task_quote(&short, 1_000), "corrige le test");
+    let dated = "<contexte>\nDate et heure : jeudi 10:02.\n</contexte>\n\ncorrige le test";
+    let dated = Entry::new(7, ChatMessage::user(dated), 20);
+    assert_eq!(
+        task_quote(&dated, 1_000),
+        "corrige le test",
+        "sans le bloc volatil"
+    );
+    let long = Entry::new(7, ChatMessage::user(text), 12_000);
+    let quote = task_quote(&long, 1_000);
+    assert!(quote.starts_with("DEBUT ") && quote.ends_with(" FIN"));
+    assert!(quote.contains("history_expand(seq:7)"), "{quote}");
+    assert!(quote.chars().count() < 3_200, "{}", quote.chars().count());
 }

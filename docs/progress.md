@@ -12,6 +12,52 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.114
+
+**Compaction : un long tour d'outils est coupé à une frontière d'outils, et sa consigne
+ouvre le résumé (#460).**
+
+La queue verbatim gardait toujours deux messages du propriétaire, quoi qu'ils coûtent. Un
+seul message suivi de quarante appels d'outils n'en a pas deux : la queue remontait
+jusqu'au début, la frontière valait zéro, et la compaction de fond rendait « rien à
+compacter » avec 60 000 tokens en clair. Sur une instance, 201 passages de fond sur 337
+finissaient ainsi avec plus de 25 000 tokens non résumés ; seule l'urgence, sur
+dépassement de fenêtre, coupait.
+
+- **La coupe** (`penelope_context::compaction::natural_split`). La marche d'avant est
+  gardée telle quelle si la queue tient sous son budget, ou si elle laisse au moins
+  2 000 tokens à résumer devant elle (un résumé déjà publié ne compte pas). Sinon la queue
+  revient à son budget : coupée à une frontière de groupe, après un résultat complet,
+  avec au moins le dernier groupe. Une paire appel et résultat n'est jamais séparée.
+- **La consigne** (`SummaryJob::task`). Quand le lot résumé emporte le dernier message du
+  propriétaire et que plus aucun ne le suit, ce message est cité tel quel en tête du
+  résumé, sous « Consigne en cours », ligne à ligne. Il est relu dans l'historique complet
+  à chaque résumé du même tour, jamais recopié d'un résumé à l'autre ni confié au
+  résumeur comme une section. Plus long que le budget de la queue, il garde son début, sa
+  fin et l'adresse `history_expand(seq:N)`.
+- **Le journal** (`ContextEngine::plan_summary`, `NothingToSummarise`). « Rien à
+  compacter » dit pourquoi, avec ses nombres, dans le bilan, l'événement
+  `context.compaction_skipped` et `/compact` : trop peu de messages, tout tient dans la
+  queue, lot sous le minimum, ou pas de frontière où couper (un seul appel d'outils plus
+  gros que la queue).
+- **Sur le préfixe** (#236, #391). La portée d'un lot qui finit sur un résultat d'outil
+  le nomme et compte les messages qui le suivent : quarante résultats peuvent commencer
+  par les mêmes mots.
+- **Entre deux tours de mission** (#365). `MissionPorts::compact` lançait la compaction
+  après chaque tour, sans regarder le seuil que son commentaire et cette page
+  annonçaient. Elle passe par `compaction::between_turns` : rien sous le seuil de fond.
+  Sans cette garde, la nouvelle coupe aurait ramené une mission à 10 000 tokens à chaque
+  tour.
+
+Effets à connaître : les niveaux 0 et 2 protègent la même queue, donc dégradent plus tôt
+les vieux résultats d'un long tour qui déborde ; l'avant-dernier message du propriétaire
+n'est plus gardé en clair quand deux tours lourds se suivent sans rien devant eux (il
+reste parmi les messages conservés du résumé s'il tient dans leur budget). La compaction
+de fond tourne toujours en fin de tour : un tour qui dépasse la fenêtre avant de finir
+passe encore par l'urgence.
+
+Non rejoués, faute de clé `OPENROUTER_API_KEY` : `ctx_recall` et `mission-bench`.
+
 ### 1.0.113
 
 **Sessions : celle d'un tir ou d'un run fini se ferme, et les listes ne dépendent plus

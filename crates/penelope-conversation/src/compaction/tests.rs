@@ -714,3 +714,172 @@ async fn the_end_of_turn_threshold_follows_the_served_model() {
         "le repli à 64 000 la demande"
     );
 }
+
+/// Un long tour d'outils : un message du propriétaire, puis 40 appels de 1 500 tokens.
+async fn tool_session(d: &Context) -> String {
+    let sid = d
+        .services
+        .sessions
+        .create(SessionKind::Chat, Some("CLI".into()))
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    let h = &d.services.context.history;
+    let task = ChatMessage::user("Audite le dépôt et corrige ce que tu trouves.");
+    h.append(&sid, &task, 200, 0, false, None).await.unwrap();
+    for i in 0..40 {
+        let call = penelope_llm::types::ToolCall {
+            id: format!("c{i}"),
+            name: "shell_exec".into(),
+            arguments: json!({"command": format!("cargo test -p crate{i}")}),
+        };
+        let asked = ChatMessage::assistant("").with_tool_calls(vec![call]);
+        let result = ChatMessage::tool_result(format!("c{i}"), "shell_exec", "test result: ok");
+        h.append(&sid, &asked, 100, 0, false, None).await.unwrap();
+        h.append(&sid, &result, 1_400, 0, false, None)
+            .await
+            .unwrap();
+    }
+    sid
+}
+
+/// #460 : la compaction de fond d'un long tour d'outils résume la tête du tour. Avant,
+/// faute d'un second message du propriétaire, elle rendait « rien à compacter » avec
+/// 60 000 tokens en clair. La consigne ouvre le résumé ; la queue garde des appels entiers.
+#[tokio::test]
+async fn a_long_tool_turn_is_compacted_in_the_background() {
+    let (_dir, d, p) = context().await;
+    let sid = tool_session(&d).await;
+    p.reply(SUMMARY);
+
+    let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert!(r.skipped.is_none(), "{r:?}");
+    assert_eq!(summarizer_requests(&p).len(), 1);
+
+    let s = &d.services;
+    let projected = s.context.projected_entries(&sid).await.unwrap();
+    let summary = projected[0].message.text();
+    assert!(
+        summary.contains(&format!(
+            "{}\n> Audite le dépôt et corrige ce que tu trouves.\n",
+            penelope_context::compaction::TASK_HEADER
+        )),
+        "{summary}"
+    );
+    assert_eq!(
+        summary.matches("Audite le dépôt").count(),
+        1,
+        "citée une fois, pas reprise parmi les messages conservés"
+    );
+    let tail: Vec<ChatMessage> = projected[1..].iter().map(|e| e.message.clone()).collect();
+    assert_eq!(tail.len(), 12, "six appels entiers sous 10 000 tokens");
+    assert!(
+        !tail[0].tool_calls.is_empty(),
+        "la queue s'ouvre sur un appel"
+    );
+    assert!(penelope_context::transcript::pairs_are_valid(&tail));
+}
+
+/// #460 : sur le préfixe de la conversation, la portée d'un lot qui finit sur un résultat
+/// d'outil le nomme et compte ce qui le suit : quarante résultats commencent pareil.
+#[tokio::test]
+async fn a_prefix_summary_of_a_tool_turn_names_where_it_stops() {
+    let (_dir, d, p) = context().await;
+    d.services
+        .publish_config("test", |c| {
+            c.context.compaction_on_prefix = penelope_kernel::config::PrefixCompaction::Always;
+            Ok(vec!["context.compaction_on_prefix".into()])
+        })
+        .unwrap();
+    let sid = tool_session(&d).await;
+    let (sent, _) = warm_conversation(&d, &sid, "openrouter:deepseek/deepseek-v4-pro").await;
+    p.reply(SUMMARY);
+
+    let r = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    assert_eq!(r.published, 1, "{r:?}");
+    assert!(summarizer_requests(&p).is_empty(), "pas de résumeur à part");
+    let asked = p.requests().last().unwrap().clone();
+    assert_eq!(asked.messages.len(), sent.len() + 1);
+    let last = asked.messages.last().unwrap().text();
+    assert!(
+        last.contains(
+            "jusqu'au résultat d'outil qui commence par « test result: ok » inclus. Les 12 \
+             derniers messages de la conversation, qui le suivent, restent en clair"
+        ),
+        "{last}"
+    );
+}
+
+/// #460 : « rien à compacter » dit pourquoi, avec ses nombres, dans le bilan et dans
+/// l'événement.
+#[tokio::test]
+async fn nothing_to_compact_says_why() {
+    let (_dir, d, p) = context().await;
+    let sid = long_session(&d).await;
+    // Vingt échanges de 1 200 tokens : la queue en garde huit, le reste est résumé.
+    p.reply(SUMMARY);
+    let first = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    assert_eq!(first.published, 1, "{first:?}");
+
+    let again = compact(&d, &sid, Trigger::Background, None).await.unwrap();
+    let why = again.skipped.clone().expect("rien de plus à résumer");
+    assert!(
+        why.starts_with("rien à compacter : la conversation tient dans la queue verbatim (")
+            && why.ends_with("tokens non résumés pour un budget de 10000)"),
+        "{why}"
+    );
+    assert!(
+        report_text(&again).starts_with("Rien à compacter : la conversation tient")
+            && report_text(&again).ends_with("10000)."),
+        "{}",
+        report_text(&again)
+    );
+    let events = d
+        .services
+        .events
+        .session_events_of_kind(&sid, "context.compaction_skipped")
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].payload["reason"], why.as_str());
+    assert_eq!(summarizer_requests(&p).len(), 1);
+}
+
+/// #365, #460 : entre deux tours de mission, le seuil de fond décide. Dessous, rien n'est
+/// résumé ni journalisé ; atteint, la session est compactée avant le tour suivant.
+#[tokio::test]
+async fn a_mission_is_compacted_between_turns_only_at_the_threshold() {
+    let (_dir, d, p) = context().await;
+    let s = &d.services;
+    let sid = tool_session(&d).await;
+    let model = conversation_model(&d, &sid).await;
+    let threshold = background_threshold(s, &model);
+    let bill = |prompt: u64| penelope_kernel::budget::UsageRecord {
+        session_id: Some(sid.clone()),
+        role: Some("chat".into()),
+        model: model.clone(),
+        provider: "mock".into(),
+        prompt,
+        ..Default::default()
+    };
+
+    // Aucun prompt facturé, puis un prompt sous le seuil.
+    assert!(between_turns(&d, &sid).await.unwrap().is_none());
+    s.budget.record(bill(threshold - 1)).await.unwrap();
+    assert!(between_turns(&d, &sid).await.unwrap().is_none());
+    assert!(summarizer_requests(&p).is_empty());
+    assert!(s.context.lcm.active_nodes(&sid).await.unwrap().is_empty());
+    let skipped = s
+        .events
+        .session_events_of_kind(&sid, "context.compaction_skipped")
+        .await
+        .unwrap();
+    assert!(skipped.is_empty(), "sous le seuil, pas un mot au journal");
+
+    s.budget.record(bill(threshold)).await.unwrap();
+    p.reply(SUMMARY);
+    let r = between_turns(&d, &sid).await.unwrap().expect("au seuil");
+    assert_eq!(r.published, 1, "{r:?}");
+}

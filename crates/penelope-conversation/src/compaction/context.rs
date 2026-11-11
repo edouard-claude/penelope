@@ -82,7 +82,7 @@ impl penelope_app::mission::MissionPorts for MissionPorts {
     async fn compact(&self, session_id: &str) {
         // Le seuil de la compaction de fond décide : sous le seuil, rien n'est résumé. Le
         // résumé est publié au début du tour suivant (`publish_pending`).
-        if let Err(e) = compact(&self.context, session_id, Trigger::Background, None).await {
+        if let Err(e) = super::between_turns(&self.context, session_id).await {
             tracing::warn!(error = %e, session = session_id, "compaction de mission");
         }
     }

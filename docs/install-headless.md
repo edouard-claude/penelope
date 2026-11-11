@@ -436,7 +436,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `context.tail_ratio` | `0.025` | Part de la fenêtre gardée intacte en fin d'historique. |
 | `context.tail_min_tokens` | `10000` | Taille minimale de la fin d'historique gardée intacte, en jetons. |
 | `context.tail_max_tokens` | `25000` | Taille maximale de la fin d'historique gardée intacte, en jetons. |
-| `context.min_tail_user_messages` | `2` | Messages du propriétaire gardés intacts au moins. |
+| `context.min_tail_user_messages` | `2` | Messages du propriétaire gardés intacts au moins, tant que cela laisse de quoi résumer. |
 | `context.max_tool_result_share` | `0.25` | Part maximale de la fenêtre qu'un résultat d'outil peut occuper. |
 | `context.large_payload_tokens` | `25000` | Taille à partir de laquelle un résultat d'outil est rangé en artefact et résumé, en jetons. |
 | `context.max_prompt_tokens` | `120000` | Taille de prompt au-delà de laquelle la compaction se déclenche, quelle que soit la fenêtre du modèle : une limite de coût, pas de fenêtre (issue #18). 0 : aucune. |
@@ -3308,8 +3308,9 @@ que l'estimation voit mal, comptent. Une session reprise après une pause (cache
 toute façon) dont le dernier prompt dépasse le seuil est résumée **avant** l'appel au
 modèle, comme le premier tour d'un fork. Chaque décision laisse un événement :
 `context.compaction_requested`, `context.compaction_skipped` avec sa raison (attente
-après échec, rien à compacter, réserve épuisée) et `context.compacted`, aussi en INFO dans
-les journaux. `/status`, `/budget` et `self_status` donnent la taille réelle du contexte,
+après échec, rien à compacter et pourquoi, réserve épuisée) et `context.compacted`, aussi en INFO dans
+les journaux. Un long tour d'outils sans second message du propriétaire est coupé après un
+résultat complet, et sa consigne citée en tête du résumé ([context.md](context.md)). `/status`, `/budget` et `self_status` donnent la taille réelle du contexte,
 le seuil de fond et la date de la dernière compaction. Les derniers échanges restent mot pour mot, les identifiants
 (chemins, tickets, SHA, URLs, première ligne des commandes `shell_exec`) sont conservés
 tels quels, et un résumé existant est mis à jour plutôt que refait. Rien n'est effacé : les

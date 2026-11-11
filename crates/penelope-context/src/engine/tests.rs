@@ -590,3 +590,187 @@ fn huge_messages_are_sampled_for_the_summarizer() {
         "l'échantillonnage est dit"
     );
 }
+
+/// Un message du propriétaire puis `pairs` appels d'outils de 1 500 tokens, à la suite de
+/// l'historique.
+async fn long_tool_turn(e: &ContextEngine, task: Option<&str>, pairs: usize) {
+    let h = &e.history;
+    if let Some(task) = task {
+        h.append("s1", &ChatMessage::user(task), 200, 0, false, None)
+            .await
+            .unwrap();
+    }
+    for i in 0..pairs {
+        for m in tool_pair(0, &format!("c{}{i}", task.is_some()), "sortie", 1_400) {
+            let tokens = if m.message.tool_calls.is_empty() {
+                1_400
+            } else {
+                100
+            };
+            h.append("s1", &m.message, tokens, 0, false, None)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+/// #460 : un message du propriétaire, puis 40 appels d'outils. La tête du tour est
+/// résumée, la queue garde des paires entières sous son budget, et la consigne ouvre le
+/// résumé : elle n'est pas confiée au résumeur, et elle revient au résumé suivant.
+#[tokio::test]
+async fn a_long_tool_turn_is_summarised_and_keeps_its_task() {
+    let e = engine().await;
+    let p = params(200_000); // queue : 5 000 tokens, trois appels entiers
+    long_tool_turn(
+        &e,
+        Some("Audite le dépôt et corrige ce que tu trouves."),
+        40,
+    )
+    .await;
+
+    let job = e
+        .plan_summary("s1", &p, 128_000, "m", false, None)
+        .await
+        .unwrap()
+        .expect("la tête du tour est à résumer");
+    assert_eq!((job.from_seq, job.to_seq), (1, 75), "37 appels sur 40");
+    assert_eq!(
+        job.task.as_deref(),
+        Some("Audite le dépôt et corrige ce que tu trouves.")
+    );
+    assert!(job.verbatim_users.is_empty(), "{:?}", job.verbatim_users);
+
+    let summary = json!({"objectif": "audit", "fait": "37 lectures"});
+    e.apply_summary(&job, &summary, "m").await.unwrap();
+    let active = e.active_context("s1", &p).await.unwrap();
+    assert!(
+        active[0].text().contains(&format!(
+            "{TASK_HEADER}\n> Audite le dépôt et corrige ce que tu trouves.\n"
+        )),
+        "{}",
+        active[0].text()
+    );
+    assert_eq!(active.len(), 7, "le résumé et trois appels entiers");
+    assert!(pairs_are_valid(&active));
+    assert!(
+        !active[1].tool_calls.is_empty(),
+        "la queue s'ouvre sur un appel"
+    );
+
+    // Le tour continue : le résumé suivant prolonge le premier et reprend la consigne,
+    // que plus aucun message en clair ne porte.
+    long_tool_turn(&e, None, 40).await;
+    let next = e
+        .plan_summary("s1", &p, 128_000, "m", false, None)
+        .await
+        .unwrap()
+        .expect("un second lot du même tour");
+    assert!(next.previous_node_id.is_some());
+    assert_eq!(next.task, job.task);
+    let prompt = next.summarizer_messages()[1].text();
+    assert!(!prompt.contains(TASK_HEADER), "{prompt}");
+    e.apply_summary(&next, &summary, "m").await.unwrap();
+    let active = e.active_context("s1", &p).await.unwrap();
+    assert_eq!(active[0].text().matches("> Audite le dépôt").count(), 1);
+    assert!(pairs_are_valid(&active));
+
+    // Un nouveau message du propriétaire reste en clair : le résumé ne cite plus rien.
+    e.history
+        .append("s1", &ChatMessage::user("et la PR ?"), 50, 0, false, None)
+        .await
+        .unwrap();
+    long_tool_turn(&e, None, 2).await;
+    let third = e
+        .plan_summary("s1", &p, 128_000, "m", false, None)
+        .await
+        .unwrap()
+        .expect("la fin du tour précédent");
+    assert_eq!(third.task, None, "la consigne en cours est dans la queue");
+    assert_eq!(
+        third.to_seq, 159,
+        "deux appels de l'ancien tour, le message 162 reste"
+    );
+}
+
+/// #460 : quand rien n'est à résumer, la raison est dite avec ses nombres.
+#[tokio::test]
+async fn nothing_to_summarise_says_why() {
+    let p = params(200_000); // queue : 5 000 tokens
+    let why = |e: ContextEngine| async move {
+        e.plan_summary("s1", &p, 128_000, "m", false, None)
+            .await
+            .unwrap()
+            .expect_err("rien à résumer")
+    };
+
+    let e = engine().await;
+    long_tool_turn(&e, Some("bonjour"), 0).await;
+    let few = why(e).await;
+    assert_eq!(few, NothingToSummarise::TooFewMessages { messages: 1 });
+    assert!(few.to_string().contains("trop peu de messages"), "{few}");
+
+    let e = engine().await;
+    long_tool_turn(&e, Some("lis ce fichier"), 2).await;
+    let fits = why(e).await;
+    assert_eq!(
+        fits,
+        NothingToSummarise::FitsInTail {
+            tokens: 3_200,
+            budget: 5_000
+        }
+    );
+    assert_eq!(
+        fits.to_string(),
+        "la conversation tient dans la queue verbatim (3200 tokens non résumés pour un budget \
+         de 5000)"
+    );
+
+    // Un seul appel, quatre résultats de 3 000 tokens : aucune frontière où couper.
+    let e = engine().await;
+    let calls: Vec<ToolCall> = (0..4)
+        .map(|i| ToolCall {
+            id: format!("c{i}"),
+            name: "fs_read".into(),
+            arguments: json!({}),
+        })
+        .collect();
+    let call = ChatMessage::assistant("").with_tool_calls(calls);
+    e.history
+        .append("s1", &call, 100, 0, false, None)
+        .await
+        .unwrap();
+    for i in 0..4 {
+        let result = ChatMessage::tool_result(format!("c{i}"), "fs_read", "contenu");
+        e.history
+            .append("s1", &result, 3_000, 0, false, None)
+            .await
+            .unwrap();
+    }
+    let stuck = why(e).await;
+    assert_eq!(
+        stuck,
+        NothingToSummarise::NoBoundary {
+            tokens: 12_100,
+            budget: 5_000
+        }
+    );
+    assert!(stuck.to_string().contains("pas de frontière"), "{stuck}");
+
+    // Deux messages du propriétaire dans la queue, 600 tokens devant : trop peu.
+    let e = engine().await;
+    for (text, tokens) in [("a", 600), ("b", 2_400), ("c", 2_400)] {
+        e.history
+            .append("s1", &ChatMessage::user(text), tokens, 0, false, None)
+            .await
+            .unwrap();
+    }
+    let small = why(e).await;
+    assert_eq!(
+        small,
+        NothingToSummarise::BelowMinimum {
+            tokens: 600,
+            tail_tokens: 4_800
+        }
+    );
+    assert!(small.to_string().contains("600 tokens sur 2000"), "{small}");
+}

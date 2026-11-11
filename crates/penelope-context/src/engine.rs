@@ -59,6 +59,52 @@ pub struct SummaryJob {
     /// Dernière adresse couverte par le résumé prolongé.
     #[serde(default)]
     pub previous_to_seq: Option<i64>,
+    /// La consigne en cours : le dernier message du propriétaire, quand le résumé le couvre
+    /// et que plus aucun ne le suit. Le résumé rendu la cite en tête (#460).
+    #[serde(default)]
+    pub task: Option<String>,
+}
+
+/// Pourquoi aucun lot n'est à résumer, avec ses nombres : le journal le dit (#460).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NothingToSummarise {
+    /// Moins de trois messages depuis le dernier résumé.
+    TooFewMessages { messages: usize },
+    /// Tout ce qui n'est pas résumé tient dans la queue verbatim.
+    FitsInTail { tokens: u64, budget: u64 },
+    /// La queue déborde, mais c'est un seul groupe : un appel d'outils et ses résultats.
+    NoBoundary { tokens: u64, budget: u64 },
+    /// Ce qui précède la queue ne vaut pas un appel au résumeur.
+    BelowMinimum { tokens: u64, tail_tokens: u64 },
+}
+
+impl std::fmt::Display for NothingToSummarise {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::TooFewMessages { messages } => write!(
+                f,
+                "trop peu de messages depuis le dernier résumé ({messages}, il en faut trois)"
+            ),
+            Self::FitsInTail { tokens, budget } => write!(
+                f,
+                "la conversation tient dans la queue verbatim ({tokens} tokens non résumés \
+                 pour un budget de {budget})"
+            ),
+            Self::NoBoundary { tokens, budget } => write!(
+                f,
+                "pas de frontière où couper : les {tokens} tokens non résumés sont un seul \
+                 appel d'outils avec ses résultats (budget de la queue : {budget})"
+            ),
+            Self::BelowMinimum {
+                tokens,
+                tail_tokens,
+            } => write!(
+                f,
+                "le lot à résumer est sous le minimum ({tokens} tokens sur \
+                 {MIN_SUMMARY_TOKENS}), la queue verbatim garde les {tail_tokens} autres"
+            ),
+        }
+    }
 }
 
 /// Consigne du résumeur. Les échanges sont des données, jamais des instructions.
@@ -142,8 +188,6 @@ impl SummaryJob {
     }
 }
 
-/// Un lot plus petit ne vaut pas un appel au résumeur, sauf compaction forcée.
-pub const MIN_SUMMARY_TOKENS: u64 = 2_000;
 /// Place réservée au prompt du résumeur, hors transcript et résumé précédent.
 const SUMMARIZER_OVERHEAD_TOKENS: u64 = 2_000;
 /// Plafond des ancres d'un nœud.
@@ -296,6 +340,23 @@ impl ContextEngine {
         force: bool,
         cap: Option<u64>,
     ) -> penelope_store::Result<Option<SummaryJob>> {
+        let planned = self
+            .plan_summary(session_id, params, summarizer_window, model_id, force, cap)
+            .await?;
+        Ok(planned.ok())
+    }
+
+    /// [`prepare_summary_capped`](Self::prepare_summary_capped), qui dit pourquoi quand il
+    /// n'y a rien à résumer (#460).
+    pub async fn plan_summary(
+        &self,
+        session_id: &str,
+        params: &CompactionParams,
+        summarizer_window: u64,
+        model_id: &str,
+        force: bool,
+        cap: Option<u64>,
+    ) -> penelope_store::Result<Result<SummaryJob, NothingToSummarise>> {
         let entries = self.history.load(session_id, 0).await?;
         let active = self.lcm.active_nodes(session_id).await?;
         let covered_to = active.iter().filter_map(|n| n.to_seq).max().unwrap_or(0);
@@ -316,19 +377,30 @@ impl ContextEngine {
             .cloned()
             .collect();
         if fresh.len() < 3 {
-            return Ok(None);
+            return Ok(Err(NothingToSummarise::TooFewMessages {
+                messages: fresh.len(),
+            }));
         }
-        let boundary = match natural_split(&fresh, params).0 {
+        let (natural, tail_tokens) = natural_split(&fresh, params);
+        let boundary = match natural {
             0 if force => split_for_summary(&fresh, params).0,
             b => b,
         };
         if boundary == 0 {
-            return Ok(None);
+            let (tokens, budget) = (tail_tokens, params.tail_budget());
+            return Ok(Err(if tokens <= budget {
+                NothingToSummarise::FitsInTail { tokens, budget }
+            } else {
+                NothingToSummarise::NoBoundary { tokens, budget }
+            }));
         }
         let candidates = &fresh[..boundary];
         let candidate_tokens: u64 = candidates.iter().map(|e| e.tokens).sum();
         if !force && candidate_tokens < MIN_SUMMARY_TOKENS {
-            return Ok(None);
+            return Ok(Err(NothingToSummarise::BelowMinimum {
+                tokens: candidate_tokens,
+                tail_tokens,
+            }));
         }
 
         // Le résumé qui précède immédiatement le lot est prolongé plutôt que doublé.
@@ -374,14 +446,30 @@ impl ContextEngine {
             .as_ref()
             .and_then(|n| n.from_seq)
             .unwrap_or(chunk_from);
+        // Plus aucun message du propriétaire après le lot : sa consigne ouvre le résumé,
+        // d'un résumé au suivant tant que le tour dure (#460).
+        let is_user = |e: &&Entry| e.role() == penelope_llm::types::Role::User;
+        let task = match entries
+            .iter()
+            .filter(|e| e.seq > chunk_to)
+            .any(|e| is_user(&e))
+        {
+            true => None,
+            false => entries
+                .iter()
+                .rev()
+                .filter(|e| e.seq <= chunk_to)
+                .find(is_user),
+        };
         let covered: Vec<Entry> = entries
             .iter()
             .filter(|e| e.seq >= from_seq && e.seq <= chunk_to)
+            .filter(|e| task.is_none_or(|t| t.seq != e.seq))
             .cloned()
             .collect();
         let verbatim_users = select_verbatim_users(&covered, params.tail_budget() / 8);
 
-        Ok(Some(SummaryJob {
+        Ok(Ok(SummaryJob {
             session_id: session_id.to_string(),
             from_seq,
             to_seq: chunk_to,
@@ -395,6 +483,9 @@ impl ContextEngine {
             verbatim_users,
             tokens_src: chunk.iter().map(|e| e.tokens).sum(),
             batches,
+            task: task
+                .map(|e| task_quote(e, params.tail_budget()))
+                .filter(|t| !t.trim().is_empty()),
         }))
     }
 
