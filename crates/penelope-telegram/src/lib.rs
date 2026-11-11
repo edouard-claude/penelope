@@ -392,6 +392,74 @@ fn classify_callback(cb: &Value, update_id: i64, access: &Access) -> Incoming {
     }
 }
 
+/// Photo, document, vocal ou audio : les médias que le canal sait lire.
+fn media_of(
+    msg: &Value,
+    update_id: i64,
+    chat_id: i64,
+    from_id: i64,
+    message_id: i64,
+    topic_id: Option<i64>,
+    text: &str,
+) -> Option<Incoming> {
+    if let Some(photos) = msg.get("photo").and_then(|v| v.as_array()) {
+        return Some(Incoming::Photo {
+            update_id,
+            chat_id,
+            from_id,
+            message_id,
+            topic_id,
+            sizes: photos.iter().filter_map(PhotoSize::parse).collect(),
+            media_group: msg
+                .get("media_group_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            caption: (!text.is_empty()).then(|| text.to_string()),
+        });
+    }
+    if let Some(d) = msg.get("document") {
+        return Some(Incoming::Document {
+            update_id,
+            chat_id,
+            from_id,
+            message_id,
+            topic_id,
+            file_id: d
+                .get("file_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            file_name: d
+                .get("file_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("fichier")
+                .to_string(),
+            mime_type: d
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            file_size: d.get("file_size").and_then(|v| v.as_i64()),
+            caption: (!text.is_empty()).then(|| text.to_string()),
+        });
+    }
+    if let Some(v) = msg.get("voice").or_else(|| msg.get("audio")) {
+        let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
+        return Some(Incoming::Voice {
+            update_id,
+            chat_id,
+            from_id,
+            message_id,
+            topic_id,
+            file_id: str_of("file_id").unwrap_or_default(),
+            file_name: str_of("file_name"),
+            mime_type: str_of("mime_type"),
+            file_size: v.get("file_size").and_then(|x| x.as_i64()),
+            duration: v.get("duration").and_then(|x| x.as_i64()),
+        });
+    }
+    None
+}
+
 /// Classe un update brut. Le propriétaire est la **liste blanche d'un seul élément**
 /// (§13.4) ; un groupe n'est ouvert que s'il figure dans `access.allowed_chats`, et y
 /// parler en administrateur anonyme vaut propriétaire (issue #113).
@@ -488,60 +556,10 @@ pub fn classify(update: &Value, access: &Access) -> Incoming {
         };
     }
 
-    if let Some(photos) = msg.get("photo").and_then(|v| v.as_array()) {
-        return Incoming::Photo {
-            update_id,
-            chat_id,
-            from_id,
-            message_id,
-            topic_id,
-            sizes: photos.iter().filter_map(PhotoSize::parse).collect(),
-            media_group: msg
-                .get("media_group_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            caption: (!text.is_empty()).then(|| text.clone()),
-        };
-    }
-    if let Some(d) = msg.get("document") {
-        return Incoming::Document {
-            update_id,
-            chat_id,
-            from_id,
-            message_id,
-            topic_id,
-            file_id: d
-                .get("file_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            file_name: d
-                .get("file_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("fichier")
-                .to_string(),
-            mime_type: d
-                .get("mime_type")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            file_size: d.get("file_size").and_then(|v| v.as_i64()),
-            caption: (!text.is_empty()).then(|| text.clone()),
-        };
-    }
-    if let Some(v) = msg.get("voice").or_else(|| msg.get("audio")) {
-        let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
-        return Incoming::Voice {
-            update_id,
-            chat_id,
-            from_id,
-            message_id,
-            topic_id,
-            file_id: str_of("file_id").unwrap_or_default(),
-            file_name: str_of("file_name"),
-            mime_type: str_of("mime_type"),
-            file_size: v.get("file_size").and_then(|x| x.as_i64()),
-            duration: v.get("duration").and_then(|x| x.as_i64()),
-        };
+    if let Some(media) = media_of(
+        msg, update_id, chat_id, from_id, message_id, topic_id, &text,
+    ) {
+        return media;
     }
 
     // Ni texte, ni photo, ni document, ni son (#461) : un fichier, une ligne lisible, un
