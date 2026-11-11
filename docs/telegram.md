@@ -420,6 +420,18 @@ et si le fournisseur la refuse quand même, elle est retirée de la copie envoy�
 réponse finit par « Image non lue : refusée par le fournisseur (motif) », et la session
 n'en souffre plus (voir [Photos et documents](install-headless.md#photos-et-documents)).
 
+Les autres types ne lancent jamais un tour vide (#461, `penelope_telegram::other`) :
+
+| Reçu | Ce qu'il devient |
+|---|---|
+| vidéo, note vidéo | un fichier, comme un document : déposé dans le workspace, et sa légende part en tour avec le chemin (20 Mo au plus, limite de l'API Bot) |
+| sticker, localisation, lieu, contact, sondage, liste, dé, jeu, facture, story | une ligne lisible en tête du message (« [sticker 😀] », « [localisation 48.85, 2.35] »), suivie de la légende s'il y en a une |
+| message de service (sujet créé, renommé ou fermé, message épinglé, membre arrivé, titre changé) | rien : ce n'est pas un message entrant |
+| type inconnu, sans légende | une réponse « Je ne sais pas lire ce type de message », qui nomme le champ de l'API, sans tour |
+
+Derrière le canal, la file refuse un tour `message` sans texte ni image
+(`TurnQueue::enqueue`), d'où qu'il vienne.
+
 Une adresse de retour OAuth collée (`code=` et `state=`, avec ou sans `http://`) termine
 l'autorisation en attente et ne part jamais vers le modèle.
 

@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.115
+
+**Canal : un message sans texte ne lance plus un tour vide (#461).**
+
+Un message que `classify` ne reconnaissait pas (sticker, vidéo, localisation, contact,
+sondage, message de service d'un sujet) devenait un `Incoming::Text` au texte vide, et
+rien ne le refusait ensuite. Sur une instance, 27 tours sont partis ainsi : 21 ont payé un
+appel au modèle pour une réponse à rien, 6 ont été refusés par le fournisseur
+(`BadRequest`, requête sans entrée).
+
+- **Le canal** (`penelope_telegram::other`). Quatre sorts, plus jamais un texte vide :
+  - une vidéo ou une note vidéo est un fichier : elle suit le chemin d'un document
+    (déposée dans le workspace, la légende part en tour avec le chemin, 20 Mo au plus) ;
+  - un sticker, une localisation, un lieu, un contact, un sondage, une liste, un dé, un
+    jeu, une facture, une story deviennent une ligne que le modèle lit (« [sticker 😀] »,
+    « [localisation 48.85, 2.35] »), en tête de la légende s'il y en a une ;
+  - un message de service (sujet créé, renommé, fermé, message épinglé, membre arrivé,
+    titre changé…) n'est pas un message entrant : `Incoming::Ignored` ;
+  - le reste, sans légende, devient `Incoming::Unsupported` : la passerelle répond « Je
+    ne sais pas lire ce type de message » en nommant le champ de l'API, sans tour.
+- **Le cœur** (`TurnQueue::enqueue`). Un tour `message` sans texte ni image est refusé,
+  d'où qu'il vienne (canal, RPC, mission) : la file est le seul endroit où tous passent.
+  Une photo sans légende, un texte seul et les autres genres de tour passent comme avant.
+- Les 6 tours en échec relevés sont dans un état terminal (`failed`) : rien ne les
+  rejoue, il n'y a rien à clore.
+
+Effet à connaître : une vidéo envoyée sans légende est maintenant téléchargée et rangée
+dans `<workspace>/telegram/`, avec sa note « 📎 déposé dans … », comme tout fichier.
+
+Les tests de `penelope-telegram/src/lib.rs` passent dans `src/tests.rs` (le fichier
+frôlait le plafond R1).
+
 ### 1.0.114
 
 **Compaction : un long tour d'outils est coupé à une frontière d'outils, et sa consigne

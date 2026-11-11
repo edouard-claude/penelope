@@ -10,7 +10,7 @@ fn queue(store: Store, clock: TestClock) -> TurnQueue {
 #[tokio::test]
 async fn enqueue_claim_complete() {
     let q = queue(Store::open_memory().unwrap(), TestClock::default());
-    q.enqueue("s1", TurnKind::Message, json!({"t":"salut"}), None, 0)
+    q.enqueue("s1", TurnKind::Message, json!({"text": "salut"}), None, 0)
         .await
         .unwrap();
     let t = q.claim("runner-1").await.unwrap().unwrap();
@@ -28,11 +28,23 @@ async fn enqueue_claim_complete() {
 async fn dedup_key_prevents_double_enqueue() {
     let q = queue(Store::open_memory().unwrap(), TestClock::default());
     let a = q
-        .enqueue("s1", TurnKind::Message, json!({}), Some("u42".into()), 0)
+        .enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text": "salut"}),
+            Some("u42".into()),
+            0,
+        )
         .await
         .unwrap();
     let b = q
-        .enqueue("s1", TurnKind::Message, json!({}), Some("u42".into()), 0)
+        .enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text": "salut"}),
+            Some("u42".into()),
+            0,
+        )
         .await
         .unwrap();
     assert!(a.is_some());
@@ -118,10 +130,16 @@ async fn claim_merges_pending_messages_of_one_origin() {
         3
     );
     assert!(
-        q.enqueue("s1", TurnKind::Message, json!({}), Some("tg:2".into()), 0)
-            .await
-            .unwrap()
-            .is_none()
+        q.enqueue(
+            "s1",
+            TurnKind::Message,
+            json!({"text": "salut"}),
+            Some("tg:2".into()),
+            0
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
     q.complete(&turn).await.unwrap();
     assert!(q.claim("r2").await.unwrap().is_none());
@@ -299,7 +317,7 @@ async fn ca_3_3_expired_lease_is_reclaimed() {
     let clock = TestClock::default();
     let store = Store::open_memory().unwrap();
     let mort = queue(store.clone(), clock.clone());
-    mort.enqueue("s1", TurnKind::Message, json!({}), None, 0)
+    mort.enqueue("s1", TurnKind::Message, json!({"text": "salut"}), None, 0)
         .await
         .unwrap();
 
@@ -321,10 +339,10 @@ async fn ca_3_3_expired_lease_is_reclaimed() {
 async fn a_live_runner_keeps_its_turn_when_the_writer_was_frozen() {
     let clock = TestClock::default();
     let q = queue(Store::open_memory().unwrap(), clock.clone());
-    q.enqueue("s1", TurnKind::Message, json!({"t":"premier"}), None, 0)
+    q.enqueue("s1", TurnKind::Message, json!({"text": "premier"}), None, 0)
         .await
         .unwrap();
-    q.enqueue("s1", TurnKind::Message, json!({"t":"second"}), None, 0)
+    q.enqueue("s1", TurnKind::Message, json!({"text": "second"}), None, 0)
         .await
         .unwrap();
 
@@ -350,10 +368,10 @@ async fn an_evicted_runner_loses_its_lease_and_writes_nothing() {
     let store = Store::open_memory().unwrap();
     let fige = queue(store.clone(), clock.clone());
     let repris = queue(store.clone(), clock.clone());
-    fige.enqueue("s1", TurnKind::Message, json!({"t":"premier"}), None, 0)
+    fige.enqueue("s1", TurnKind::Message, json!({"text": "premier"}), None, 0)
         .await
         .unwrap();
-    fige.enqueue("s1", TurnKind::Message, json!({"t":"second"}), None, 0)
+    fige.enqueue("s1", TurnKind::Message, json!({"text": "second"}), None, 0)
         .await
         .unwrap();
 
@@ -394,7 +412,7 @@ async fn an_evicted_runner_loses_its_lease_and_writes_nothing() {
 async fn heartbeat_prevents_reclaim() {
     let clock = TestClock::default();
     let q = queue(Store::open_memory().unwrap(), clock.clone());
-    q.enqueue("s1", TurnKind::Message, json!({}), None, 0)
+    q.enqueue("s1", TurnKind::Message, json!({"text": "salut"}), None, 0)
         .await
         .unwrap();
     let t = q.claim("r1").await.unwrap().unwrap();
@@ -413,9 +431,15 @@ async fn heartbeat_prevents_reclaim() {
 async fn ca_3_2_four_sessions_run_concurrently() {
     let q = queue(Store::open_memory().unwrap(), TestClock::default());
     for i in 0..4 {
-        q.enqueue(&format!("s{i}"), TurnKind::Message, json!({}), None, 0)
-            .await
-            .unwrap();
+        q.enqueue(
+            &format!("s{i}"),
+            TurnKind::Message,
+            json!({"text": "salut"}),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
     }
     let mut claimed = Vec::new();
     for i in 0..4 {
@@ -432,7 +456,7 @@ async fn ca_3_2_four_sessions_run_concurrently() {
 #[tokio::test]
 async fn priority_is_respected() {
     let q = queue(Store::open_memory().unwrap(), TestClock::default());
-    q.enqueue("a", TurnKind::Message, json!({"p":0}), None, 0)
+    q.enqueue("a", TurnKind::Message, json!({"text": "p0"}), None, 0)
         .await
         .unwrap();
     q.enqueue("b", TurnKind::Resume, json!({"p":9}), None, 9)
@@ -446,7 +470,7 @@ async fn priority_is_respected() {
 async fn recover_on_boot_releases_everything() {
     let store = Store::open_memory().unwrap();
     let q = queue(store.clone(), TestClock::default());
-    q.enqueue("s1", TurnKind::Message, json!({}), None, 0)
+    q.enqueue("s1", TurnKind::Message, json!({"text": "salut"}), None, 0)
         .await
         .unwrap();
     q.claim("r1").await.unwrap().unwrap();
@@ -493,4 +517,46 @@ async fn turns_of_one_lane_run_one_after_the_other() {
 fn only_triggers_and_nudges_are_unattended() {
     assert!(TurnKind::Trigger.unattended() && TurnKind::Nudge.unattended());
     assert!(!TurnKind::Message.unattended() && !TurnKind::Resume.unattended());
+}
+
+/// #461 : un tour `message` sans texte ni image n'entre pas en file, quel que soit
+/// l'appelant ; une image seule, un texte seul et les autres genres de tour passent.
+#[tokio::test]
+async fn an_empty_message_turn_is_refused() {
+    let q = queue(Store::open_memory().unwrap(), TestClock::default());
+    let empties = [
+        json!({}),
+        json!({"text": ""}),
+        json!({"text": " \n\t", "origin": {"channel": "cli"}}),
+        json!({"text": "", "images": []}),
+        json!({"text": null, "images": null}),
+    ];
+    for payload in empties {
+        let refused = q
+            .enqueue("s1", TurnKind::Message, payload.clone(), None, 0)
+            .await;
+        match refused {
+            Err(e) => assert!(e.to_string().starts_with("message vide"), "{e}"),
+            other => panic!("{payload} : {other:?}"),
+        }
+    }
+    assert_eq!(q.pending_count().await.unwrap(), 0, "rien n'est entré");
+
+    let kept = [
+        (TurnKind::Message, json!({"text": "bonjour"})),
+        (
+            TurnKind::Message,
+            json!({"text": "", "images": ["/tmp/p.jpg"]}),
+        ),
+        (TurnKind::Resume, json!({"retry": true})),
+        (TurnKind::Trigger, json!({})),
+    ];
+    for (n, (kind, payload)) in kept.into_iter().enumerate() {
+        let id = q
+            .enqueue(&format!("k{n}"), kind, payload, None, 0)
+            .await
+            .unwrap();
+        assert!(id.is_some());
+    }
+    assert_eq!(q.pending_count().await.unwrap(), 4);
 }

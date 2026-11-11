@@ -360,6 +360,19 @@ impl TelegramGateway {
     }
 }
 
+/// Ce qui est dit au propriétaire pour un message que le canal ne sait pas lire (#461) ;
+/// `what` est le champ de l'API qui le porte, s'il est connu.
+pub(super) fn unsupported(what: &Option<String>) -> String {
+    let named = match what {
+        Some(field) => format!(" (`{field}`)"),
+        None => String::new(),
+    };
+    format!(
+        "📭 Je ne sais pas lire ce type de message{named} : rien n'est transmis. Un texte, \
+         une photo, un fichier, une vidéo ou un vocal passent."
+    )
+}
+
 /// Met les photos reçues en file, dans la session de la conversation.
 async fn enqueue_photos(
     daemon: &Arc<Core>,
