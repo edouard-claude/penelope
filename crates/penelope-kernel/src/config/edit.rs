@@ -37,6 +37,42 @@ pub(super) fn unknown_keys(
     }
 }
 
+/// `penelope config unset` (#469) : retire des clés du fichier de configuration. Une clé
+/// retirée ou inconnue disparaît, une clé connue revient à sa valeur par défaut. Tout ou
+/// rien : une clé que le fichier ne porte pas, ou un reste qui ne se valide plus, et rien
+/// n'est écrit. Le daemon relit ensuite le fichier (`config reload`).
+pub fn unset_keys(file: &Path, keys: &[String]) -> Result<()> {
+    let mut text = std::fs::read_to_string(file)?;
+    for key in keys {
+        text = remove_key(&text, key)?.ok_or_else(|| {
+            KernelError::config(format!("`{key}` n'est pas écrite dans {}", file.display()))
+        })?;
+    }
+    let (cfg, _) = Config::read(&text)?;
+    cfg.validate()?;
+    atomic_write(file, text.as_bytes())
+}
+
+/// Retire `path` du texte, clé ou section entière, sans toucher au reste. `None` quand
+/// le fichier ne la porte pas.
+fn remove_key(existing: &str, path: &str) -> Result<Option<String>> {
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|e: toml_edit::TomlError| KernelError::config(e.to_string()))?;
+    let mut parents: Vec<&str> = path.split('.').collect();
+    let Some(key) = parents.pop() else {
+        return Ok(None);
+    };
+    let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for parent in parents {
+        table = match table.get_mut(parent).and_then(|i| i.as_table_like_mut()) {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+    }
+    Ok(table.remove(key).map(|_| doc.to_string()))
+}
+
 /// Réécrit `existing` en ne touchant que les clés qui changent entre `before` et `after`
 /// (issue #76) : commentaires, ordre, clés inconnues et clés omises par le propriétaire
 /// restent tels quels, et le fichier n'acquiert pas les clés nouvelles d'une version tant

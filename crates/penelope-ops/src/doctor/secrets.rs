@@ -167,6 +167,38 @@ pub async fn open_forms_check(s: &Services) -> DoctorCheck {
     )
 }
 
+/// Un `penelope.db` hors de l'emplacement de la base (#469) : ce n'est pas la base, et qui
+/// l'ouvre par erreur lit une base vide. Rien dans Pénélope ne l'écrit ; il est nommé, avec
+/// la commande qui l'efface s'il est vide. Rien n'est effacé d'office.
+pub fn stray_database_checks(s: &Services) -> Vec<DoctorCheck> {
+    let dirs = &s.platform.dirs;
+    dirs.stray_databases()
+        .into_iter()
+        .map(|path| {
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let (what, fix) = if bytes == 0 {
+                ("vide".to_string(), Some(format!("rm '{}'", path.display())))
+            } else {
+                (
+                    format!("{bytes} octet(s), à examiner avant de l'effacer"),
+                    None,
+                )
+            };
+            DoctorCheck::fail(
+                "db.stray",
+                "Base hors emplacement",
+                format!(
+                    "{} ({what}) n'est pas la base, qui est {} : aucun code de Pénélope n'écrit \
+                     là, et qui lit ce fichier lit autre chose que la base",
+                    path.display(),
+                    dirs.db_path().display()
+                ),
+                fix,
+            )
+        })
+        .collect()
+}
+
 /// L'intégrité de la base : celle du **fichier**, lue par une connexion neuve.
 ///
 /// Le 21/09, trois `doctor` d'affilée ont rendu « malformed inverted index for FTS5 », sur

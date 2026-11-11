@@ -95,19 +95,25 @@ async fn leftovers_check(s: &Services) -> Option<DoctorCheck> {
 fn retired_remote_check(s: &Services) -> Option<DoctorCheck> {
     let raw = std::fs::read_to_string(s.platform.dirs.config_file()).ok()?;
     let remote = retired_remote(&raw)?;
+    let provider = s.config.config().backup.effective_provider().is_some();
     Some(DoctorCheck::fail(
         "backup.git_remote",
         "Sauvegarde : clé retirée",
         format!(
             "`backup.git_remote = \"{remote}\"` est ignorée depuis la 1.0.46 : GitHub ne reçoit \
              plus de sauvegarde. {}",
-            if s.config.config().backup.effective_provider().is_some() {
+            if provider {
                 "Le fournisseur configuré la remplace ; la ligne peut être effacée."
             } else {
                 "Aucun fournisseur : rien ne part hors de cette machine."
             }
         ),
-        Some("penelope backup setup".into()),
+        // Fournisseur en place : il ne reste qu'à ôter la ligne (#469).
+        Some(if provider {
+            "penelope config unset backup.git_remote".into()
+        } else {
+            "penelope backup setup".into()
+        }),
     ))
 }
 

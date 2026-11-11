@@ -297,6 +297,99 @@ async fn unknown_config_keys_are_named_not_fatal() {
     assert!(!c.ok && c.detail.contains("futur"), "{c:?}");
 }
 
+/// #469 : le journal avertissait de deux clés retirées pendant que la ligne écrivait
+/// « toutes connues ». Une clé retirée encore dans le fichier rend la ligne orange, avec
+/// la commande qui l'ôte ; une fois ôtée, la ligne redevient verte.
+#[tokio::test]
+async fn a_retired_config_key_still_in_the_file_is_not_all_known() {
+    let (_d, s) = services().await;
+    let line = |checks: Vec<DoctorCheck>| {
+        checks
+            .into_iter()
+            .find(|c| c.id == "config.unknown")
+            .unwrap()
+    };
+    let sample = penelope_kernel::config::Config::sample_toml(42).unwrap();
+    let text = format!(
+        "{sample}\n[futur]\nactif = true\n\n[tools]\nci_hosts = [\"ci.exemple\"]\n\n\
+         [backup]\ngit_remote = \"git@exemple:moi/sauvegardes.git\"\n"
+    );
+    std::fs::write(s.config.path(), text).unwrap();
+    s.config.reload_from_disk().unwrap();
+    let c = line(run(&s).await);
+    assert!(!c.ok && c.severity == "warn", "{c:?}");
+    assert_eq!(
+        c.detail,
+        "retirée(s), encore dans le fichier : backup.git_remote, tools.ci_hosts ; ignorée(s) \
+         par cette version : futur (écrite(s) par une version plus récente, ou faute de frappe)"
+    );
+    assert_eq!(
+        c.fix.as_deref(),
+        Some("penelope config unset backup.git_remote tools.ci_hosts")
+    );
+
+    let keys = [
+        "backup.git_remote".to_string(),
+        "tools.ci_hosts".to_string(),
+    ];
+    penelope_kernel::config::unset_keys(s.config.path(), &keys).unwrap();
+    s.config.reload_from_disk().unwrap();
+    let c = line(run(&s).await);
+    assert!(!c.ok && c.detail.starts_with("ignorée(s) par cette version : futur"));
+    assert_eq!(c.fix.as_deref(), Some("penelope config validate"));
+
+    penelope_kernel::config::unset_keys(s.config.path(), &["futur".to_string()]).unwrap();
+    s.config.reload_from_disk().unwrap();
+    let c = line(run(&s).await);
+    assert!(c.ok && c.detail == "toutes connues", "{c:?}");
+}
+
+/// #469 : sur un dossier neuf, aucun `penelope.db` hors de l'emplacement de la base, et
+/// `doctor` n'en dit rien. Un fichier de ce nom posé ailleurs (un outil lancé sur un
+/// chemin deviné) est nommé, avec la commande qui l'efface s'il est vide.
+#[tokio::test]
+async fn a_database_file_outside_its_place_is_named() {
+    let (_d, s) = services().await;
+    let dirs = &s.platform.dirs;
+    assert!(dirs.db_path().is_file(), "la base est à sa place");
+    assert!(dirs.stray_databases().is_empty());
+    assert!(run(&s).await.iter().all(|c| c.id != "db.stray"));
+
+    let empty = dirs.state().join("penelope.db");
+    std::fs::write(&empty, "").unwrap();
+    let full = dirs.logs().join("penelope.db");
+    std::fs::create_dir_all(dirs.logs()).unwrap();
+    std::fs::write(&full, "pas une base").unwrap();
+    let found: Vec<DoctorCheck> = run(&s)
+        .await
+        .into_iter()
+        .filter(|c| c.id == "db.stray")
+        .collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    let of = |path: &std::path::Path| {
+        found
+            .iter()
+            .find(|c| c.detail.starts_with(&path.display().to_string()))
+            .unwrap()
+    };
+    let c = of(&empty);
+    assert!(!c.ok && c.severity == "warn", "{c:?}");
+    assert!(
+        c.detail.contains("(vide) n'est pas la base"),
+        "{}",
+        c.detail
+    );
+    assert!(
+        c.detail.contains(&dirs.db_path().display().to_string()),
+        "{}",
+        c.detail
+    );
+    assert_eq!(c.fix, Some(format!("rm '{}'", empty.display())));
+    let c = of(&full);
+    assert!(c.detail.contains("12 octet(s), à examiner"), "{}", c.detail);
+    assert_eq!(c.fix, None, "rien à effacer sans avoir regardé");
+}
+
 /// #78 : `doctor` dit ce que gardent les tables d'effets et quand la rétention est
 /// passée pour la dernière fois.
 #[tokio::test]

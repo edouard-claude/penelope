@@ -59,15 +59,15 @@ mod write;
 pub use approval::*;
 pub use channel::*;
 pub use duration::*;
-pub use edit::edit_toml;
 use edit::{SAMPLE_HEADER, unknown_keys};
+pub use edit::{edit_toml, unset_keys};
 pub use plugins::*;
 pub use profiles::*;
 pub use providers::*;
 pub use sandbox::*;
 pub use sections::*;
 pub use store::*;
-pub use validate::{RETIRED_KEYS, retired};
+pub use validate::{Ignored, RETIRED_KEYS, retired};
 pub use write::atomic_write;
 use write::diff_paths;
 

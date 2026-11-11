@@ -303,6 +303,59 @@ fn a_file_with_the_retired_history_source_still_loads() {
     assert_eq!(cs.config().owner.telegram_user_id, 5);
 }
 
+/// #469 : une clé retirée encore dans le fichier est gardée à part des inconnues, pour que
+/// `doctor` la nomme au lieu d'écrire « toutes connues », et `config unset` l'ôte sans
+/// toucher au reste : commentaires, ordre, clés inconnues.
+#[test]
+fn retired_keys_are_kept_apart_and_unset_removes_only_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "# réglé à la main\n[owner]\ntelegram_user_id = 5 # moi\n\n[backup]\n# l'ancien dépôt\ngit_remote = \"git@exemple:moi/sauvegardes.git\"\n\n[tools]\nci_hosts = [\"ci.exemple\"]\n\n[budget]\n# plafond du jour\ndaily_usd = 20.0\n\n[futur]\nactif = true\n";
+    std::fs::write(&path, original).unwrap();
+    let (_, ignored) = Config::read(original).unwrap();
+    assert_eq!(ignored.retired, vec!["backup.git_remote", "tools.ci_hosts"]);
+    assert_eq!(ignored.unknown, vec!["futur"]);
+    let open = || {
+        ConfigStore::load_or_create(&path, None, std::sync::Arc::new(TestClock::default()), 0)
+            .unwrap()
+    };
+    assert_eq!(open().ignored_keys(), ignored);
+    assert_eq!(open().unknown_keys(), vec!["futur"]);
+
+    // Tout ou rien : une clé que le fichier ne porte pas, et rien n'est écrit.
+    let keys = |list: &[&str]| list.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+    let e = unset_keys(&path, &keys(&["backup.git_remote", "backup.absente"])).unwrap_err();
+    assert!(
+        e.to_string().contains("`backup.absente` n'est pas écrite"),
+        "{e}"
+    );
+    assert!(unset_keys(&path, &keys(&["absente.du.fichier"])).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    // Ce qui resterait ne se valide plus : rien n'est écrit non plus.
+    assert!(unset_keys(&path, &keys(&["owner"])).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    unset_keys(&path, &keys(&["backup.git_remote", "tools.ci_hosts"])).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# réglé à la main\n[owner]\ntelegram_user_id = 5 # moi\n\n[backup]\n\n[tools]\n\n[budget]\n# plafond du jour\ndaily_usd = 20.0\n\n[futur]\nactif = true\n"
+    );
+    let cs = open();
+    assert!(cs.ignored_keys().retired.is_empty());
+    assert_eq!(cs.unknown_keys(), vec!["futur"]);
+
+    // Une clé connue revient à sa valeur par défaut, une section inconnue s'en va entière,
+    // et le fichier relu par un daemon en marche ne les annonce plus.
+    unset_keys(&path, &keys(&["budget.daily_usd", "futur"])).unwrap();
+    cs.reload_from_disk().unwrap();
+    assert_eq!(
+        cs.config().budget.daily_usd,
+        Config::default().budget.daily_usd
+    );
+    assert_eq!(cs.ignored_keys(), Ignored::default());
+    assert_eq!(cs.config().owner.telegram_user_id, 5);
+}
+
 /// #106 : une instance en service garde le réseau qu'elle a écrit ; un fichier sans
 /// la clé prend le nouveau défaut, fermé.
 #[test]

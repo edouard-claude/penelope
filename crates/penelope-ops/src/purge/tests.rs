@@ -667,3 +667,36 @@ async fn sent_voice_notes_go_with_their_session_and_their_age() {
     assert_eq!(report["voice_out"], 1, "{report}");
     assert!(!old.exists() && !old.parent().unwrap().exists());
 }
+
+/// #469 : les flux des services (`<service>.err.log`), écrits par le système, n'étaient
+/// tournés par personne. La passe quotidienne les borne : copie gardée, fichier vidé en
+/// place, une fois par jour comme le reste de la rétention.
+#[tokio::test]
+async fn the_daily_pass_bounds_the_stream_logs_of_services() {
+    let (_dir, s, clock) = services().await;
+    let logs = s.platform.dirs.logs();
+    std::fs::create_dir_all(&logs).unwrap();
+    let over = penelope_observe::STREAM_LOG_MAX_BYTES as usize + 1;
+    let big = logs.join("inference.err.log");
+    let kept = logs.join("inference.err.log.1");
+    let small = logs.join("penelope.out.log");
+    std::fs::write(&big, vec![b'x'; over]).unwrap();
+    std::fs::write(&small, "peu").unwrap();
+    let len = |p: &std::path::Path| std::fs::metadata(p).unwrap().len() as usize;
+
+    retention_tick(&s).await.unwrap();
+    assert_eq!(len(&big), 0);
+    assert_eq!(len(&kept), over);
+    assert_eq!(std::fs::read(&small).unwrap(), b"peu");
+    assert!(!logs.join("penelope.out.log.1").exists());
+
+    // Pas avant la passe du lendemain.
+    std::fs::write(&big, vec![b'y'; over + 10]).unwrap();
+    clock.advance_hours(1);
+    retention_tick(&s).await.unwrap();
+    assert_eq!(len(&big), over + 10);
+    clock.advance_days(1);
+    retention_tick(&s).await.unwrap();
+    assert_eq!(len(&big), 0);
+    assert_eq!(len(&kept), over + 10, "une seule génération gardée");
+}
