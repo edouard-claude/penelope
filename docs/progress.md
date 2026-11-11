@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.108
+
+**Fichiers pid : ils partent avec leur processus, et le ramassage des orphelins ne tue
+plus un pid que le système a redonné (#454).**
+
+- Chaque `shell_exec`, hook ou vérification de mission posait `shell-<ulid>.pid`, et seul
+  `terminate` retirait le sien : une fin normale ou un groupe tué après un délai le
+  laissaient. Relevé sur une instance en service : 280 fichiers en six jours, dont 270
+  de commandes finies. Au démarrage suivant, `reap_orphans` envoyait `SIGKILL` au groupe
+  de tout pid noté encore vivant, sur la seule foi d'un `kill -0` ; l'un de ces numéros
+  était devenu celui d'un service de macOS.
+- Le fichier part avec le processus, quelle que soit la voie (`Drop` de `Child`) : fin
+  normale, `terminate`, groupe tué. Un enfant abandonné vivant garde le sien, c'est par
+  lui que le démarrage suivant le retrouve.
+- Le fichier porte le pid **et** sa date de lancement (`process/identity.rs`) : tics
+  depuis l'amorçage et identifiant d'amorçage sous Linux (`/proc`), `ps -o lstart=` en
+  UTC sous macOS. `reap_orphans` ne tue que si le pid vivant a été lancé à la date notée ;
+  sinon il retire le fichier sans rien tuer. Un fichier à l'ancien format (le pid seul)
+  ne désigne personne : au premier démarrage après la mise à jour, ceux qui restent sont
+  retirés sans signal.
+- Même contrôle pour l'autre endroit qui tue un pid relu du disque : la fiche d'un enfant
+  (`state/children`) note la date de lancement (`pid_started`). Au démarrage, un
+  sous-agent sans job n'est arrêté que si le pid est encore le sien, et un pid repris
+  par un autre processus ne garde plus un job ouvert. Une fiche d'avant cette version
+  reste lue (vivante par son pid, comme avant) mais ne fait arrêter personne.
+- Coût : sous macOS, un `ps` de plus par processus étiqueté (quelques millisecondes par
+  `shell_exec`) ; sous Linux, deux lectures de `/proc`.
+- Pas fait : un processus resté vivant après un crash d'une version antérieure n'est pas
+  ramassé au premier démarrage de celle-ci (son fichier n'a pas de date). Les enfants
+  d'une commande lancés en arrière-plan (`serveur &`) survivent à la fin de leur
+  commande, comme avant : le fichier ne suit que le chef du groupe.
+
 ### 1.0.107
 
 **Vault : une pratique ne perd plus ce qu'on y écrit à la main, et un bloc de code n'est

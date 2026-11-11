@@ -200,3 +200,94 @@ fn reap_orphans_removes_stale_pid_files() {
     assert!(!dir.path().join("mort.pid").exists());
     assert!(!dir.path().join("pasunpid.pid").exists());
 }
+
+#[cfg(unix)]
+async fn sleeper(host: &UnixProcessHost, tag: Option<&str>) -> Child {
+    let spec = ProcessSpec::new("sleep").arg("30");
+    let spec = match tag {
+        Some(t) => spec.pid_tag(t),
+        None => spec,
+    };
+    host.spawn(spec, None).await.unwrap()
+}
+
+/// #454 : 270 fichiers de processus morts s'étaient accumulés en six jours, parce que
+/// seul `terminate` retirait le sien.
+#[tokio::test]
+#[cfg(unix)]
+async fn a_pid_file_leaves_with_its_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = UnixProcessHost::new(dir.path());
+    let file = |tag: &str| dir.path().join(format!("{tag}.pid"));
+
+    // Fin normale.
+    let spec = ProcessSpec::new("sleep").arg("0.2").pid_tag("court");
+    let mut child = host.spawn(spec, None).await.unwrap();
+    let noted = std::fs::read_to_string(file("court")).unwrap();
+    assert_eq!(
+        identity::noted(&noted).map(|(pid, _)| pid),
+        Some(child.pid),
+        "le fichier porte le pid et sa date de lancement : {noted:?}"
+    );
+    child.inner.wait().await.unwrap();
+    drop(child);
+    assert!(!file("court").exists(), "fin normale : fichier retiré");
+
+    // Groupe tué après un délai, comme le fait `shell_exec`.
+    let mut child = sleeper(&host, Some("long")).await;
+    terminate_group(child.pid, std::time::Duration::from_millis(500)).await;
+    child.inner.wait().await.unwrap();
+    drop(child);
+    assert!(!file("long").exists(), "groupe tué : fichier retiré");
+
+    // Abandonné vivant : le fichier reste, c'est par lui que le démarrage suivant le
+    // retrouve.
+    let child = sleeper(&host, Some("vivant")).await;
+    let pid = child.pid;
+    drop(child);
+    assert!(file("vivant").exists());
+    assert_eq!(host.reap_orphans(dir.path()).unwrap(), vec![pid]);
+    assert!(!file("vivant").exists());
+}
+
+/// #454 : un fichier de six jours désignait le pid d'un service du système. Un pid vivant
+/// lancé à une autre date n'est pas le nôtre, et un fichier sans date ne désigne personne.
+#[tokio::test]
+#[cfg(unix)]
+async fn reap_orphans_spares_a_pid_that_was_given_to_another_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = UnixProcessHost::new(dir.path());
+    let mut other = sleeper(&host, None).await;
+    std::fs::write(
+        dir.path().join("repris.pid"),
+        format!("{}\nThu Jan 1 00:00:00 1970\n", other.pid),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ancien.pid"), other.pid.to_string()).unwrap();
+
+    assert_eq!(host.reap_orphans(dir.path()).unwrap(), Vec::<u32>::new());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        other.inner.try_wait().unwrap().is_none(),
+        "le processus d'un autre a été tué"
+    );
+    assert!(!dir.path().join("repris.pid").exists());
+    assert!(!dir.path().join("ancien.pid").exists());
+    host.terminate(&mut other, std::time::Duration::from_millis(500))
+        .await
+        .unwrap();
+}
+
+/// #65 reste vrai : même pid, même date de lancement, le groupe est tué.
+#[tokio::test]
+#[cfg(unix)]
+async fn reap_orphans_kills_the_process_it_noted() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = UnixProcessHost::new(dir.path());
+    let mut child = sleeper(&host, Some("orphelin")).await;
+
+    assert_eq!(host.reap_orphans(dir.path()).unwrap(), vec![child.pid]);
+    let status = child.inner.wait().await.unwrap();
+    assert_eq!(ExitInfo::of(&status).signal, Some(9));
+    assert!(!dir.path().join("orphelin.pid").exists());
+}

@@ -391,8 +391,7 @@ async fn stop_cancels_the_jobs_of_a_session_and_leaves_no_orphan() {
     let done = settled(&d, &job.id).await;
     assert_eq!(done.state, TaskState::Cancelled);
 
-    // Le processus du job était bien déclaré au ramasse-miettes (#65) : c'est ce qui
-    // fait que `reap_orphans` les connaît. Et il est mort : rien à tuer.
+    // Le processus est mort et son fichier pid est parti avec lui (#454) : rien à tuer.
     use penelope_platform::ProcessHost;
     let pid_dir = d.services.platform.dirs.pid_dir();
     let pids = |dir: &std::path::Path| {
@@ -404,7 +403,7 @@ async fn stop_cancels_the_jobs_of_a_session_and_leaves_no_orphan() {
             })
             .unwrap_or(0)
     };
-    assert!(pids(&pid_dir) >= 1, "le job n'a pas déclaré son processus");
+    assert_eq!(pids(&pid_dir), 0, "fichier pid laissé par un job fini");
     let orphans = d
         .services
         .platform
@@ -415,7 +414,6 @@ async fn stop_cancels_the_jobs_of_a_session_and_leaves_no_orphan() {
         orphans.is_empty(),
         "processus orphelins vivants : {orphans:?}"
     );
-    assert_eq!(pids(&pid_dir), 0, "étiquettes PID non ramassées");
 }
 
 /// #204 : au plafond, le job suivant est refusé avec ce qu'il faut pour s'en sortir,
