@@ -305,3 +305,96 @@ fn a_memory_entry_holds_one_fact() {
     // `mem_note` ne passe pas par là : une note de travail reste sans borne.
     write_filter(&long.replace('\n', " ")).expect("note de travail");
 }
+
+/// Une note que la synchronisation a abîmée : un octet hors UTF-8 au milieu d'une entrée.
+const BROKEN: &[u8] = b"# M\xc3\xa9moire de fond\n\n- Le serveur est \xff Paris ^A1\n- ACME paie \xc3\xa0 30 jours ^B2\n";
+
+/// #448 : une note illisible n'est pas une note vide. Aucun chemin d'écriture ne passe
+/// par-dessus : le fichier reste identique octet pour octet, et l'erreur le nomme.
+#[test]
+fn an_unreadable_note_is_never_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path();
+    let rel = "memoire.md";
+    std::fs::write(vault.join(rel), BROKEN).unwrap();
+    let add = |raw: &str| Ok(format!("{raw}- Nouveau fait ^C3\n"));
+
+    let err = update_note(vault, rel, None, "2026-11-11", add).unwrap_err();
+    assert!(
+        err.contains("note illisible : `memoire.md`") && err.contains("UTF-8"),
+        "{err}"
+    );
+    // Lue saine plus tôt, abîmée depuis : même refus au moment d'écrire.
+    let read = "# Mémoire de fond\n\n- Le serveur est à Paris ^A1\n";
+    let err = update_note_from(vault, rel, read, Some("A1"), "2026-11-11", add).unwrap_err();
+    assert!(err.contains("note illisible"), "{err}");
+    // L'écriture directe d'une note entière non plus.
+    let err = save_note(vault, rel, "# Mémoire de fond\n", "2026-11-11").unwrap_err();
+    assert!(err.contains("note illisible"), "{err}");
+    assert_eq!(std::fs::read(vault.join(rel)).unwrap(), BROKEN);
+
+    // Un dossier à la place de la note : une erreur aussi, pas un contenu vide.
+    std::fs::create_dir(vault.join("coeur.md")).unwrap();
+    assert!(update_note(vault, "coeur.md", None, "2026-11-11", add).is_err());
+}
+
+/// Une note absente reste le cas ordinaire : l'écriture la crée.
+#[test]
+fn a_missing_note_is_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path();
+    assert_eq!(read_note(vault, "memoire.md").unwrap(), "");
+    let (before, written) = update_note(vault, "memoire.md", None, "2026-11-11", |raw| {
+        Ok(format!("{raw}- Premier fait ^A1\n"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(before, "");
+    assert!(written.contains("- Premier fait ^A1"), "{written}");
+    assert_eq!(
+        std::fs::read_to_string(vault.join("memoire.md")).unwrap(),
+        written
+    );
+}
+
+/// #448, par les outils : `mem_remember` puis `mem_forget` sur une note abîmée échouent
+/// sans rien écrire ni rien indexer, et l'inventaire du vault (`doctor`,
+/// `penelope vault check`) nomme la note.
+#[tokio::test]
+async fn memory_tools_leave_an_unreadable_note_alone_and_the_inventory_names_it() {
+    let (_d, s) = services().await;
+    let vault = penelope_app::helpers::vault_dir(&s);
+    let uid = remember(&s, &vault, Level::Coeur, "ACME paie à 30 jours", "s1")
+        .await
+        .unwrap();
+    let rel = s.memory.get(&uid).await.unwrap().unwrap().file;
+    std::fs::write(vault.join(&rel), BROKEN).unwrap();
+
+    let err = remember(&s, &vault, Level::Coeur, "Le serveur est à Lyon", "s1")
+        .await
+        .unwrap_err();
+    assert!(err.contains("note illisible"), "{err}");
+    let err = forget(&s, &vault, &uid).await.unwrap_err();
+    assert!(err.contains("note illisible"), "{err}");
+    assert_eq!(std::fs::read(vault.join(&rel)).unwrap(), BROKEN);
+    // L'entrée déjà indexée reste, la nouvelle n'est pas entrée dans l'index.
+    let indexed = s.memory.by_level(Level::Coeur).await.unwrap();
+    assert_eq!(indexed.len(), 1, "{indexed:?}");
+    assert_eq!(indexed[0].uid, uid);
+
+    let inv = crate::vault_inventory::inventory(&s).await.unwrap();
+    let gap = inv
+        .not_indexed
+        .iter()
+        .find(|g| g.path == rel)
+        .unwrap_or_else(|| panic!("note illisible absente de l'inventaire : {inv:?}"));
+    assert!(
+        gap.reason
+            .starts_with("note illisible (son contenu n'est pas de l'UTF-8)"),
+        "{}",
+        gap.reason
+    );
+    // Le réindexage la saute sans retirer ce qu'il en connaissait.
+    reindex(&s, &vault).await.unwrap();
+    assert!(s.memory.get(&uid).await.unwrap().is_some());
+}

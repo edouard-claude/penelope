@@ -67,6 +67,17 @@ async fn a_stated_rule_is_promoted_once_with_history_and_review() {
 
     // La pré-image rend le fichier tel qu'il était.
     let id = hist[0]["id"].as_i64().unwrap();
+    // #448 : une note devenue illisible n'est pas écrasée par la restauration, qui ne
+    // pourrait pas garder l'état qu'elle remplace.
+    let healthy = std::fs::read(vault.join("profil.md")).unwrap();
+    std::fs::write(vault.join("profil.md"), b"- cass\xff\n").unwrap();
+    let err = restore(s, id).await.unwrap_err().to_string();
+    assert!(err.contains("note illisible"), "{err}");
+    assert_eq!(
+        std::fs::read(vault.join("profil.md")).unwrap(),
+        b"- cass\xff\n"
+    );
+    std::fs::write(vault.join("profil.md"), healthy).unwrap();
     let restored = restore(s, id).await.unwrap();
     assert_eq!(restored["file"], "profil.md");
     assert!(

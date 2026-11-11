@@ -295,7 +295,7 @@ fn save(services: &Services, s: &Sitting) -> anyhow::Result<()> {
         .chars()
         .take(10)
         .collect::<String>();
-    let current = std::fs::read_to_string(vault.join(&s.rel)).unwrap_or_default();
+    let current = crate::vault_ops::read_note(&vault, &s.rel).map_err(anyhow::Error::msg)?;
     let content = penelope_memory::wiki::replace_body(&current, &s.render(&date));
     crate::vault_ops::save_note(&vault, &s.rel, &content, &today(services))
         .map_err(anyhow::Error::msg)?;

@@ -2832,7 +2832,14 @@ penelope mem history --file profil.md
 ```
 
 puis `penelope mem restore <id>`. `penelope vault check` signale un frontmatter cassé, une
-pratique invalide, le contenu hors index, et un secret écrit à la main.
+pratique invalide, le contenu hors index, une note illisible, et un secret écrit à la main.
+
+**Une note illisible n'est jamais réécrite** (1.0.102). Un octet hors UTF-8 laissé par une
+synchronisation, des droits retirés, un dossier à la place du fichier : l'écriture
+(`mem_remember`, `mem_forget`, notes de session, rêve, `penelope mem restore`) échoue en
+nommant la note, et le fichier reste tel quel, octet pour octet. `penelope vault check` et
+`penelope doctor` la listent ; elle se répare à la main, dans un éditeur ou depuis
+l'historique git du vault.
 
 **Ce que `vault check` regarde.** Chaque ligne du vault, hors `sources/`, est jugée par le
 même critère que ce qui a le droit d'y être écrit : une clé de fournisseur (`ghp_…`,
@@ -2975,7 +2982,7 @@ dans un éditeur de wiki Markdown. L'outil `mem_neighbors` parcourt ce graphe.
 passages des fiches `sources/`. Ne le sont pas, à dessein : `inbox/` (en attente
 d'ingestion), `accueil/`, `audits/`, `archive/`, `attachments/` (originaux, indexés par
 leur fiche), `index.md`, `log.md`, `concepts/_a-definir.md`, les fichiers cachés. Tout le reste qui échappe à l'index (un PDF déposé à la main, un
-texte sans entrées, des lignes sans uid) est nommé par `penelope vault check`,
+texte sans entrées, des lignes sans uid, une note illisible) est nommé par `penelope vault check`,
 `penelope doctor` et le journal du daemon ; une recherche mémoire vide le rappelle au
 modèle, qui dit « je ne trouve rien dans ce que j'ai indexé » plutôt que « cela n'existe
 pas ».
