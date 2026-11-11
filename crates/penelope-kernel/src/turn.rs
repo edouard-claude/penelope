@@ -91,6 +91,13 @@ pub struct TurnMessage {
     pub enqueued_at: String,
 }
 
+/// Un payload de tour `message` qui ne porte rien à lire : ni texte, ni image.
+fn is_empty_message(payload: &Value) -> bool {
+    let text = payload.get("text").and_then(Value::as_str).unwrap_or("");
+    let images = payload.get("images").and_then(Value::as_array);
+    text.trim().is_empty() && images.is_none_or(|i| i.is_empty())
+}
+
 /// L'identité du canal ignore le message Telegram lui-même : deux messages du
 /// même chat et du même sujet partagent un tour, mais jamais deux sujets.
 fn origin_key(payload: &Value) -> Option<Value> {
@@ -164,6 +171,10 @@ impl TurnQueue {
 
     /// Ajoute un tour. `dedup_key` rend l'ajout idempotent (un `update_id` Telegram
     /// rejoué ne crée pas un second tour).
+    ///
+    /// Un tour `message` sans texte ni image est refusé (#461) : il n'y a rien à lire,
+    /// et un fournisseur rejette la requête vide. C'est à l'appelant de ne pas le
+    /// produire ; la file est le dernier endroit où tous passent.
     pub async fn enqueue(
         &self,
         session_id: &str,
@@ -172,6 +183,11 @@ impl TurnQueue {
         dedup_key: Option<String>,
         priority: i64,
     ) -> Result<Option<TurnId>> {
+        if kind == TurnKind::Message && is_empty_message(&payload) {
+            return Err(KernelError::other(
+                "message vide : ni texte ni image, rien à mettre en file",
+            ));
+        }
         let id = TurnId::new();
         let (sid, now) = (session_id.to_string(), self.clock.now_rfc3339());
         let idc = id.clone();

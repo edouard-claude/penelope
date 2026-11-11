@@ -39,6 +39,7 @@ mod secrets;
 mod sessions;
 mod subjects;
 mod trace;
+mod unsupported;
 mod workflows;
 
 const OWNER: i64 = 42;

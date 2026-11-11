@@ -77,7 +77,7 @@ async fn ten_wakes_without_the_owner_then_results_wait() {
         .enqueue(
             "s1",
             penelope_kernel::turn::TurnKind::Message,
-            json!({}),
+            json!({"text": "et après ?"}),
             None,
             0,
         )

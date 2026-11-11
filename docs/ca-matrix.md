@@ -138,7 +138,7 @@ UPDATE_CA_MATRIX=1 cargo test -p penelope-evals --test ca_matrix
 | CA 14.3 | Rate limit is respected without loss | `crates/penelope-telegram/src/api/tests.rs` |
 | CA 14.4 | Double click is idempotent | `crates/penelope-telegram/src/actions.rs` |
 | CA 14.5 | Non owner clicks are refused | `crates/penelope-telegram/src/actions.rs` |
-| CA 14.5 | Unauthorized users are rejected | `crates/penelope-telegram/src/lib.rs` |
+| CA 14.5 | Unauthorized users are rejected | `crates/penelope-telegram/src/tests.rs` |
 | CA 14.6 | Splitting never breaks a code block | `crates/penelope-telegram/src/render.rs` |
 
 ## §15. CLI et SSH

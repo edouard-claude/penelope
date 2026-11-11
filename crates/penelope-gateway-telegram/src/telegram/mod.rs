@@ -79,9 +79,9 @@ pub use keys::{parse_params, record_seen_chat};
 pub fn trace_role_model(cfg: &penelope_kernel::config::Config) -> Option<String> {
     trace::narrate::role_model(cfg).map(|n| n.model)
 }
-use media::Album;
 #[cfg(test)]
 use media::{ALBUM_WINDOW, audio_filename};
+use media::{Album, unsupported};
 #[cfg(test)]
 use outbox::shorten_failure;
 
@@ -615,6 +615,21 @@ impl TelegramGateway {
                     .await?
             }
             Incoming::Edited { .. } => {}
+            Incoming::Unsupported {
+                chat_id,
+                topic_id,
+                message_id,
+                what,
+                ..
+            } => {
+                // Dit au propriétaire, sans tour : il n'y a rien à faire lire (#461).
+                tracing::info!(
+                    field = what.as_deref().unwrap_or("aucun"),
+                    "message Telegram d'un type non pris en charge"
+                );
+                self.reply(chat_id, topic_id, Some(message_id), &unsupported(&what))
+                    .await?;
+            }
             Incoming::Unauthorized { from_id, .. } => {
                 // Aucune réponse : ne pas confirmer l'existence du bot à un inconnu.
                 tracing::warn!(from = from_id, "message Telegram d'un inconnu ignoré");
