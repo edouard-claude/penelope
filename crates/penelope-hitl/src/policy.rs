@@ -448,7 +448,14 @@ impl PolicyEngine {
         // **chaque** étape l'est (issue #150). Les étapes sont jugées une par une, avec
         // les mêmes règles et le même réseau ; il suffit qu'une seule manque pour que la
         // ligne entière reparte en carte.
+        // Une règle `Auto` n'abaisse pas une double confirmation (#445) : un appel de classe
+        // destructive que la politique fait confirmer deux fois ne passe sous aucune
+        // règle. « Pour cette session » sur une carte double tranchait d'un clic et posait
+        // une règle sur l'outil entier : les `mem_forget` suivants partaient sans carte.
+        // Un refus, lui, reste une règle comme une autre.
+        let twice = Self::asks_twice(cfg, risk);
         if tool == "shell_exec"
+            && !twice
             && let Some(steps) = separable_steps(args)
             && let Some(v) = self
                 .cover_each_step(cfg, &rules, &steps, args, risk, run_id, session_id)
@@ -457,11 +464,16 @@ impl PolicyEngine {
             return Ok(v);
         }
         let mut best: Option<&PolicyRule> = None;
+        let mut lowered: Option<&PolicyRule> = None;
         for r in &rules {
             if !r.matches_in(tool, server, args, workspace) {
                 continue;
             }
             if !open_in(r, run_id, session_id, scope) {
+                continue;
+            }
+            if twice && r.decision == PolicyDecision::Auto {
+                lowered.get_or_insert(r);
                 continue;
             }
             let better = match best {
@@ -492,12 +504,26 @@ impl PolicyEngine {
             });
         }
 
+        let mut reason = format!("politique par défaut pour la classe `{}`", risk.as_str());
+        if let Some(r) = lowered {
+            reason.push_str(&format!(
+                " ; la règle {} n'abaisse pas une double confirmation",
+                r.id
+            ));
+        }
         Ok(Verdict {
             decision: Self::default_for(cfg, risk),
             risk,
-            reason: format!("politique par défaut pour la classe `{}`", risk.as_str()),
+            reason,
             rule_id: None,
         })
+    }
+
+    /// Vrai quand aucune règle `Auto` ne vaut pour cette classe : la politique la fait
+    /// confirmer deux fois (#445). `doctor` s'en sert pour nommer les règles mortes.
+    #[must_use]
+    pub fn asks_twice(cfg: &penelope_kernel::config::McpPolicy, risk: RiskClass) -> bool {
+        risk == RiskClass::Destructive && Self::default_for(cfg, risk) == PolicyDecision::AskTwice
     }
 
     /// Vérifie qu'une règle couvre chaque étape d'une liste. `None` : ce n'est pas le

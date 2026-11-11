@@ -12,6 +12,47 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.99
+
+**Une double confirmation se donne à chaque fois : plus de fenêtre sur sa carte, et
+aucune règle ne l'abaisse (#445).**
+
+- La carte d'un appel `ask_twice` portait « Pour cette session » et « Toujours ». Ces deux
+  boutons tranchaient en **un** clic, sans passer par la seconde confirmation que
+  « Autoriser » impose, et posaient une règle `Auto` sur l'outil destructif entier : après
+  un « Pour cette session » sur un `mem_forget`, les oublis suivants partaient sans carte.
+  Trouvé à la relecture du code, confirmé dans la base de l'instance du propriétaire :
+  27 règles `Auto` actives sur des outils de classe destructive, 26 de session sur 8 outils
+  MCP et une « Toujours », servie 523 fois ; aucune sur `mem_forget`.
+- Côté cœur, `decide_approval` refuse toute fenêtre (run, session, toujours) sur une
+  demande à double confirmation, d'où qu'elle vienne : la demande reste en attente et
+  aucune règle n'est écrite. `penelope approve <id> --always` y répond par l'erreur ;
+  `penelope approve <id>`, commande tapée en toutes lettres, autorise une fois comme avant.
+- Côté canal, la carte double ne porte plus que l'autorisation et les refus. Le bouton
+  d'une carte envoyée avant la mise à jour mène à la seconde confirmation, comme
+  « Autoriser », et n'autorise qu'une fois.
+- Côté moteur (`PolicyEngine::evaluate_in`), une règle `Auto` ne vaut plus pour un appel de
+  classe destructive tant que la politique de cette classe est `ask_twice` : le verdict
+  reste la double confirmation, sans règle, et sa raison nomme la règle ignorée (« la règle
+  p_… n'abaisse pas une double confirmation »), qui ne compte pas d'usage. Un refus reste
+  une règle comme une autre. La déclaration du serveur (`[tool_policy]`), une autorisation
+  déclarée d'avance et un run autonome s'appliquent comme avant.
+- `penelope doctor` liste les règles « Toujours » devenues mortes (`policy_dead_rules`,
+  dans `penelope_app::dead_rules`), avec leur outil, leur identifiant et quoi en faire.
+- **Ce qui change pour les règles existantes** : un outil destructif couvert par un
+  « Toujours » redemande ses deux confirmations à chaque appel. Sur l'instance du
+  propriétaire, une règle est concernée, celle d'un outil MCP que son serveur annonce
+  destructif alors qu'il ne fait que marquer un élément. Trois sorties, écrites par le
+  propriétaire : corriger la classe de l'outil dans la déclaration du serveur
+  (`[tool_risk]`, la règle vaut alors à nouveau), lui imposer une politique
+  (`[tool_policy]`), ou ramener toute la classe à une confirmation
+  (`mcp.policy.destructive = "ask"`).
+- Pas fait ici : une politique `ask_twice` posée par `[tool_policy]` sur un outil qui n'est
+  pas de classe destructive cède toujours à une règle du propriétaire (`PolicyStage`), et
+  sa carte, qui porte `double`, ne propose plus de fenêtre pour en créer de nouvelle. Les
+  règles de session mortes ne sont pas listées par `doctor` : elles s'éteignent avec leur
+  session.
+
 ### 1.0.98
 
 **Règles « Toujours » : une variable qui détourne est refusée par `export` comme en

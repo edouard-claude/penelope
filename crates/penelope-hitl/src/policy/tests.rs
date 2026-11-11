@@ -656,3 +656,144 @@ async fn a_family_rule_does_not_cover_its_command_behind_a_hijacking_setup() {
         assert_eq!(verdict(hijacked).await, PolicyDecision::Ask, "{hijacked}");
     }
 }
+
+/// #445 : une règle `Auto` n'abaisse pas une double confirmation. « Pour cette session »
+/// sur la carte d'un `mem_forget` posait une règle sur l'outil entier, et les oublis
+/// suivants partaient sans carte ; « Toujours » en faisait autant pour un outil MCP
+/// destructif. Le verdict reste `ask_twice`, sans règle, et nomme celle qu'il ignore.
+#[tokio::test]
+async fn an_auto_rule_does_not_lower_a_double_confirmation() {
+    let e = engine();
+    let cfg = McpPolicy::default();
+    let session = e
+        .create_rule(
+            RuleScope::Tool,
+            Some("mem_forget"),
+            None,
+            None,
+            PolicyDecision::Auto,
+            PolicyWindow::Session,
+            Some("s_1"),
+        )
+        .await
+        .unwrap();
+    e.create_rule(
+        RuleScope::Tool,
+        Some("mcp__forge__delete_repo"),
+        Some("forge"),
+        None,
+        PolicyDecision::Auto,
+        PolicyWindow::Always,
+        None,
+    )
+    .await
+    .unwrap();
+    for (tool, server) in [
+        ("mem_forget", None),
+        ("mcp__forge__delete_repo", Some("forge")),
+    ] {
+        let v = e
+            .evaluate(
+                &cfg,
+                tool,
+                server,
+                &json!({"id": "m_1"}),
+                RiskClass::Destructive,
+                None,
+                Some("s_1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v.decision, PolicyDecision::AskTwice, "{tool}");
+        assert_eq!(v.rule_id, None, "{tool}");
+        assert!(
+            v.reason.contains("n'abaisse pas une double confirmation"),
+            "{}",
+            v.reason
+        );
+    }
+    let v = e
+        .evaluate(
+            &cfg,
+            "mem_forget",
+            None,
+            &json!({}),
+            RiskClass::Destructive,
+            None,
+            Some("s_1"),
+        )
+        .await
+        .unwrap();
+    assert!(v.reason.contains(&session.id), "{}", v.reason);
+    // Une règle ignorée ne compte pas d'usage : `/policies` la montre inerte.
+    let rules = e.active_rules().await.unwrap();
+    assert!(rules.iter().all(|r| r.hits == 0), "{rules:?}");
+
+    // La même règle vaut dès que l'appel n'est pas de classe destructive, ou que le
+    // propriétaire ramène cette classe à une seule confirmation.
+    let v = e
+        .evaluate(
+            &cfg,
+            "mem_forget",
+            None,
+            &json!({}),
+            RiskClass::Write,
+            None,
+            Some("s_1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(v.decision, PolicyDecision::Auto);
+    let single = McpPolicy {
+        destructive: "ask".into(),
+        ..McpPolicy::default()
+    };
+    let v = e
+        .evaluate(
+            &single,
+            "mem_forget",
+            None,
+            &json!({}),
+            RiskClass::Destructive,
+            None,
+            Some("s_1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(v.decision, PolicyDecision::Auto);
+    assert_eq!(v.rule_id.as_deref(), Some(session.id.as_str()));
+}
+
+/// Un refus, lui, reste une règle comme une autre sous une double confirmation (#445).
+#[tokio::test]
+async fn a_deny_rule_still_applies_under_a_double_confirmation() {
+    let e = engine();
+    let cfg = McpPolicy::default();
+    for decision in [PolicyDecision::Auto, PolicyDecision::Deny] {
+        e.create_rule(
+            RuleScope::Tool,
+            Some("mem_forget"),
+            None,
+            None,
+            decision,
+            PolicyWindow::Always,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let v = e
+        .evaluate(
+            &cfg,
+            "mem_forget",
+            None,
+            &json!({}),
+            RiskClass::Destructive,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(v.decision, PolicyDecision::Deny);
+    assert!(v.rule_id.is_some());
+}

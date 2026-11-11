@@ -193,7 +193,10 @@ impl TelegramGateway {
         let double = approval.payload["double"].as_bool().unwrap_or(false);
 
         match action.action.as_str() {
-            k::APPROVE if double => {
+            // Une carte double ne porte plus de fenêtre (#445) ; le bouton d'une carte
+            // envoyée avant mène lui aussi à la seconde confirmation, et n'autorise qu'une
+            // fois. Le cœur refuse de toute façon une fenêtre sur ces demandes.
+            k::APPROVE | k::APPROVE_RUN | k::APPROVE_ALWAYS if double => {
                 let _ = self.bot.edit_markup(chat_id, message_id, None).await;
                 self.send_destructive_confirm(chat_id, topic_id, &approval)
                     .await?;

@@ -621,3 +621,84 @@ fn a_hijacking_setup_leaves_the_line_without_a_family() {
         [json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: "mkdir"}})]
     );
 }
+
+async fn forget_card(
+    s: &Arc<AgentServices>,
+    p: &Arc<MockProvider>,
+    sid: &str,
+) -> (AgentLoop, String) {
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call("c1", "mem_forget", json!({"id": "m_1"}))],
+    ));
+    let loop_ = AgentLoop::new(s.clone(), p.clone());
+    let id = match loop_.run_memory(request(sid), &exec(false)).await.unwrap() {
+        TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+        other => panic!("{other:?}"),
+    };
+    (loop_, id)
+}
+
+/// #445 : une double confirmation se donne une fois. « Pour cette session » et « Toujours »
+/// tranchaient la carte d'un clic et posaient une règle sur l'outil destructif entier ; le
+/// cœur refuse maintenant toute fenêtre, d'où qu'elle vienne (bouton d'une ancienne carte,
+/// `penelope approve --always`), et la demande reste à trancher.
+#[tokio::test]
+async fn a_double_confirmation_takes_no_window() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    let (loop_, id) = forget_card(&s, &p, &sid).await;
+    let card = s.approvals.get(&id).await.unwrap().unwrap();
+    assert_eq!(card.payload["double"], true, "{:#}", card.payload);
+
+    for window in [
+        PolicyWindow::Run,
+        PolicyWindow::Session,
+        PolicyWindow::Always,
+    ] {
+        let d = Decision {
+            window,
+            ..Decision::approve_once("cli")
+        };
+        let err = loop_.decide_approval(&id, &d).await.unwrap_err();
+        assert!(
+            err.to_string().contains("double confirmation"),
+            "{window:?} : {err}"
+        );
+    }
+    let card = s.approvals.get(&id).await.unwrap().unwrap();
+    assert_eq!(card.state, penelope_hitl::ApprovalState::Pending);
+    assert!(s.policies.active_rules().await.unwrap().is_empty());
+
+    assert!(
+        loop_
+            .decide_approval(&id, &Decision::approve_once("telegram"))
+            .await
+            .unwrap()
+            .approved()
+    );
+    assert!(s.policies.active_rules().await.unwrap().is_empty());
+}
+
+/// #445 : une règle de session déjà posée sur `mem_forget` ne dispense plus l'oubli suivant
+/// de ses deux confirmations.
+#[tokio::test]
+async fn a_session_rule_does_not_spare_the_next_destructive_call() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    s.policies
+        .create_rule(
+            penelope_hitl::RuleScope::Tool,
+            Some("mem_forget"),
+            None,
+            None,
+            PolicyDecision::Auto,
+            PolicyWindow::Session,
+            Some(&sid),
+        )
+        .await
+        .unwrap();
+    let (_loop, id) = forget_card(&s, &p, &sid).await;
+    let card = s.approvals.get(&id).await.unwrap().unwrap();
+    assert_eq!(card.payload["double"], true, "{:#}", card.payload);
+}

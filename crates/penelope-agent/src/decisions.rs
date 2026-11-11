@@ -113,10 +113,24 @@ pub async fn decide_approval(
     approval_id: &str,
     decision: &Decision,
 ) -> anyhow::Result<Decided> {
-    if let Some(a) = s.approvals.get(approval_id).await?
-        && a.kind == penelope_hitl::ApprovalKind::EffectUnknown
-    {
-        return decide_uncertain_effect(s, &a, decision).await;
+    if let Some(a) = s.approvals.get(approval_id).await? {
+        if a.kind == penelope_hitl::ApprovalKind::EffectUnknown {
+            return decide_uncertain_effect(s, &a, decision).await;
+        }
+        // Une double confirmation se donne à chaque fois (#445) : « Pour cette session »
+        // et « Toujours » y tranchaient d'un clic, sans seconde carte, et posaient une
+        // règle sur un outil destructif entier. Le refus est ici, pas dans le canal : un
+        // bouton d'une ancienne carte ou `approve --always` n'y échappent pas.
+        if a.state == penelope_hitl::ApprovalState::Pending
+            && a.payload["double"] == Value::Bool(true)
+            && decision.approved
+            && decision.window != PolicyWindow::Once
+        {
+            anyhow::bail!(
+                "demande {approval_id} à double confirmation : elle s'autorise une fois, \
+                 jamais « pour cette session » ni « Toujours »"
+            );
+        }
     }
     match s.approvals.decide(approval_id, decision).await {
         Ok(a) => {

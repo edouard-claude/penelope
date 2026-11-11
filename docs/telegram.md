@@ -115,7 +115,8 @@ répertoire, serveur MCP), la classe de risque et la politique. « Toujours » d
 porte : une famille de commandes, un répertoire, un hôte. Quand la ligne n'a pas de famille
 (commande composée), il le dit avant le clic : le bouton devient « ✅ Autoriser (pas de
 règle possible) » et les qualificatifs portent « aucune règle possible : commande
-composée ». Variables : `intention`,
+composée ». Une carte à seconde confirmation ne porte ni « Pour cette session » ni
+« Toujours » : elle se donne à chaque fois. Variables : `intention`,
 `action`, `details`, `alerte` ; un gabarit surchargé plus ancien garde `outil`, `serveur`,
 `risque`, `arguments` et `raison`.
 
