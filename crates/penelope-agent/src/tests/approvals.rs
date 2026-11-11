@@ -596,3 +596,28 @@ fn a_scratch_script_has_no_family() {
         );
     }
 }
+
+/// #444 : « Toujours » n'écrit aucune règle sur une ligne qu'un réglage du shell détourne.
+/// Une règle `mkdir` née de `export PATH=./bin && mkdir c` aurait couvert un autre `mkdir`
+/// que celui qu'on lit ; un réglage anodin laisse la famille de la suite.
+#[test]
+fn a_hijacking_setup_leaves_the_line_without_a_family() {
+    for command in [
+        "export PATH=./bin && mkdir c",
+        "export GIT_SSH_COMMAND=./x && git fetch",
+        "GIT_SSH=./x git fetch",
+        "printf -v PATH %s ./bin && mkdir c",
+        "trap ./x EXIT && mkdir c",
+    ] {
+        let args = json!({"command": command});
+        assert!(
+            always_creates_no_rule("shell_exec", Some(&args)),
+            "règle à tort : {command}"
+        );
+    }
+    let args = json!({"command": "export LC_ALL=C && mkdir c"});
+    assert_eq!(
+        arg_patterns("shell_exec", Some(&args)),
+        [json!({"command": {penelope_hitl::policy::CMD_PREFIX_OP: "mkdir"}})]
+    );
+}

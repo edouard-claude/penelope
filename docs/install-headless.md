@@ -1389,7 +1389,8 @@ pour elle-même (issue #150). Conséquences :
   lit ; `tools.shell_allow` et `tools.shell_allow_network` suivent la même règle. Une
   seule étape non couverte fait repartir la ligne entière en carte ;
 - une étape qui ne fait que lire (`ls -la tmp/x*`) ou que régler le shell (`cd`, `export`,
-  `set`) n'a besoin d'aucune règle : c'est ce qui créait vingt règles mortes sur vingt-sept ;
+  `set`) n'a besoin d'aucune règle : c'est ce qui créait vingt règles mortes sur vingt-sept.
+  Un réglage n'est traversé que s'il ne détourne rien (#444, plus bas) ;
 - une étape qui ne nomme pas ce qu'elle lance — `sh -c`, `sudo`, `env`, `xargs`,
   `timeout`, `python3 -c` — laisse la ligne composée : une règle `sh` couvrirait n'importe
   quel code.
@@ -1404,8 +1405,28 @@ redirection (`>`, `<`) ; une substitution (`$(…)`, `` `…` ``, `$VAR`) ou un 
 (`\`), même entre guillemets doubles, où ils gardent leur pouvoir dans un shell ; un saut
 de ligne ; une négation (`!` en tête) ; une apostrophe ou un guillemet non fermé ; ou une
 affectation d'environnement qui détourne ce qui sera exécuté (`PATH=`, `HOME=`, `IFS=`,
-`ENV=`, `BASH_ENV=`, `DYLD_*`, `LD_*`, `GIT_CONFIG*`, `GIT_SSH_COMMAND=`, `NODE_OPTIONS=`,
-`PYTHONSTARTUP=`, `PERL5OPT=`, `RUBYOPT=`…).
+`ENV=`, `BASH_ENV=`, `DYLD_*`, `LD_*`, `GIT_*`, `NODE_OPTIONS=`, `PYTHONSTARTUP=`,
+`PERL5OPT=`, `RUBYOPT=`…).
+
+**Une variable qui détourne, en préfixe ou par `export` (#444).** `GIT_SSH_COMMAND=… git
+fetch` et `export GIT_SSH_COMMAND=… && git fetch` sont la même ligne : composée, donc
+demandée à chaque fois, quelles que soient les règles. Détournent : le chemin de recherche
+(`PATH`, et `path` sous zsh), `HOME`, `XDG_CONFIG_HOME` (git y lit sa configuration),
+`RIPGREP_CONFIG_PATH` (le fichier peut porter `--pre=<programme>`), les bibliothèques
+préchargées, les options d'un interpréteur, **toute variable `GIT_*`** hors celles qui ne
+font que renseigner (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_TERMINAL_PROMPT`,
+`GIT_OPTIONAL_LOCKS`, `GIT_MERGE_AUTOEDIT`, `GIT_ADVICE`, `GIT_PROGRESS_DELAY`,
+`GIT_NO_LAZY_FETCH`, `GIT_LFS_SKIP_SMUDGE`), et toute variable dont le nom finit par
+`PAGER`, `EDITOR`, `ASKPASS` ou `BROWSER`, sauf pour couper le programme (`PAGER=cat`,
+`AWS_PAGER=`, `GIT_EDITOR=true`, `BROWSER=/usr/bin/false`).
+
+Un réglage du shell n'est traversé que sous une forme connue : `cd`, `pushd`, `popd`,
+`umask`, `ulimit`, `shopt`, `unalias` ; `export`, `readonly`, `local` et `unset` sur des
+noms qui ne détournent rien, sans option ; `set` avec `-e`, `-u`, `-x`, `-f`, `-C`, `-v`
+et `-o errexit|nounset|xtrace|pipefail|noglob|noclobber|verbose`. Le reste laisse la ligne
+composée : `set -k`, `set -a`, `shopt -o`, `alias`, `typeset`, `declare`, `hash`, `trap`, `setopt`,
+`enable`, `autoload`, `printf -v` (qui pose une variable, `PATH` comprise). La carte nomme
+la variable ou le réglage en cause.
 
 **Un tube vers une lecture pure n'est pas un enchaînement.** `glab api … | jq -r '…'`,
 `cat f | grep x | head -20`, `ls | wc -l` : ce qui agit est la première étape, et les
