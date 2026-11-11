@@ -13,8 +13,11 @@ use penelope_store::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod freshness;
 mod search;
 mod signals;
+
+use freshness::age_days;
 
 pub use search::Progress;
 #[cfg(test)]
@@ -36,7 +39,14 @@ pub struct IndexedEntry {
     pub confiance: Option<f64>,
     pub statut: String,
     pub depuis: Option<String>,
+    /// Jour du dernier changement de contenu ou de la dernière validation (#451) : voir
+    /// `index/freshness.rs`. Donné à `upsert`, c'est le jour à poser si l'entrée est
+    /// nouvelle ou a changé.
     pub maj: String,
+    /// Validation par le propriétaire (annotation `revue` du vault), plancher de `maj`.
+    /// Lue du vault seulement : une entrée relue depuis l'index ne la porte pas.
+    #[serde(skip)]
+    pub revue: Option<String>,
     pub pinned: bool,
     pub declencheurs: Vec<String>,
     pub content_hash: String,
@@ -67,6 +77,7 @@ impl IndexedEntry {
             statut: "active".into(),
             depuis: e.annotations.depuis.clone(),
             maj: maj.to_string(),
+            revue: freshness::validated_on(e.annotations.revue.as_deref()),
             pinned: matches!(level, Level::Profil | Level::Coeur),
             declencheurs: e.annotations.declencheurs.clone(),
             content_hash: penelope_kernel::canonical::sha256_hex(e.text.as_bytes()),
@@ -339,25 +350,15 @@ impl MemoryIndex {
         &self.store
     }
 
-    /// Insère ou met à jour une entrée, avec sa provenance.
+    /// Insère ou met à jour une entrée, avec sa provenance. `maj` n'avance que si le
+    /// contenu a changé (`freshness::UPSERT`).
     pub async fn upsert(&self, e: &IndexedEntry, prov: &Provenance) -> penelope_store::Result<()> {
         let row = e.clone();
         let p = prov.clone();
         self.store
             .write(move |tx| {
                 tx.execute(
-                    "INSERT INTO mem_entries(uid, file, anchor, level, etype, slug, text, quand,
-                        importance, projet, confiance, statut, depuis, maj, pinned, declencheurs,
-                        content_hash, retired_at)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
-                     ON CONFLICT(uid) DO UPDATE SET
-                        file=excluded.file, anchor=excluded.anchor, level=excluded.level,
-                        etype=excluded.etype, slug=excluded.slug, text=excluded.text,
-                        quand=excluded.quand, importance=excluded.importance,
-                        projet=excluded.projet, confiance=excluded.confiance,
-                        statut=excluded.statut, depuis=excluded.depuis, maj=excluded.maj,
-                        pinned=excluded.pinned, declencheurs=excluded.declencheurs,
-                        content_hash=excluded.content_hash, retired_at=excluded.retired_at",
+                    freshness::UPSERT,
                     params![
                         row.uid,
                         row.file,
@@ -376,7 +377,8 @@ impl MemoryIndex {
                         row.pinned as i64,
                         serde_json::to_string(&row.declencheurs).unwrap_or_default(),
                         row.content_hash,
-                        row.retired_at
+                        row.retired_at,
+                        row.revue
                     ],
                 )?;
 
@@ -725,22 +727,6 @@ impl MemoryIndex {
     }
 }
 
-fn age_days(maj: &str, now_ms: i64) -> f64 {
-    let parsed = chrono::NaiveDate::parse_from_str(maj, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|dt| dt.and_utc().timestamp_millis())
-        .or_else(|| {
-            chrono::DateTime::parse_from_rfc3339(maj)
-                .ok()
-                .map(|d| d.timestamp_millis())
-        });
-    match parsed {
-        Some(ms) => ((now_ms - ms).max(0) as f64) / 86_400_000.0,
-        None => 0.0,
-    }
-}
-
 /// Mots vides du français (et de l'anglais courant) : « comment » ramenait 330 lignes et
 /// noyait le seul mot qui distingue la requête (#411).
 const STOPWORDS: &[&str] = &[
@@ -928,6 +914,7 @@ fn row_to_entry(
         statut: r.get(11)?,
         depuis: r.get(12)?,
         maj: r.get(13)?,
+        revue: None,
         pinned: r.get::<_, i64>(14)? != 0,
         declencheurs: serde_json::from_str(&declencheurs).unwrap_or_default(),
         content_hash: r.get(16)?,
@@ -957,6 +944,7 @@ pub fn simple_entry(uid: &str, text: &str, level: Level, maj: &str) -> IndexedEn
         statut: "active".into(),
         depuis: None,
         maj: maj.to_string(),
+        revue: None,
         pinned: matches!(level, Level::Profil | Level::Coeur),
         declencheurs: Vec::new(),
         content_hash: penelope_kernel::canonical::sha256_hex(text.as_bytes()),

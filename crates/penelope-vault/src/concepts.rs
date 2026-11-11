@@ -505,6 +505,7 @@ fn source_links_entry(
         statut: "active".into(),
         depuis: None,
         maj: s.clock.now_rfc3339().chars().take(10).collect(),
+        revue: None,
         pinned: false,
         declencheurs: Vec::new(),
         retired_at: None,

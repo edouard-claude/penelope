@@ -639,3 +639,171 @@ async fn a_contested_entry_is_no_longer_served_automatically() {
     i.reset_outcomes("conteste").await.unwrap();
     assert!(i.contested_uids().await.unwrap().is_empty(), "gardée");
 }
+
+fn clocked() -> (Arc<TestClock>, MemoryIndex) {
+    let clock = Arc::new(TestClock::default());
+    let index = MemoryIndex::new(Store::open_memory().unwrap(), clock.clone());
+    (clock, index)
+}
+
+async fn maj_of(i: &MemoryIndex, uid: &str) -> String {
+    i.get(uid).await.unwrap().unwrap().maj
+}
+
+async fn score_of(i: &MemoryIndex, query: &str) -> f64 {
+    i.search(query, None, &SearchFilter::explicit(), &[])
+        .await
+        .unwrap()[0]
+        .score
+}
+
+/// #451 : une réindexation qui ne change rien ne rajeunit pas l'entrée. 200 jours plus
+/// tard elle a toujours sa date, et la récence a fait baisser son score.
+#[tokio::test]
+async fn a_reindex_without_change_keeps_the_date_and_lets_the_score_decay() {
+    let (clock, i) = clocked();
+    let text = "Le déploiement passe par CapRover.";
+    i.upsert(
+        &simple_entry("u1", text, Level::Cure, "2026-01-01"),
+        &prov(),
+    )
+    .await
+    .unwrap();
+    let fresh = score_of(&i, "deploiement").await;
+
+    clock.advance_days(200);
+    i.upsert(
+        &simple_entry("u1", text, Level::Cure, "2026-07-20"),
+        &prov(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-01-01");
+    let aged = score_of(&i, "deploiement").await;
+    assert!(
+        aged < fresh * 0.6,
+        "plus d'une demi-vie : {aged} contre {fresh}"
+    );
+}
+
+/// #451 : le texte ou une annotation qui change fait avancer la date ; un déplacement
+/// (fichier, section, niveau) ou un retour après retrait, non.
+#[tokio::test]
+async fn only_a_change_of_content_moves_the_date() {
+    let (_clock, i) = clocked();
+    let old = simple_entry(
+        "u1",
+        "Le déploiement passe par CapRover.",
+        Level::Cure,
+        "2026-01-01",
+    );
+    i.upsert(&old, &prov()).await.unwrap();
+
+    let mut moved = old.clone();
+    (moved.file, moved.level, moved.maj) = ("notes.md".into(), Level::Projet, "2026-03-01".into());
+    moved.anchor = Some("Rétrogradées".into());
+    i.upsert(&moved, &prov()).await.unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-01-01", "déplacée");
+
+    i.retire("u1").await.unwrap();
+    i.upsert(&moved, &prov()).await.unwrap();
+    assert_eq!(
+        maj_of(&i, "u1").await,
+        "2026-01-01",
+        "revenue après retrait"
+    );
+
+    let mut annotated = moved.clone();
+    (annotated.importance, annotated.maj) = (Some(8), "2026-04-01".into());
+    i.upsert(&annotated, &prov()).await.unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-04-01", "annotation changée");
+
+    let mut rewritten = simple_entry(
+        "u1",
+        "Le déploiement passe par Kamal.",
+        Level::Projet,
+        "2026-05-01",
+    );
+    rewritten.importance = Some(8);
+    i.upsert(&rewritten, &prov()).await.unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-05-01", "texte changé");
+}
+
+/// #451 : la validation du propriétaire (annotation `revue`) rafraîchit l'entrée sans
+/// qu'elle change, jamais au-delà du jour de l'indexation ; une valeur qui n'est pas un
+/// jour est ignorée.
+#[tokio::test]
+async fn a_validation_by_the_owner_refreshes_the_entry() {
+    let (_clock, i) = clocked();
+    let raw = "- Le déploiement passe par CapRover. ^u1 <!-- revue: 2026-03-10 -->\n";
+    let (entries, _) = crate::vault::parse_entries(raw);
+    let from = |day: &str| {
+        IndexedEntry::from_vault(&entries[0], "notes.md", Level::Cure, "fait", None, day)
+    };
+    let mut plain = from("2026-01-01");
+    plain.revue = None;
+    i.upsert(&plain, &prov()).await.unwrap();
+
+    i.upsert(&from("2026-06-01"), &prov()).await.unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-03-10");
+    i.upsert(&from("2026-09-01"), &prov()).await.unwrap();
+    assert_eq!(maj_of(&i, "u1").await, "2026-03-10", "validée une fois");
+
+    let mut ahead = from("2026-09-01");
+    ahead.revue = Some("2030-01-01".into());
+    i.upsert(&ahead, &prov()).await.unwrap();
+    assert_eq!(
+        maj_of(&i, "u1").await,
+        "2026-09-01",
+        "pas plus tard que le jour donné"
+    );
+
+    assert_eq!(freshness::validated_on(Some("bientôt")), None);
+    assert_eq!(
+        freshness::validated_on(Some(" 2026-03-10 ")).as_deref(),
+        Some("2026-03-10")
+    );
+}
+
+/// #451 : un index reconstruit (`store rebuild`) ne date pas tout du jour de la
+/// reconstruction. La provenance et l'historique survivent : l'entrée reprend sa
+/// dernière écriture connue, sinon sa première observation.
+#[tokio::test]
+async fn a_rebuilt_index_dates_entries_from_what_survives() {
+    let (_clock, i) = clocked();
+    for uid in ["u1", "u2"] {
+        let e = simple_entry(
+            uid,
+            "Le déploiement passe par CapRover.",
+            Level::Cure,
+            "2026-09-16",
+        );
+        i.upsert(&e, &prov()).await.unwrap();
+    }
+    i.store()
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO mem_history(uid, file, op, ts) VALUES
+                    ('u2', 'profil.md', 'replace_entry', '2026-10-02T03:00:00Z'),
+                    ('u2', 'profil.md', 'demote_entry', '2026-10-20T03:00:00Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    i.clear_derived().await.unwrap();
+
+    for uid in ["u1", "u2", "u3"] {
+        let e = simple_entry(
+            uid,
+            "Le déploiement passe par CapRover.",
+            Level::Cure,
+            "2026-11-09",
+        );
+        i.upsert(&e, &prov()).await.unwrap();
+    }
+    assert_eq!(maj_of(&i, "u1").await, "2026-09-16", "première observation");
+    assert_eq!(maj_of(&i, "u2").await, "2026-10-02", "dernière écriture");
+    assert_eq!(maj_of(&i, "u3").await, "2026-11-09", "entrée nouvelle");
+}
