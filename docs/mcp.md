@@ -331,6 +331,12 @@ external = "ask"
 unknown = "ask"
 ```
 
+Tant que la classe destructive est à `ask_twice`, aucune règle « Toujours » ou « Pour cette
+session » ne dispense un outil destructif de ses deux confirmations, et la carte n'en
+propose pas. Un outil annoncé destructif à tort par son serveur se corrige dans la
+déclaration (`[tool_risk]`, par exemple `marquer = "write"`) : il retrouve alors la carte
+simple et ses règles.
+
 Un résultat d'outil qui contient `isError: true` est transmis tel quel au modèle : c'est
 une réponse, pas une panne du harnais, et le modèle doit pouvoir la corriger seul.
 

@@ -187,8 +187,9 @@ impl TelegramGateway {
         };
         // Le libellé « Pour ce run » du gabarit vaut « pour cette session » en conversation.
         // Sans arguments vus, pas de fenêtre ni de « Toujours » : une règle couvrirait
-        // l'outil entier (#83, régression de #67).
-        let windows = a.payload.get("arguments").is_some();
+        // l'outil entier (#83, régression de #67). Une double confirmation n'en porte pas
+        // non plus : elle se donne à chaque fois (#445).
+        let windows = a.payload.get("arguments").is_some() && !double;
         let session_label = self.session_grant_label(a).await;
         let windowed = [
             tokens.get(k::APPROVE_RUN).cloned().unwrap_or_default(),

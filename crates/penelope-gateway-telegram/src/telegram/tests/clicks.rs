@@ -296,3 +296,50 @@ async fn a_panicking_click_task_leaves_no_click_in_flight() {
     assert!(task.await.is_err());
     assert!(g.clicks_idle());
 }
+
+/// #445 : la carte d'une double confirmation ne porte ni « Pour cette session » ni
+/// « Toujours ». Le jeton d'une fenêtre, resté sur une carte envoyée avant, mène à la
+/// seconde confirmation comme « Autoriser » : il ne tranche rien et ne pose aucune règle.
+#[tokio::test]
+async fn a_double_confirmation_card_offers_no_window() {
+    let (_d, g, t, _p) = gateway().await;
+    let s = g.daemon.services.clone();
+    let id = request(
+        &g,
+        penelope_hitl::ApprovalKind::ToolCall,
+        "mem_forget",
+        json!({"double": true, "arguments": {"id": "m_1"}}),
+    )
+    .await;
+    let a = s.approvals.get(&id).await.unwrap().unwrap();
+    g.send_approval_card(OWNER, None, &a).await.unwrap();
+    g.flush_outbox().await.unwrap();
+    let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
+    let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
+    assert!(labels.iter().any(|l| l.contains("Autoriser")), "{labels:?}");
+    assert!(labels.iter().any(|l| l.contains("Refuser")), "{labels:?}");
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l.contains("session") || l.contains("run") || l.contains("Toujours")),
+        "{labels:?}"
+    );
+
+    for action in [k::APPROVE_RUN, k::APPROVE_ALWAYS] {
+        t.clear().await;
+        press(&g, &button_for(&g, action, &id).await).await;
+        g.flush_outbox().await.unwrap();
+        assert_eq!(
+            state(&g, &id).await,
+            penelope_hitl::ApprovalState::Pending,
+            "{action}"
+        );
+        assert!(
+            texts(&t.calls_to(tg::SEND_MESSAGE).await)
+                .iter()
+                .any(|x| x.contains("Seconde confirmation")),
+            "{action}"
+        );
+    }
+    assert!(s.policies.active_rules().await.unwrap().is_empty());
+}

@@ -1498,6 +1498,17 @@ et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et b
 répertoire, un autre hôte redemandent. `/policies` (et `penelope policies`) affiche la
 portée de chaque règle et permet de la retirer.
 
+Une **double confirmation** se donne à chaque fois. La carte d'un appel de classe
+destructive (`mem_forget`, un outil MCP annoncé destructif, un réglage sensible) ne porte
+ni « Pour cette session » ni « Toujours », `penelope approve <id> --always` y est refusé,
+et aucune règle n'en dispense l'appel suivant : une règle « Toujours » posée sur un tel
+outil par une version antérieure ne s'applique plus, la carte la nomme et `penelope doctor`
+la liste (`policy_dead_rules`). Un refus, lui, reste appliqué. Trois sorties, toutes
+écrites par le propriétaire : corriger la classe d'un outil MCP annoncé destructif à tort
+(`[tool_risk]` dans la déclaration du serveur, la règle vaut alors à nouveau), imposer sa
+politique à l'outil (`[tool_policy]`), ou ramener toute la classe à une confirmation
+(`mcp.policy.destructive = "ask"`).
+
 Une suite de tests (`cargo test`, `go test`, `npm|pnpm|yarn test`, Jest, Vitest, `pytest`,
 `make test`) ne renvoie au modèle que le résumé et les sections d'échec (nom, assertion,
 pile courte) ; une autre commande en échec à longue sortie, sa tête, sa queue et ses
