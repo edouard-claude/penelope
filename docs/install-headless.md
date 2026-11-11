@@ -2006,7 +2006,7 @@ et `/stop` interrompt tout le lot.
 | `mem_get` | read | Lit une entrée de mémoire par uid ou par slug. (à la demande) |
 | `mem_neighbors` | read | Voisins d'une note dans le graphe du vault : concepts d'une source, sources et entrées de mémoire qui citent un concept (liens `[[slug]]` sortants et entrants). (à la demande) |
 | `mem_note` | write | Note une observation dans le journal du jour. |
-| `mem_remember` | write | Écrit directement en mémoire. (à la demande) |
+| `mem_remember` | write | Écrit directement en mémoire ce que le propriétaire vient de dire ou de confirmer. (à la demande) |
 | `mem_search` | read | Recherche dans la mémoire curée, dans les documents ingérés (`vault/sources`, passages encadrés comme non fiables, `slug` pour un seul document) et, sur demande explicite, épisodique. |
 | `read_terminal` | read | Lit les dernières lignes d'un terminal que le propriétaire a ouvert avec `penelope term` et accepté de partager : ce qu'il a lancé, ses erreurs. (à la demande) |
 | `return_value` | read | Renvoie le résultat d'une étape de workflow. (dans un workflow) |
@@ -2695,6 +2695,15 @@ fond — par une carte, jamais par une écriture directe. Une réponse vide, san
 exploitables ou réduite à un seul fait pour une longue entrée est retentée une fois ;
 si elle reste insuffisante, la commande explique l'échec sans créer de carte. `penelope
 doctor` liste les entrées actives au-delà de la borne et le Cœur au-delà de son budget.
+
+**Qui l'a dit.** `mem_remember` signe l'entrée de son origine (1.0.101) : `owner` quand le
+texte reprend une phrase que tu as écrite dans le tour, même reformulée ; `agent` sinon.
+Un tour qui a lu du contenu externe (page web, outil réseau, outil MCP, commande lancée
+avec le réseau, passage d'un document ingéré, message transféré) n'écrit rien par
+`mem_remember` hors de tes mots : l'outil refuse en nommant la source, l'agent te pose la
+question, et ton « oui » au message suivant ouvre un tour propre. Le rêve ne protège comme
+ta parole que les règles d'origine `owner` ; le profil, lui, reste protégé quel que soit
+son auteur.
 
 **Les lots et leur coût.** La passe juge les candidats par lots d'au plus
 `memory.dream_batch` = `40`. Une sortie coupée fait rejouer le même début de lot deux

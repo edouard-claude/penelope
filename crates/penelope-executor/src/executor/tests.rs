@@ -4,6 +4,7 @@ use penelope_kernel::clock::TestClock;
 mod config;
 mod hooks;
 mod mcp;
+mod memory;
 
 #[tokio::test]
 async fn invalid_clone_source_is_rejected_before_approval_even_via_tool_call() {

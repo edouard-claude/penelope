@@ -47,13 +47,12 @@ impl NativeToolExecutor {
         Ok(o)
     }
 
-    /// Messages du propriétaire du tour en cours : messages utilisateur depuis la dernière
-    /// réponse finale, hors déclencheurs, relances et contenus transférés. Vide pour un
-    /// tour interne.
-    async fn owner_turn_messages(&self) -> ToolResult<Vec<String>> {
-        if matches!(self.env.origin, Origin::Internal { .. }) {
-            return Ok(Vec::new());
-        }
+    /// Le tour en cours, relu dans le transcript : ce que le propriétaire y a dit et ce
+    /// qui y est entré d'ailleurs ([`turn_trust`]).
+    pub(super) async fn turn_trust(&self) -> ToolResult<turn_trust::TurnTrust> {
+        /// Un tour de plus de deux cents messages n'est pas relu en entier : il est alors
+        /// tenu pour contaminé.
+        const WINDOW: i64 = 200;
         let s = &self.services;
         let sid = self.env.session_id.clone();
         let last: i64 = s
@@ -67,31 +66,18 @@ impl NativeToolExecutor {
             })
             .await
             .map_err(|e| ToolError::Other(e.to_string()))?;
-        let entries = s
+        let from = (last - WINDOW).max(0);
+        let messages: Vec<_> = s
             .context
             .history
-            .load(&self.env.session_id, (last - 60).max(0))
+            .load(&self.env.session_id, from)
             .await
-            .map_err(|e| ToolError::Other(e.to_string()))?;
-        let mut out = Vec::new();
-        for e in entries.iter().rev() {
-            let m = &e.message;
-            match m.role {
-                penelope_llm::types::Role::Assistant if m.tool_calls.is_empty() => break,
-                penelope_llm::types::Role::User => {
-                    let text = m.text();
-                    if text.starts_with("[déclencheur planifié]")
-                        || text.starts_with("[relance]")
-                        || text.contains("<<<DONNÉES NON FIABLES")
-                    {
-                        continue;
-                    }
-                    out.push(text);
-                }
-                _ => {}
-            }
-        }
-        Ok(out)
+            .map_err(|e| ToolError::Other(e.to_string()))?
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+        let internal = matches!(self.env.origin, Origin::Internal { .. });
+        Ok(turn_trust::read(&messages, internal, from == 0))
     }
 
     /// Vrai si `citation` figure mot pour mot (espaces et casse près) dans un message du
@@ -108,8 +94,9 @@ impl NativeToolExecutor {
             return Ok(false);
         }
         Ok(self
-            .owner_turn_messages()
+            .turn_trust()
             .await?
+            .owner
             .iter()
             .any(|t| norm(t).contains(&needle)))
     }
@@ -117,11 +104,7 @@ impl NativeToolExecutor {
     /// Phrase d'un message du propriétaire du tour que `texte` reprend de près, même
     /// reformulé (issue #245) : « Retiens que X » noté sans citation reste sa parole.
     pub(super) async fn said_by_owner(&self, texte: &str) -> ToolResult<Option<String>> {
-        Ok(self
-            .owner_turn_messages()
-            .await?
-            .iter()
-            .find_map(|m| penelope_memory::owner_quote::owner_statement(texte, m)))
+        Ok(self.turn_trust().await?.said(texte))
     }
 
     pub(super) async fn tool_search(&self, args: &Value) -> ToolResult<ToolOutcome> {

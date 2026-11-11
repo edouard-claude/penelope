@@ -62,8 +62,12 @@ pub struct Provenance {
 
 impl Provenance {
     pub fn owner(session_id: &str, kind: &str, at: &str) -> Provenance {
+        Provenance::new(Origin::Owner, session_id, kind, at)
+    }
+    /// Provenance d'une entrée écrite dans une session, signée de son origine.
+    pub fn new(origin: Origin, session_id: &str, kind: &str, at: &str) -> Provenance {
         Provenance {
-            origin: Origin::Owner,
+            origin,
             session_kind: kind.to_string(),
             observed_at: at.to_string(),
             supersedes_uid: None,
