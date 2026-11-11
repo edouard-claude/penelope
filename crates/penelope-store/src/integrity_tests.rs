@@ -2,7 +2,9 @@ use super::*;
 
 /// #158 : SQLite embarqué à jour. La 3.46.0 (mai 2024) portait un faux positif de
 /// l'`integrity-check` FTS5, corrigé en 3.46.1 ; c'est la source du verdict que le
-/// reste de ce lot apprend à ne pas croire sur parole.
+/// reste de ce lot apprend à ne pas croire sur parole. Depuis RUSTSEC-2026-0459
+/// (CVE-2026-119375, lecture de mémoire non initialisée avec un `-wal` forgé), le plancher
+/// est 3.54 : redescendre sous lui rouvrirait l'avis.
 #[test]
 fn the_bundled_sqlite_is_recent_enough() {
     let v = rusqlite::version();
@@ -10,8 +12,8 @@ fn the_bundled_sqlite_is_recent_enough() {
     assert!(parts.len() >= 2, "version illisible : {v}");
     let (major, minor) = (parts[0], parts[1]);
     assert!(
-        (major, minor) >= (3, 50),
-        "SQLite {v} : au moins 3.50 attendu (issue #158)"
+        (major, minor) >= (3, 54),
+        "SQLite {v} : au moins 3.54 attendu (issue #158, RUSTSEC-2026-0459)"
     );
 }
 
@@ -48,6 +50,42 @@ fn only_a_verdict_about_derived_indexes_is_repairable() {
         fts_tables("malformed inverted index for FTS5 table main.x\"; DROP TABLE y--"),
         None
     );
+}
+
+/// SQLite 3.54 nomme la même panne autrement : FTS5 dit où il l'a trouvée, et le contrôle
+/// rend sa phrase au lieu de « malformed inverted index ». Ne pas la reconnaître, c'était
+/// refuser de démarrer pour un index qui se reconstruit (#158, #153).
+#[test]
+fn the_fts5_wording_of_sqlite_3_54_names_the_table_too() {
+    for line in [
+        "fts5: corruption found reading blob 10 from table \"messages_fts\"",
+        "fts5: corruption on page 3, segment 7, table \"messages_fts\"",
+        "fts5: corruption in table \"messages_fts\"",
+        "fts5: corrupt structure record for table \"messages_fts\"",
+        "fts5: checksum mismatch for table \"messages_fts\"",
+    ] {
+        assert_eq!(
+            fts_tables(line),
+            Some(vec!["messages_fts".to_string()]),
+            "{line}"
+        );
+    }
+    let both = "fts5: corruption in table \"mem_fts\"\n\
+                malformed inverted index for FTS5 table main.messages_fts";
+    assert_eq!(
+        fts_tables(both),
+        Some(vec!["mem_fts".to_string(), "messages_fts".to_string()])
+    );
+    // Rien d'autre qu'une panne d'index, et rien d'autre qu'un identifiant.
+    for line in [
+        "fts5: syntax error near \"x\"",
+        "fts5: missing row 4 from content table \"main\".\"messages\"",
+        "fts5: corruption in table \"x\"; DROP TABLE y--\"",
+        "fts5: corruption in table messages_fts",
+        "fts5: corruption in table \"mem_fts\"\nrow 12 missing from index messages_session",
+    ] {
+        assert_eq!(fts_tables(line), None, "{line}");
+    }
 }
 
 /// #158 : `quick_check` rend **plusieurs** lignes. N'en lire qu'une cachait une

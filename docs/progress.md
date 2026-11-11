@@ -45,6 +45,25 @@ La charte et les spécifications sont dans `design/v1/`.
   --open-files-in-pager`, `sort -ofichier`, `uniq entrée sortie`, `fd -xsh`) sont le lot
   #443.
 
+**SQLite embarqué monté à 3.54.1, runners macOS en `macos-15` : la CI était rouge sans
+rapport avec le lot.**
+
+- `cargo deny` refusait `libsqlite3-sys` 0.35 depuis l'avis RUSTSEC-2026-0459
+  (CVE-2026-119375) : avant 3.54, SQLite peut rendre de la mémoire non initialisée quand
+  il ouvre une base avec un fichier `-wal` forgé. Pénélope n'ouvre que ses propres bases,
+  l'exposition tient à une sauvegarde ou une base qu'un tiers aurait écrite. `rusqlite`
+  passe de 0.37 à 0.41, SQLite de 3.50.2 à 3.54.1 ; le plancher du test
+  `the_bundled_sqlite_is_recent_enough` monte à 3.54.
+- SQLite 3.54 ne nomme plus de la même façon un index FTS5 abîmé : `fts5: corruption found
+  reading blob 10 from table "messages_fts"` au lieu de `malformed inverted index for FTS5
+  table main.messages_fts`. `fts_tables` ne reconnaissait que l'ancienne phrase : un index
+  de recherche abîmé aurait arrêté le daemon au démarrage au lieu d'être reconstruit
+  (#158, puis retour arrière de #153). Les deux écritures sont reconnues ; ce sont les
+  tests de #158 qui l'ont vu, avant toute release.
+- GitHub ne sert plus `macos-14` (« The configuration 'macos-14-arm64-us-default' is not
+  supported ») : le job `verification` était annulé à la seconde. `ci.yml`, `release.yml`
+  et `signature.yml` passent à `macos-15`.
+
 ### 1.0.95
 
 **Mission : un testeur qui exécute, des verdicts en fichiers, la main rendue après trois

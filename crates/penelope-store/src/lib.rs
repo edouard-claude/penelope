@@ -490,17 +490,41 @@ fn check_lines(conn: &Connection, pragma: &str) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+/// La table qu'accuse une ligne de verdict qui parle d'un index FTS5, sous ses deux
+/// écritures. Jusqu'à SQLite 3.53, le contrôle d'intégrité dit `malformed inverted index
+/// for FTS5 table main.messages_fts`. Depuis 3.54 (monté pour RUSTSEC-2026-0459), FTS5 dit
+/// lui-même où il a trouvé la panne et le contrôle rend sa phrase : `fts5: corruption found
+/// reading blob 10 from table "messages_fts"`, `fts5: corruption on page …`, `fts5:
+/// corruption in table …`, `fts5: corrupt structure record for table …`, `fts5: checksum
+/// mismatch for table …`. L'ancienne reste rendue quand FTS5 n'a rien précisé.
+fn fts_fault(line: &str) -> Option<&str> {
+    const MARK: &str = "malformed inverted index for FTS5 table ";
+    const FTS5: [&str; 3] = [
+        "corruption ",
+        "corrupt structure record ",
+        "checksum mismatch ",
+    ];
+    if let Some(name) = line.strip_prefix(MARK) {
+        return Some(name.trim());
+    }
+    let rest = line.strip_prefix("fts5: ")?;
+    if !FTS5.iter().any(|f| rest.starts_with(f)) {
+        return None;
+    }
+    let (_, name) = rest.strip_suffix('"')?.rsplit_once("table \"")?;
+    Some(name)
+}
+
 /// Les tables FTS5 nommées par un verdict qui ne parle **que** d'index dérivés.
 ///
-/// `malformed inverted index for FTS5 table main.messages_fts` désigne un index
-/// reconstructible, pas une donnée perdue : aucune donnée première ne vit dans un index
-/// FTS — `messages_fts` se refait de `messages`, `mem_fts` du vault. Une seule ligne qui
-/// parle d'autre chose, et ce n'est plus vrai : on ne touche alors à rien.
+/// Une telle ligne désigne un index reconstructible, pas une donnée perdue : aucune donnée
+/// première ne vit dans un index FTS — `messages_fts` se refait de `messages`, `mem_fts` du
+/// vault. Une seule ligne qui parle d'autre chose, et ce n'est plus vrai : on ne touche
+/// alors à rien.
 pub fn fts_tables(verdict: &str) -> Option<Vec<String>> {
-    const MARK: &str = "malformed inverted index for FTS5 table ";
     let mut out = Vec::new();
     for line in verdict.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let name = line.strip_prefix(MARK)?.trim();
+        let name = fts_fault(line)?;
         // Le nom vient de SQLite, mais il finit dans une requête : rien d'autre qu'un
         // identifiant, éventuellement qualifié par son schéma.
         let bare = name.rsplit('.').next().unwrap_or(name);

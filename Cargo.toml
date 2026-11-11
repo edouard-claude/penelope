@@ -38,7 +38,9 @@ toml_edit = "0.22"
 # corrigé un faux positif de l'integrity-check FTS5, et les versions suivantes
 # plusieurs défauts de FTS5 ; le lot #158 corrige le comportement côté Pénélope, celui-ci
 # corrige la source.
-rusqlite = { version = "0.37", features = ["bundled", "blob", "functions", "limits"] }
+# 0.41 (SQLite 3.54.1) depuis RUSTSEC-2026-0459 : avant 3.54, une base ouverte avec un
+# `-wal` forgé rend de la mémoire non initialisée. Ne pas redescendre sous 0.41.
+rusqlite = { version = "0.41", features = ["bundled", "blob", "functions", "limits"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 arc-swap = "1"
 tracing = "0.1"
