@@ -42,6 +42,8 @@ pub struct ServerConfig {
 
     // --- comportement ---
     pub lazy_start: bool,
+    /// `"10m"` ; `"0"` ou `0` : jamais (`idle_after`).
+    #[serde(deserialize_with = "duration_text")]
     pub idle_timeout: String,
     pub timeout: String,
     pub max_concurrency: usize,
@@ -61,6 +63,22 @@ pub struct ServerConfig {
     /// Surcharges de classe de risque par outil : les annotations ne sont que des indices.
     pub tool_risk: BTreeMap<String, String>,
     pub timeout_per_tool: BTreeMap<String, String>,
+}
+
+/// Une durée s'écrit en texte (`"10m"`). Un nombre nu est gardé tel quel : `idle_timeout =
+/// 0` dans un fichier et `penelope mcp edit <nom> idle_timeout 0` disent « jamais » (#457)
+/// au lieu d'une erreur de type ; tout autre nombre reste refusé, faute d'unité.
+fn duration_text<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Text(String),
+        Number(i64),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Text(s) => s,
+        Raw::Number(n) => n.to_string(),
+    })
 }
 
 impl Default for ServerConfig {
@@ -208,8 +226,10 @@ impl ServerConfig {
         }
         penelope_kernel::config::parse_duration(&self.timeout)
             .map_err(|e| bad(&format!("`timeout` : {e}")))?;
-        penelope_kernel::config::parse_duration(&self.idle_timeout)
-            .map_err(|e| bad(&format!("`idle_timeout` : {e}")))?;
+        if self.idle_timeout.trim() != "0" {
+            penelope_kernel::config::parse_duration(&self.idle_timeout)
+                .map_err(|e| bad(&format!("`idle_timeout` : {e}")))?;
+        }
         penelope_kernel::config::parse_duration(&self.elicitation_timeout)
             .map_err(|e| bad(&format!("`elicitation_timeout` : {e}")))?;
         if penelope_platform::sandbox::ProfileKind::parse(&self.sandbox_profile).is_none() {
@@ -243,9 +263,16 @@ impl ServerConfig {
             .unwrap_or_else(|_| std::time::Duration::from_secs(600))
     }
 
-    pub fn idle_duration(&self) -> std::time::Duration {
-        penelope_kernel::config::parse_duration(&self.idle_timeout)
-            .unwrap_or_else(|_| std::time::Duration::from_secs(600))
+    /// Inactivité au bout de laquelle un serveur paresseux s'arrête. `None` pour `"0"`
+    /// (ou une durée nulle) : démarré à la demande, il ne s'arrête plus de lui-même
+    /// (#457), ce qu'il faut à un serveur qui garde un état en mémoire.
+    pub fn idle_after(&self) -> Option<std::time::Duration> {
+        if self.idle_timeout.trim() == "0" {
+            return None;
+        }
+        let d = penelope_kernel::config::parse_duration(&self.idle_timeout)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(600));
+        (!d.is_zero()).then_some(d)
     }
 
     /// Délai pour un outil précis, sinon le délai du serveur (§8.3).
@@ -381,6 +408,34 @@ mod tests {
         c.validate().unwrap();
         assert_eq!(c.effective_transport(), "stdio");
         assert_eq!(c.timeout_duration().as_secs(), 30);
+    }
+
+    /// #457 : `idle_timeout = "0"` garde vivant un serveur démarré à la demande. `"0"`
+    /// seul, sans unité, que `parse_duration` refuse, est accepté pour ce réglage.
+    #[test]
+    fn a_zero_idle_timeout_means_never() {
+        let mut c = ServerConfig::stdio("pont", "pont-mcp", &[]);
+        assert_eq!(c.idle_after(), Some(std::time::Duration::from_secs(600)));
+        for never in ["0", " 0 ", "0s", "0m"] {
+            c.idle_timeout = never.into();
+            c.validate().unwrap();
+            assert_eq!(c.idle_after(), None, "{never}");
+        }
+        c.idle_timeout = "30m".into();
+        assert_eq!(c.idle_after(), Some(std::time::Duration::from_secs(1800)));
+        c.idle_timeout = "bientôt".into();
+        assert!(c.validate().is_err());
+
+        // Le nombre nu d'un fichier ou de `mcp edit` : zéro passe, cinq n'a pas d'unité.
+        let file = |raw: &str| parse_file(raw, "pont").unwrap().remove(0);
+        let zero = file("command = \"pont-mcp\"\nidle_timeout = 0\n");
+        assert_eq!(zero.idle_after(), None);
+        zero.validate().unwrap();
+        assert!(
+            file("command = \"pont-mcp\"\nidle_timeout = 5\n")
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]

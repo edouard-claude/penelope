@@ -23,6 +23,8 @@ impl McpSupervisor {
             .slot(&tool.server)
             .await
             .ok_or_else(|| format!("le serveur `{}` n'est plus déclaré dans mcp.d", tool.server))?;
+        // En usage jusqu'au retour, saisies du propriétaire comprises (#457).
+        let _in_use = slot.in_use();
         let mut client = self.ensure_live(&slot).await?;
         // Le serveur peut demander une confirmation pendant l'appel : elle doit revenir
         // dans la conversation qui l'a provoqué (issue #143). Le garde tombe avec
@@ -279,7 +281,11 @@ impl McpSupervisor {
             .slot(server)
             .await
             .ok_or_else(|| format!("serveur MCP inconnu : `{server}`"))?;
+        let _in_use = slot.in_use();
         let client = self.ensure_live(&slot).await?;
+        // Suivre une tâche est un usage : le serveur qui y travaille ne s'arrête pas pour
+        // inactivité entre deux relevés (#457).
+        slot.info(|i| i.last_used_ms = self.now_ms());
         let v = client
             .task_get(task_ref)
             .await

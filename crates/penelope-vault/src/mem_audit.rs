@@ -115,7 +115,7 @@ async fn facts(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result<F
             .statuses()
             .await
             .iter()
-            .filter(|st| st.state == penelope_mcp::supervisor::ServerState::Ready)
+            .filter(|st| st.available())
             .count() as i64;
     }
     let vault = penelope_app::helpers::vault_dir(s);

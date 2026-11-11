@@ -12,6 +12,46 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.111
+
+**MCP : un serveur paresseux s'arrête enfin après `idle_timeout`, et n'est plus sondé
+pendant qu'il travaille (#457).**
+
+- L'entretien (un passage toutes les quinze secondes) sondait tout serveur silencieux
+  depuis une minute et, le `ping` rendu, écrivait `last_used = maintenant`. L'inactivité
+  ne dépassait donc jamais une minute : aucun serveur `lazy_start` ne s'est jamais arrêté
+  après ses dix minutes. Sur l'instance, cinq serveurs paresseux vivaient depuis deux à
+  six jours. Le test sautait onze minutes d'un coup, ce que la production ne fait pas.
+- **Deux horloges** par serveur : le dernier usage (connexion, appel d'outil, lecture de
+  ressource, relevé d'une tâche) mesure l'inactivité et l'ordre d'éviction ; la dernière
+  sonde réussie n'espace que les sondes. L'éviction au-delà de `mcp.max_processes`
+  redevient une vraie LRU : la sonde nivelait tous les serveurs à la même minute.
+- **Un appel en cours est un usage** (`InUse`, posé avant la connexion, levé au retour).
+  `last_used` n'était écrit qu'à la fin : un outil qui travaille plus d'une minute était
+  sondé en plein travail, et perdait sa connexion s'il ne rendait pas le `ping` en dix
+  secondes. Tant qu'un appel tourne, saisie du propriétaire comprise, le serveur n'est ni
+  sondé, ni arrêté, ni évincé ; l'arrêt d'entretien relit le compteur sous le verrou de la
+  connexion, un appel ne trouve jamais le serveur fermé sous lui.
+- **La sonde ne fait plus la queue** : tous les jetons de concurrence pris, `health()`
+  attendait le sien hors de tout délai et retenait l'entretien de tous les serveurs. Sans
+  jeton libre elle rend la main, le serveur est occupé et non muet. Les sondes d'un
+  passage partent ensemble : trois serveurs muets coûtaient trente secondes, dix
+  maintenant.
+- `idle_timeout = "0"` : démarré à la demande, le serveur ne s'arrête plus de lui-même.
+  Pour ceux qui gardent un état en mémoire (session de navigateur, pont de messagerie).
+  `"0s"` vaut pareil ; il arrêtait le serveur à chaque passage.
+- Un serveur **au repos** (arrêté, outils connus, il démarre au premier appel) compte
+  parmi les prêts (`ServerStatus::available`) dans `status`, l'accueil Telegram et l'axe
+  « Portée » de l'audit mémoire. Ces compteurs ne lisaient que les serveurs vivants : le
+  repos devenu l'état ordinaire, l'accueil aurait affiché « MCP (0/5) » et l'audit aurait
+  conseillé de brancher un serveur. `doctor` tenait déjà le repos pour sain.
+- **À savoir en installant** : les serveurs paresseux vont s'arrêter après dix minutes
+  sans usage, et le premier appel suivant paie un démarrage. Poser `idle_timeout = "0"`
+  (`penelope mcp edit <nom> idle_timeout 0`) sur ceux qui ne doivent pas perdre leur état.
+- Non fait : `mcp.idle_timeout`, la clé globale, reste sans effet (le délai se règle par
+  serveur) ; le modèle pur `supervisor::evict_lru` de `penelope-mcp`, que le superviseur
+  n'appelle pas, est laissé tel quel.
+
 ### 1.0.110
 
 **Workflow : la mission d'une étape `mission` suit son run, en pause comme au budget

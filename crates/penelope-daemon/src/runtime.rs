@@ -406,7 +406,7 @@ impl Core {
                 .await?
                 .len() as u64,
             approvals_pending: s.approvals.count_pending().await? as u64,
-            mcp_ready: mcp.iter().filter(|m| m.state.is_usable()).count() as u64,
+            mcp_ready: mcp.iter().filter(|m| m.available()).count() as u64,
             mcp_total: mcp.len() as u64,
             turns_queued: s.turns.pending_count().await? as u64,
             rss_mb: rss_mb(),

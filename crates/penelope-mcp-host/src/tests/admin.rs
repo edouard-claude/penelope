@@ -14,12 +14,100 @@ fn with_prompts(tools: Arc<Mutex<Vec<Value>>>) -> Handler {
     })
 }
 
-/// Un serveur lazy inactif au-delà de son délai est arrêté ; un serveur vivant muet
-/// depuis une minute est sondé, et perdu s'il ne répond plus.
+/// L'entretien comme en production : un passage toutes les quinze secondes.
+async fn tick(clock: &TestClock, sup: &McpSupervisor, ms: i64) {
+    for _ in 0..ms / 15_000 {
+        clock.advance_ms(15_000);
+        sup.maintenance().await;
+    }
+}
+
+async fn running(sup: &McpSupervisor) -> Vec<String> {
+    sup.statuses()
+        .await
+        .into_iter()
+        .filter(|s| s.running)
+        .map(|s| s.name)
+        .collect()
+}
+
+async fn status(sup: &McpSupervisor, name: &str) -> ServerStatus {
+    sup.statuses()
+        .await
+        .into_iter()
+        .find(|s| s.name == name)
+        .unwrap()
+}
+
+async fn pings(fake: &FakeConnector, name: &str) -> usize {
+    fake.last_transport(name)
+        .call_log()
+        .await
+        .iter()
+        .filter(|(m, _)| m == "ping")
+        .count()
+}
+
+async fn use_once(sup: &McpSupervisor, name: &str) {
+    sup.call(
+        &format!("mcp__{name}__list_issues"),
+        &json!({}),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+}
+
+/// #457 : chaque sonde rendue remettait l'inactivité à zéro, et aucun serveur paresseux
+/// ne s'arrêtait jamais (cinq vivaient depuis deux à six jours). L'ancien test sautait
+/// onze minutes d'un coup, ce que la production ne fait pas : ici l'horloge avance par
+/// pas de quinze secondes. Le serveur répond à ses sondes et s'arrête quand même au bout
+/// de `idle_timeout` ; `"0"` et `eager_schemas` le gardent ; l'appel suivant le relance.
 #[tokio::test]
-async fn maintenance_stops_idle_servers_and_checks_health() {
+async fn an_idle_lazy_server_stops_although_it_answers_the_probe() {
     let (_d, _s, clock, fake, sup) = setup().await;
-    fake.serve("lent", server(two_tools()));
+    for name in ["expose", "garde", "lent"] {
+        fake.serve(name, server(two_tools()));
+    }
+    declare(
+        &sup,
+        "expose",
+        "idle_timeout = \"10m\"\neager_schemas = true\n",
+    );
+    declare(&sup, "garde", "");
+    declare(&sup, "lent", "idle_timeout = \"10m\"\n");
+    sup.reload().await;
+    // `penelope mcp edit garde idle_timeout 0` : le zéro arrive en nombre.
+    sup.edit("garde", &json!({"idle_timeout": 0}))
+        .await
+        .unwrap();
+    for name in ["expose", "garde", "lent"] {
+        use_once(&sup, name).await;
+    }
+    let kept = fake.opened("garde");
+
+    tick(&clock, &sup, 9 * 60_000 + 45_000).await;
+    assert_eq!(running(&sup).await, vec!["expose", "garde", "lent"]);
+    assert_eq!(pings(&fake, "lent").await, 9, "une sonde par minute");
+
+    tick(&clock, &sup, 15_000).await;
+    assert_eq!(running(&sup).await, vec!["expose", "garde"]);
+    let lent = status(&sup, "lent").await;
+    assert_eq!(lent.state, ServerState::Configured, "{lent:?}");
+    assert!(lent.last_error.is_none(), "{lent:?}");
+
+    use_once(&sup, "lent").await;
+    assert_eq!(fake.opened("lent"), 2, "relancé à la demande");
+    tick(&clock, &sup, 20 * 60_000).await;
+    assert_eq!(running(&sup).await, vec!["expose", "garde"]);
+    assert_eq!(fake.opened("garde"), kept, "jamais relancé");
+}
+
+/// Ce que la sonde faisait déjà : un serveur vivant qui ne répond plus est perdu, avec
+/// son erreur, bien avant son délai d'inactivité.
+#[tokio::test]
+async fn a_mute_server_is_lost_at_its_first_probe() {
+    let (_d, _s, clock, fake, sup) = setup().await;
     let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let a2 = alive.clone();
     let base = server(two_tools());
@@ -32,49 +120,92 @@ async fn maintenance_stops_idle_servers_and_checks_health() {
             base(m, p)
         }),
     );
-    declare(&sup, "lent", "idle_timeout = \"10m\"\n");
     declare(&sup, "sonde", "idle_timeout = \"1h\"\n");
     sup.reload().await;
-    for name in ["lent", "sonde"] {
-        sup.call(
-            &format!("mcp__{name}__list_issues"),
-            &json!({}),
-            Default::default(),
-        )
-        .await
-        .unwrap();
-    }
-    let running = |sup: Arc<McpSupervisor>| async move {
-        sup.statuses()
-            .await
-            .into_iter()
-            .filter(|s| s.running)
-            .map(|s| s.name)
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(running(sup.clone()).await, vec!["lent", "sonde"]);
+    use_once(&sup, "sonde").await;
 
-    clock.advance_ms(2 * 60_000);
-    sup.maintenance().await;
-    assert_eq!(
-        running(sup.clone()).await,
-        vec!["lent", "sonde"],
-        "sondés, toujours là"
-    );
-    let log = fake.last_transport("sonde").call_log().await;
-    assert!(log.iter().any(|(m, _)| m == "ping"), "{log:?}");
+    tick(&clock, &sup, 2 * 60_000).await;
+    assert_eq!(running(&sup).await, vec!["sonde"], "sondé, toujours là");
+    assert_eq!(pings(&fake, "sonde").await, 2);
 
     alive.store(false, Ordering::SeqCst);
-    clock.advance_ms(11 * 60_000);
-    sup.maintenance().await;
-    assert!(running(sup.clone()).await.is_empty());
-    let sonde = sup
-        .statuses()
-        .await
-        .into_iter()
-        .find(|s| s.name == "sonde")
-        .unwrap();
+    tick(&clock, &sup, 60_000).await;
+    assert!(running(&sup).await.is_empty());
+    let sonde = status(&sup, "sonde").await;
     assert!(sonde.last_error.is_some(), "{sonde:?}");
+}
+
+/// #457 : `last_used` n'est écrit qu'à la fin d'un appel. Un outil qui travaille trois
+/// minutes passait pour un serveur muet : sondé en plein travail, il perdait sa connexion
+/// s'il ne rendait pas le `ping` en dix secondes, et un `idle_timeout` plus court que
+/// l'appel l'aurait arrêté. Tant que l'appel tourne : ni sonde, ni arrêt ; l'inactivité
+/// compte de sa fin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_in_progress_is_neither_probed_nor_stopped() {
+    let (_d, _s, clock, fake, sup) = setup().await;
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let working = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let base = server(two_tools());
+    fake.serve(
+        "long",
+        Arc::new(move |m, p| {
+            if m == "tools/call" {
+                working.store(true, Ordering::SeqCst);
+                let _ = entered_tx.send(());
+                let _ = release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(30));
+                working.store(false, Ordering::SeqCst);
+            }
+            // Un serveur à un seul fil ne rend pas de `ping` pendant qu'il travaille.
+            if m == "ping" && working.load(Ordering::SeqCst) {
+                return Err(McpError::Timeout {
+                    method: "ping".into(),
+                    ms: 10_000,
+                });
+            }
+            base(m, p)
+        }),
+    );
+    declare(&sup, "long", "idle_timeout = \"2m\"\n");
+    sup.reload().await;
+
+    let call = tokio::spawn({
+        let sup = sup.clone();
+        async move {
+            sup.call("mcp__long__list_issues", &json!({}), Default::default())
+                .await
+        }
+    });
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(10)))
+        .await
+        .unwrap()
+        .expect("l'appel est parti");
+
+    tick(&clock, &sup, 3 * 60_000).await;
+    let long = status(&sup, "long").await;
+    assert!(long.running && long.last_error.is_none(), "{long:?}");
+    assert_eq!(
+        pings(&fake, "long").await,
+        0,
+        "pas de sonde pendant l'appel"
+    );
+    assert_eq!(fake.opened("long"), 1);
+
+    release_tx.send(()).unwrap();
+    call.await.unwrap().expect("l'appel aboutit");
+    tick(&clock, &sup, 105_000).await;
+    assert_eq!(
+        running(&sup).await,
+        vec!["long"],
+        "deux minutes après sa fin"
+    );
+    assert_eq!(pings(&fake, "long").await, 1);
+    tick(&clock, &sup, 15_000).await;
+    assert!(running(&sup).await.is_empty());
 }
 
 /// Le serveur MCP de Slack répond `-32601 Method not found` à `ping` (#276). La sonde

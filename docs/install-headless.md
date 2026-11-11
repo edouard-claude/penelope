@@ -2074,7 +2074,8 @@ d'autorisation.
 
 Le daemon lit `mcp.d` au démarrage puis dès qu'un fichier change (quelques secondes). Un
 serveur dont les outils sont inconnus est lancé une fois pour les lister ; ensuite, il ne
-démarre qu'au premier appel et s'arrête après `idle_timeout` d'inactivité. Une panne est
+démarre qu'au premier appel et s'arrête après `idle_timeout` sans usage (`"0"` : jamais,
+pour un serveur qui garde un état en mémoire). Une panne est
 retentée à intervalle croissant (1 s à 5 min) ; après 8 échecs, le serveur passe en panne
 jusqu'à `penelope mcp restart`. Un serveur qui ne comprend pas la sonde de protocole 2026
 est rappelé en `initialize`, sans intervention.
