@@ -2297,6 +2297,16 @@ planification et le jour (« Veille agents IA · 17/09 »), et répond dans le c
 sujet d'origine : fermer la conversation où la planification est née (`/new`, `/close`)
 ne l'arrête plus. Un rappel manqué pendant un arrêt part une fois au redémarrage.
 
+**Changement d'heure** (1.0.112, #458). Un `cron` s'écrit à l'heure locale de son fuseau
+(`tz`, sinon celui du propriétaire) et la garde toute l'année : `0 8 * * *` part à 08:00,
+été comme hiver. Les deux nuits de changement ont leur règle : une heure qui revient deux
+fois (02:30 le dernier dimanche d'octobre à Paris) tire une fois, la première ; une heure
+qui n'existe pas (02:30 le dernier dimanche de mars) tire une fois, à l'instant du saut
+(03:00). Un cron à toutes les heures (`*/15 * * * *`) suit le temps réel. Une
+planification active qui se retrouve sans prochain tir est recalculée au passage
+suivant ; si le calcul échoue (`0 0 30 2 *`, le 30 février), une alerte part une fois et
+`penelope doctor` la montre.
+
 **Sortie de veille** (1.0.3, #228). L'ordonnanceur remarque qu'il a dormi quand l'horloge
 murale a avancé de plus de 60 s de plus que l'horloge monotone entre deux passages
 (`host.woke`, avec la durée). Avant de rattraper quoi que ce soit, une passe de santé sonde

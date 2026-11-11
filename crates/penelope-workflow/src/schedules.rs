@@ -461,6 +461,64 @@ impl ScheduleStore {
             .await
     }
 
+    /// Planifications à horloge (cron, intervalle, sondage) actives et sans prochain tir
+    /// (#458) : `due` ne les voit pas, elles ne partiraient plus jamais, sans erreur.
+    /// Chacune est recalculée depuis maintenant. Rend celles qui retrouvent un tir, puis
+    /// celles dont le calcul échoue pour la première fois : leur `last_error` le dit
+    /// ([`NO_NEXT_RUN`]) et l'appelant prévient le propriétaire, une fois.
+    pub async fn rearm(&self) -> penelope_store::Result<(Vec<Schedule>, Vec<Schedule>)> {
+        let lost: Vec<Schedule> = self
+            .store
+            .read(|c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE state = 'active' AND next_run IS NULL
+                       AND kind IN ('cron', 'interval', 'mcp_poll')"
+                ))?;
+                let rows = st.query_map([], row_to_schedule)?;
+                Ok(rows.filter_map(Result::ok).collect())
+            })
+            .await?;
+        let (mut rearmed, mut stuck) = (Vec::new(), Vec::new());
+        for mut s in lost {
+            match s.next_after(self.clock.now_ms(), &self.timezone) {
+                Some(next) => {
+                    s.next_run = Some(ms_to_rfc3339(next));
+                    rearmed.push(s);
+                }
+                None if s.last_error.as_deref() != Some(NO_NEXT_RUN) => stuck.push(s),
+                None => {}
+            }
+        }
+        if rearmed.is_empty() && stuck.is_empty() {
+            return Ok((rearmed, stuck));
+        }
+        let now = self.clock.now_rfc3339();
+        let (found, failed) = (rearmed.clone(), stuck.clone());
+        self.store
+            .write(move |tx| {
+                // Seule une ligne encore sans tir est touchée : un passage concurrent ou
+                // une pause entre la lecture et l'écriture gagnent.
+                for s in &found {
+                    tx.execute(
+                        "UPDATE schedules SET next_run = ?2, updated_at = ?3,
+                            last_error = CASE WHEN last_error = ?4 THEN NULL ELSE last_error END
+                         WHERE id = ?1 AND next_run IS NULL AND state = 'active'",
+                        params![s.id, s.next_run, now, NO_NEXT_RUN],
+                    )?;
+                }
+                for s in &failed {
+                    tx.execute(
+                        "UPDATE schedules SET last_error = ?2, updated_at = ?3
+                         WHERE id = ?1 AND next_run IS NULL AND state = 'active'",
+                        params![s.id, NO_NEXT_RUN, now],
+                    )?;
+                }
+                Ok(())
+            })
+            .await?;
+        Ok((rearmed, stuck))
+    }
+
     pub async fn list(&self) -> penelope_store::Result<Vec<Schedule>> {
         self.store
             .read(|c| {
@@ -815,6 +873,10 @@ impl ScheduleStore {
         }
     }
 }
+
+/// `last_error` d'une planification active dont le prochain tir ne se calcule pas (#458).
+pub const NO_NEXT_RUN: &str = "aucun prochain tir calculable : l'expression ne désigne \
+     aucune date dans les cinq ans, ou son fuseau est inconnu";
 
 const SELECT: &str = "SELECT id, kind, spec, target, dedup, state, last_run, next_run, runs,
      last_error, failures_in_a_row, alerted_reason FROM schedules";

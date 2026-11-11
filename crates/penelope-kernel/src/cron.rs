@@ -4,12 +4,22 @@
 //! **déterministe et testable** en avançant une horloge fictive, et les schedules sont
 //! calculés en UTC pour survivre à une dérive d'horloge (§17).
 //!
+//! Heure d'été : voir [`Cron::next_after`] (une heure ambiguë tire une fois, une heure
+//! absente tire à l'instant du saut).
+//!
 //! Syntaxe : `minute heure jour-du-mois mois jour-de-semaine`, avec `*`, `a-b`, `a,b,c`,
 //! `*/n`, `a-b/n`. Jour de semaine : 0 ou 7 = dimanche. Noms courts acceptés
 //! (`mon`..`sun`, `jan`..`dec`).
 
 use crate::error::{KernelError, Result};
-use chrono::{Datelike, TimeZone, Timelike};
+use chrono::{Datelike, Offset, TimeZone, Timelike};
+
+type Local = chrono::DateTime<chrono_tz::Tz>;
+
+/// Décalage du fuseau à cet instant, en secondes à l'est d'UTC.
+fn offset_s(t: &Local) -> i64 {
+    i64::from(t.offset().fix().local_minus_utc())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cron {
@@ -49,38 +59,107 @@ impl Cron {
     ///
     /// Renvoie `None` si aucune occurrence n'existe dans les 5 prochaines années
     /// (par exemple `0 0 30 2 *`, le 30 février).
+    ///
+    /// Le calcul avance en UTC et convertit pour comparer (#458) : un instant UTC a
+    /// toujours une heure locale, alors qu'une heure locale construite peut être ambiguë
+    /// ou ne pas exister, et faisait sortir le calcul sans résultat. Aux changements
+    /// d'heure :
+    ///
+    /// - une heure locale **ambiguë** (elle revient à l'automne) tire une fois, la
+    ///   première ;
+    /// - une heure locale **absente** (sautée au printemps) tire une fois, à l'instant du
+    ///   saut ;
+    /// - un cron à toutes les heures (`*/15 * * * *`, `0 * * * *`) suit le temps réel : il
+    ///   tire dans les deux passages de l'heure répétée et ne rattrape rien au saut.
     pub fn next_after(
         &self,
         after: chrono::DateTime<chrono::Utc>,
         tz: chrono_tz::Tz,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        let local = after.with_timezone(&tz);
-        let mut t = local
-            .with_second(0)?
-            .with_nanosecond(0)?
-            .checked_add_signed(chrono::Duration::minutes(1))?;
-
-        // 5 ans de minutes, borne de sécurité franche.
-        for _ in 0..(5 * 366 * 24 * 60) {
-            if self.matches_local(&t) {
-                return Some(t.with_timezone(&chrono::Utc));
+        let minute = chrono::Duration::minutes(1);
+        // 5 ans, borne de sécurité franche.
+        let limit = after.checked_add_signed(chrono::Duration::days(5 * 366))?;
+        let start = chrono::DateTime::from_timestamp(after.timestamp().div_euclid(60) * 60, 0)?;
+        let mut prev = start.with_timezone(&tz);
+        let mut t = start.checked_add_signed(minute)?;
+        while t <= limit {
+            let local = t.with_timezone(&tz);
+            if self.fires(&prev, &local) {
+                return Some(t);
             }
-            // Optimisation : saute à l'heure suivante si l'heure ne peut pas convenir.
-            if !self.hours.contains(&t.hour()) {
-                t = t
-                    .with_minute(0)?
-                    .checked_add_signed(chrono::Duration::hours(1))?;
-                continue;
-            }
-            t = t.checked_add_signed(chrono::Duration::minutes(1))?;
+            t = self.step(t, &local)?;
+            prev = local;
         }
         None
     }
 
-    fn matches_local(&self, t: &chrono::DateTime<chrono_tz::Tz>) -> bool {
-        if !self.minutes.contains(&t.minute()) || !self.hours.contains(&t.hour()) {
+    /// Vrai si l'expression tire à `local`. `prev` est l'instant examiné juste avant : un
+    /// décalage qui a grandi entre les deux dit quelles heures locales ont été sautées.
+    fn fires(&self, prev: &Local, local: &Local) -> bool {
+        let naive = local.naive_local();
+        if self.matches_naive(&naive) {
+            if self.every_hour() {
+                return true;
+            }
+            // Second passage d'une heure ambiguë : le premier a déjà tiré.
+            match local.timezone().from_local_datetime(&naive) {
+                chrono::LocalResult::Ambiguous(first, _) if first != *local => {}
+                _ => return true,
+            }
+        }
+        let jump = offset_s(local) - offset_s(prev);
+        if jump <= 0 || self.every_hour() {
             return false;
         }
+        // Les heures locales de `naive - jump` à `naive` n'ont pas existé.
+        (1..=jump / 60).any(|back| {
+            naive
+                .checked_sub_signed(chrono::Duration::minutes(back))
+                .is_some_and(|missing| self.matches_naive(&missing))
+        })
+    }
+
+    /// L'instant suivant à examiner : le lendemain si la date ne convient pas, l'heure
+    /// suivante si l'heure ne convient pas, sinon la minute suivante. Un saut ne traverse
+    /// jamais un changement d'heure : si le décalage diffère à l'arrivée, on raccourcit,
+    /// jusqu'à la minute, et [`Cron::fires`] voit le changement entre deux minutes.
+    fn step(
+        &self,
+        t: chrono::DateTime<chrono::Utc>,
+        local: &Local,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let to_hour = 60 - i64::from(local.minute());
+        let to_day = (23 - i64::from(local.hour())) * 60 + to_hour;
+        let wanted = if !self.matches_date(&local.naive_local()) {
+            to_day
+        } else if !self.hours.contains(&local.hour()) {
+            to_hour
+        } else {
+            1
+        };
+        for minutes in [wanted, to_hour.min(wanted)] {
+            let next = t.checked_add_signed(chrono::Duration::minutes(minutes))?;
+            if minutes == 1 || offset_s(&next.with_timezone(&local.timezone())) == offset_s(local) {
+                return Some(next);
+            }
+        }
+        t.checked_add_signed(chrono::Duration::minutes(1))
+    }
+
+    /// Toutes les heures du jour : le cron suit le temps réel aux changements d'heure.
+    fn every_hour(&self) -> bool {
+        self.hours.len() == 24
+    }
+
+    fn matches_local(&self, t: &Local) -> bool {
+        self.matches_naive(&t.naive_local())
+    }
+
+    fn matches_naive(&self, t: &chrono::NaiveDateTime) -> bool {
+        self.minutes.contains(&t.minute()) && self.hours.contains(&t.hour()) && self.matches_date(t)
+    }
+
+    fn matches_date(&self, t: &chrono::NaiveDateTime) -> bool {
         if !self.months.contains(&t.month()) {
             return false;
         }
@@ -292,6 +371,106 @@ mod tests {
         let n = c.next_after(t, tz).unwrap();
         assert!(n > t);
         assert_eq!(n.to_rfc3339(), "2026-01-01T11:00:00+00:00");
+    }
+
+    /// Les tirs successifs après `from`, à l'heure UTC.
+    fn runs(expr: &str, zone: &str, from: &str, count: usize) -> Vec<String> {
+        let (c, tz) = (Cron::parse(expr).unwrap(), zone.parse().unwrap());
+        let mut t = utc(from);
+        (0..count)
+            .map(|_| {
+                t = c.next_after(t, tz).expect("un prochain tir");
+                t.format("%d %H:%M").to_string()
+            })
+            .collect()
+    }
+
+    /// #458 : le calcul avançait en heure locale et sortait sans résultat sur l'heure
+    /// ambiguë du dernier dimanche d'octobre (le 25 en 2026, 03:00 redevient 02:00 à
+    /// 01:00 UTC). Un cron quotidien perdait son prochain tir le samedi.
+    #[test]
+    fn a_daily_cron_crosses_both_clock_changes() {
+        assert_eq!(
+            runs("0 8 * * *", "Europe/Paris", "2026-10-23T12:00:00Z", 4),
+            ["24 06:00", "25 07:00", "26 07:00", "27 07:00"]
+        );
+        // Dernier dimanche de mars (le 29 en 2026, 02:00 devient 03:00 à 01:00 UTC).
+        assert_eq!(
+            runs("0 8 * * *", "Europe/Paris", "2026-03-27T12:00:00Z", 3),
+            ["28 07:00", "29 06:00", "30 06:00"]
+        );
+    }
+
+    /// Une heure locale ambiguë tire une fois, la première ; une heure locale absente
+    /// tire à l'instant du saut. Jamais zéro, jamais deux.
+    #[test]
+    fn an_ambiguous_hour_fires_once_and_a_missing_one_at_the_jump() {
+        // 02:30 existe deux fois le 25 : 00:30 UTC (heure d'été) puis 01:30 UTC.
+        assert_eq!(
+            runs("30 2 * * *", "Europe/Paris", "2026-10-23T12:00:00Z", 3),
+            ["24 00:30", "25 00:30", "26 01:30"]
+        );
+        // 02:30 n'existe pas le 29 : le tir part à 03:00 locales, 01:00 UTC.
+        assert_eq!(
+            runs("30 2 * * *", "Europe/Paris", "2026-03-27T12:00:00Z", 3),
+            ["28 01:30", "29 01:00", "30 00:30"]
+        );
+        // Plusieurs minutes de l'heure absente : un seul tir au saut.
+        assert_eq!(
+            runs("*/20 2 * * *", "Europe/Paris", "2026-03-28T12:00:00Z", 2),
+            ["29 01:00", "30 00:00"]
+        );
+    }
+
+    /// Un recalcul fait pendant l'heure ambiguë, première ou seconde fois, aboutit.
+    #[test]
+    fn a_recomputation_inside_the_ambiguous_hour_succeeds() {
+        for inside in ["2026-10-25T00:45:10Z", "2026-10-25T01:45:10Z"] {
+            assert_eq!(
+                runs("0 8 * * *", "Europe/Paris", inside, 1),
+                ["25 07:00"],
+                "{inside}"
+            );
+        }
+        // 02:50 la seconde fois : la première a déjà tiré, le suivant est demain.
+        assert_eq!(
+            runs("50 2 * * *", "Europe/Paris", "2026-10-25T01:45:00Z", 1),
+            ["26 01:50"]
+        );
+    }
+
+    /// Un cron à toutes les heures suit le temps réel : il ne saute pas l'heure répétée
+    /// et ne rattrape rien au printemps.
+    #[test]
+    fn an_every_hour_cron_follows_real_time() {
+        assert_eq!(
+            runs("*/30 * * * *", "Europe/Paris", "2026-10-25T00:20:00Z", 4),
+            ["25 00:30", "25 01:00", "25 01:30", "25 02:00"]
+        );
+        assert_eq!(
+            runs("30 * * * *", "Europe/Paris", "2026-03-29T00:00:00Z", 3),
+            ["29 00:30", "29 01:30", "29 02:30"]
+        );
+    }
+
+    /// Fuseaux à décalage non entier et saut d'une demi-heure.
+    #[test]
+    fn odd_offsets_keep_their_local_hour() {
+        assert_eq!(
+            runs("0 9 * * *", "Asia/Kolkata", "2026-01-01T00:00:00Z", 2),
+            ["01 03:30", "02 03:30"]
+        );
+        // Lord Howe avance de trente minutes le 4 octobre 2026 : 02:00 devient 02:30
+        // (15:30 UTC la veille). 02:15 n'existe pas ce jour-là.
+        assert_eq!(
+            runs(
+                "15 2 * * *",
+                "Australia/Lord_Howe",
+                "2026-10-02T00:00:00Z",
+                3
+            ),
+            ["02 15:45", "03 15:30", "04 15:15"]
+        );
     }
 
     #[test]

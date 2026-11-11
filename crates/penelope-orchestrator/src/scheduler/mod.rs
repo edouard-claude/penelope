@@ -123,6 +123,7 @@ pub async fn tick_after(
         ..Default::default()
     };
 
+    rearm(d, ports).await?;
     let cfg = s.config.config();
     let tz = cfg.owner.timezone.clone();
     let quiet_range = cfg.quiet_range();
@@ -250,6 +251,29 @@ pub async fn tick_after(
     cancelled_triggers(d, ports).await?;
     quiet::flush(d, ports, batch, &mut report).await?;
     Ok(report)
+}
+
+/// Une planification active sans prochain tir ne partirait plus jamais, sans erreur
+/// (#458 : un calcul qui sortait sans résultat à l'heure ambiguë d'octobre). Chaque
+/// passage, le premier après le démarrage compris, la recalcule ; si le calcul échoue
+/// encore, `last_error` le dit et le propriétaire est prévenu, une fois.
+async fn rearm(d: &Context, ports: &Ports) -> anyhow::Result<()> {
+    let s = &d.services;
+    let (rearmed, stuck) = s.schedules.rearm().await?;
+    for sched in &rearmed {
+        tracing::warn!(schedule = %sched.id, next = ?sched.next_run, "planification sans prochain tir : recalculée");
+        let _ = s
+            .events
+            .append(penelope_kernel::event::EventDraft::new(
+                "schedule.rearmed",
+                json!({"schedule": sched.id, "next_run": sched.next_run}),
+            ))
+            .await;
+    }
+    for sched in &stuck {
+        alert(d, ports, sched, penelope_workflow::schedules::NO_NEXT_RUN).await;
+    }
+    Ok(())
 }
 
 /// Exécution immédiate, hors calendrier (`schedule.run_now`).

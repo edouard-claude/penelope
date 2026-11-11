@@ -46,6 +46,99 @@ async fn cron_schedules_compute_their_next_run() {
     assert_eq!(sched.next_run.as_deref(), Some("2026-09-16T23:30:00.000Z"));
 }
 
+fn ms(at: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .unwrap()
+        .timestamp_millis()
+}
+
+/// #458 : le samedi qui précède le retour à l'heure d'hiver, le tir de 08:00 à Paris
+/// programmait un suivant introuvable et la planification restait active sans jamais
+/// repartir.
+#[tokio::test]
+async fn a_daily_cron_keeps_its_next_run_across_the_clock_change() {
+    let clock = TestClock::new(ms("2026-10-23T12:00:00Z"));
+    let s = schedules(clock.clone());
+    let sched = s
+        .create(
+            TriggerKind::Cron,
+            json!({"expr":"0 8 * * *", "tz":"Europe/Paris"}),
+            json!({"type":"notify","template":"bonjour"}),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sched.next_run.as_deref(), Some("2026-10-24T06:00:00.000Z"));
+    clock.set_ms(ms("2026-10-24T06:00:05Z"));
+    s.mark_run(&sched.id, None).await.unwrap();
+    let after = s.get(&sched.id).await.unwrap().unwrap();
+    assert_eq!(after.next_run.as_deref(), Some("2026-10-25T07:00:00.000Z"));
+}
+
+/// #458 : une planification à horloge active sans prochain tir en retrouve un ; celle
+/// dont le calcul échoue le dit dans `last_error`, et n'est rendue qu'une fois. Une
+/// planification en pause, ou poussée par un événement, n'est pas touchée.
+#[tokio::test]
+async fn rearm_gives_a_lost_schedule_its_next_run_and_reports_a_stuck_one_once() {
+    let clock = TestClock::new(ms("2026-10-25T00:45:00Z"));
+    let s = schedules(clock.clone());
+    let notify = || json!({"type":"notify","template":"bonjour"});
+    let cron = |expr: &str| json!({"expr": expr, "tz": "Europe/Paris"});
+    let lost = s
+        .create(TriggerKind::Cron, cron("0 8 * * *"), notify(), json!({}))
+        .await
+        .unwrap();
+    let paused = s
+        .create(TriggerKind::Cron, cron("0 9 * * *"), notify(), json!({}))
+        .await
+        .unwrap();
+    let never = s
+        .create(TriggerKind::Cron, cron("0 0 30 2 *"), notify(), json!({}))
+        .await
+        .unwrap();
+    let pushed = s
+        .create(
+            TriggerKind::Event,
+            json!({"event":"run.done"}),
+            notify(),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(never.next_run, None, "le 30 février n'arrive pas");
+    s.set_state(&paused.id, "paused").await.unwrap();
+    s.store
+        .write(|tx| {
+            tx.execute("UPDATE schedules SET next_run = NULL", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(s.due().await.unwrap().is_empty());
+
+    let ids = |v: &[Schedule]| v.iter().map(|x| x.id.clone()).collect::<Vec<String>>();
+    let (rearmed, stuck) = s.rearm().await.unwrap();
+    assert_eq!(ids(&rearmed), std::slice::from_ref(&lost.id));
+    assert_eq!(ids(&stuck), std::slice::from_ref(&never.id));
+    let next = |id: String| {
+        let s = &s;
+        async move { s.get(&id).await.unwrap().unwrap() }
+    };
+    let found = next(lost.id.clone()).await;
+    assert_eq!(found.next_run.as_deref(), Some("2026-10-25T07:00:00.000Z"));
+    assert_eq!(found.last_error, None);
+    assert_eq!(next(paused.id.clone()).await.next_run, None);
+    assert_eq!(next(pushed.id.clone()).await.last_error, None);
+    assert_eq!(
+        next(never.id.clone()).await.last_error.as_deref(),
+        Some(NO_NEXT_RUN)
+    );
+
+    // Le passage suivant ne redit rien.
+    let (rearmed, stuck) = s.rearm().await.unwrap();
+    assert!(rearmed.is_empty() && stuck.is_empty());
+}
+
 #[tokio::test]
 async fn due_returns_only_ripe_schedules() {
     let clock = TestClock::default();
