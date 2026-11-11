@@ -26,6 +26,7 @@ mod elicitation;
 mod forms;
 mod gateway_life;
 mod judge;
+mod lost_topic;
 mod media;
 mod media_limits;
 mod ops;

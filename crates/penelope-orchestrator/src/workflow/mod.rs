@@ -270,7 +270,7 @@ use step_verify::{
     classify_project_test, evidence_matches_head, project_test_spec, repository_rules,
     requires_current_sha, verifier_prompt,
 };
-pub use watch::{pending_of_autonomous, retarget, run_status};
+pub use watch::{pending_of_autonomous, relocate, retarget, run_status};
 
 #[cfg(test)]
 pub(crate) mod harness;

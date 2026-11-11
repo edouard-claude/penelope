@@ -381,7 +381,7 @@ mod webhook;
 pub use digest::{DigestFeed, digest_inputs, digest_inputs_with};
 use fire::fire;
 pub use fire::{alert, create, label, recovered};
-pub use origin::{destination, due_today, listing, place_name, retarget};
+pub use origin::{destination, due_today, listing, place_name, relocate, retarget};
 use origin::{due_today_dated, target_origin};
 use outcome::{cancelled_triggers, save_state};
 pub use outcome::{final_already_sent, repeats, trigger_outcome, trigger_outcome_of};

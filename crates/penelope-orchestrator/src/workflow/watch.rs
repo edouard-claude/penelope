@@ -128,6 +128,32 @@ pub async fn retarget(s: &Services, run_id: &str, to: &Origin) -> anyhow::Result
     Ok(moved)
 }
 
+/// Les runs encore vivants dont la destination a disparu côté canal sont rattachés là où
+/// il dit de livrer (#463) : leurs questions, approbations et carte de progression
+/// suivent. Un run fini ne parle plus, il garde la sienne. Renvoie ceux déplacés.
+pub async fn relocate(
+    s: &Services,
+    moved: crate::destinations::Moved<'_>,
+) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for state in [RunState::Running, RunState::Paused, RunState::Blocked] {
+        for run in s.runs.list(Some(state), 500).await? {
+            // Sans destination propre, le run suit la conversation du propriétaire.
+            let Some(raw) = s.kv_get(&origin_key(&run.id)).await? else {
+                continue;
+            };
+            let stored: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            let origin = Origin::from_payload(&json!({ "origin": stored }));
+            if let Some(to) = moved(&origin) {
+                s.kv_set(&origin_key(&run.id), &to.to_value().to_string())
+                    .await?;
+                out.push(run.id);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Les approbations en attente des runs autonomes : celles posées avant que le run le
 /// devienne, à trancher d'office.
 pub async fn pending_of_autonomous(s: &Services) -> anyhow::Result<Vec<String>> {

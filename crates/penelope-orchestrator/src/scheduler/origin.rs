@@ -61,6 +61,24 @@ pub async fn retarget(s: &Services, id: &str, to: &Origin) -> Result<String, Str
     Ok(place_name(s, &to).await)
 }
 
+/// Les planifications dont la destination a disparu côté canal sont rattachées là où il
+/// dit de livrer (#463) ; `moved` est sa réponse pour chacune. Renvoie celles déplacées.
+pub async fn relocate(
+    s: &Services,
+    moved: crate::destinations::Moved<'_>,
+) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for sched in s.schedules.list().await? {
+        let Some(to) = own_origin(&sched).and_then(|origin| moved(&origin)) else {
+            continue;
+        };
+        if s.schedules.set_origin(&sched.id, to.to_value()).await? {
+            out.push(sched.id);
+        }
+    }
+    Ok(out)
+}
+
 /// Planifications avec leur destination, pour `schedule list`, `/schedules` et l'outil
 /// `schedule_list` (issue #124).
 pub async fn listing(s: &Services) -> anyhow::Result<Vec<Value>> {

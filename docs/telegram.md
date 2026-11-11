@@ -633,6 +633,15 @@ réponse ne se lit jamais dans le désordre. Un refus définitif (message trop l
 introuvable) est dit dans le chat par une courte note en texte brut, et `/status` compte
 les messages non envoyés.
 
+Un sujet supprimé n'est pas un refus définitif (#463). Telegram ne prévient pas quand un
+sujet disparaît : Pénélope l'apprend au refus d'un envoi (« message thread not found »). Le
+même message part alors dans le fil général du groupe, précédé d'une ligne qui dit d'où il
+vient (« ↪️ Sujet « Veille » supprimé : ce message lui était destiné. ») ; la note d'échec
+ne part que si ce second essai est refusé lui aussi. Les planifications et les runs en
+cours qui livraient dans ce sujet sont rattachés au fil général au même moment :
+`/schedules` le montre, et leurs envois suivants arrivent sans détour. La session du sujet
+n'est pas déplacée : sa conversation s'est arrêtée avec lui.
+
 ## Tester sans réseau
 
 Le mock Bot API implémente le même contrat que le vrai transport :

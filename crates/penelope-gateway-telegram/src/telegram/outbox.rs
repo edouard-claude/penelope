@@ -344,28 +344,8 @@ impl TelegramGateway {
                 continue;
             }
             let body: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
-            let result = match self.bot.call(&method, Some(chat_id), body.clone()).await {
-                Err(TgError::Api {
-                    code: 400,
-                    description,
-                }) if description.to_lowercase().contains("parse")
-                    && body.get("parse_mode").is_some() =>
-                {
-                    // Telegram refuse le HTML : même contenu, en texte brut.
-                    let mut plain = body.clone();
-                    if let Some(o) = plain.as_object_mut() {
-                        o.remove("parse_mode");
-                        let t = o
-                            .get("text")
-                            .and_then(|t| t.as_str())
-                            .map(html_to_plain)
-                            .unwrap_or_default();
-                        o.insert("text".into(), json!(t));
-                    }
-                    self.bot.call(&method, Some(chat_id), plain).await
-                }
-                other => other,
-            };
+            // Sujet supprimé, HTML refusé : la ligne a ses seconds essais (#463).
+            let result = self.send_row(&id, &method, chat_id, body).await;
             let now = s.clock.now_rfc3339();
             match result {
                 Ok(v) => {

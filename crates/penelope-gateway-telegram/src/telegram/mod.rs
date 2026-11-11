@@ -44,6 +44,7 @@ mod drafts;
 mod elicitation;
 mod forms;
 mod keys;
+mod lost_topic;
 mod media;
 mod menus;
 mod notices;
