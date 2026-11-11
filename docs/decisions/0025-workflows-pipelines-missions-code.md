@@ -52,5 +52,11 @@ intervention.
   mission qui ne finit pas (bloquée, budget, arrêtée) arrête la liste comme une tâche en
   échec.
 - Annuler un run arrête la mission en cours de ce run et celles de ses sous-runs.
+- La mission suit son run (#456). Sa dépense est celle du run : l'usage de sa session
+  entre dans le budget du run, en plus du budget propre de la mission, et la borne la
+  plus basse arrête. Un run en pause ou bloqué par une borne met sa mission **en
+  attente**, pas à l'arrêt : elle finit son tour, ne dépense plus, et repart à la
+  reprise dans la même session. Un état final atteint pendant ce dernier tour gagne sur
+  l'attente. Passer l'étape arrête la mission.
 - Un plan conversationnel (`workflow_plan`) garde son ancre `build-verify` ; il ne change
   pas avec ce lot.

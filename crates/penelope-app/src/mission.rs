@@ -135,9 +135,23 @@ pub struct Mission {
     /// Hôte distant de la mission (#395).
     #[serde(default)]
     pub host: Option<String>,
+    /// Le run qui l'a lancée lui demande d'attendre (#456).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<Hold>,
 }
 
 impl Mission {
+    /// Rangée par son run (#456) : à ne pas confondre avec l'attente qu'elle rend
+    /// d'elle-même au propriétaire.
+    pub fn parked(&self) -> bool {
+        self.state == State::Waiting && self.hold.is_some()
+    }
+
+    /// Pas finie : en cours, ou rangée en attendant son run.
+    pub fn live(&self) -> bool {
+        self.state == State::Running || self.parked()
+    }
+
     pub fn origin(&self) -> Origin {
         Origin::from_payload(&serde_json::json!({ "origin": self.origin }))
     }
@@ -147,7 +161,11 @@ impl Mission {
         let minutes = (now_ms - self.started_ms).max(0) / 60_000;
         let mut out = format!(
             "Mission {} : {}\nTours : {} · dépensé {:.2} $ sur {:.2} $ · {} h {:02} min",
-            self.state.as_str(),
+            if self.parked() {
+                "en attente de son run"
+            } else {
+                self.state.as_str()
+            },
             self.goal,
             self.turns,
             spent_usd,
@@ -179,23 +197,35 @@ pub async fn save(s: &Services, m: &Mission) -> anyhow::Result<()> {
         .await
 }
 
-/// Écrit `m` si la mission enregistrée est encore en cours ; sinon rend faux sans rien
-/// écrire. Toute transition d'une mission lancée passe par ici (#455) : entre la lecture
-/// de l'état et son écriture, il y a une vérification de vingt minutes ou une compaction,
-/// et l'arrêt écrit pendant ce temps ne doit pas être recouvert par l'état d'avant.
-async fn advance(s: &Services, m: &Mission) -> anyhow::Result<bool> {
-    let (k, v) = (key(&m.session_id), serde_json::to_string(m)?);
-    Ok(s.store
+/// Écrit `m` si la mission enregistrée n'est pas finie ; sinon rend faux sans rien écrire.
+/// Toute transition d'une mission lancée passe par ici (#455) : entre la lecture de l'état
+/// et son écriture, il y a une vérification de vingt minutes ou une compaction, et l'arrêt
+/// écrit pendant ce temps ne doit pas être recouvert par l'état d'avant. La demande
+/// d'attente d'un run (#456) appartient à `hold` : posée entre-temps, un tour qui continue
+/// la garde, une fin l'efface.
+async fn advance(s: &Services, m: &mut Mission) -> anyhow::Result<bool> {
+    let (k, mut next) = (key(&m.session_id), m.clone());
+    let written = s
+        .store
         .write(move |tx| {
-            let running = penelope_store::kv_get(tx, &k)?
+            let Some(stored) = penelope_store::kv_get(tx, &k)?
                 .and_then(|raw| serde_json::from_str::<Mission>(&raw).ok())
-                .is_some_and(|stored| stored.state == State::Running);
-            if running {
-                penelope_store::kv_set(tx, &k, &v)?;
-            }
-            Ok(running)
+                .filter(Mission::live)
+            else {
+                return Ok(None);
+            };
+            next.hold = stored.hold.filter(|_| next.state == State::Running);
+            penelope_store::kv_set(tx, &k, &serde_json::to_string(&next)?)?;
+            Ok(Some(next))
         })
-        .await?)
+        .await?;
+    Ok(match written {
+        Some(w) => {
+            *m = w;
+            true
+        }
+        None => false,
+    })
 }
 
 /// La session porte une mission en cours : ses tours partent sans carte et son budget
@@ -216,7 +246,7 @@ pub async fn start(
     let goal = req.goal.trim().to_string();
     anyhow::ensure!(!goal.is_empty(), "une mission demande un objectif");
     if let Some(m) = load(s, session_id).await
-        && m.state == State::Running
+        && m.live()
     {
         anyhow::bail!("une mission est déjà en cours dans cette session : `mission stop` d'abord");
     }
@@ -313,6 +343,7 @@ pub async fn start(
         repo,
         branch,
         host,
+        hold: None,
     };
     save(s, &m).await?;
     if m.host.is_none()
@@ -388,10 +419,10 @@ pub async fn stop(s: &Services, session_id: &str) -> anyhow::Result<Mission> {
     let mut m = load(s, session_id)
         .await
         .ok_or_else(|| anyhow::anyhow!("aucune mission dans cette session"))?;
-    if m.state == State::Running {
+    if m.live() {
         m.state = State::Stopped;
         m.note = "arrêtée par le propriétaire".into();
-        if !advance(s, &m).await? {
+        if !advance(s, &mut m).await? {
             // Finie entre-temps (verdict vert, budget) : c'est cet état-là qui est vrai.
             return load(s, session_id)
                 .await
@@ -415,7 +446,7 @@ pub async fn block(s: &Services, session_id: &str, reason: &str) -> anyhow::Resu
     }
     m.state = State::Blocked;
     m.note = format!("🧱 Mission bloquée : {reason}");
-    if advance(s, &m).await? {
+    if advance(s, &mut m).await? {
         check::interrupt(s, session_id);
         finished(s, &m).await;
     }
@@ -822,7 +853,7 @@ pub async fn after_turn(
                 .trim_start_matches("[mission] ")
                 .to_string();
             // Arrêtée ou bloquée pendant la vérification : rien n'est écrit ni relancé.
-            match advance(s, &m).await {
+            match advance(s, &mut m).await {
                 Ok(true) => {}
                 Ok(false) => return,
                 Err(e) => {
@@ -831,28 +862,32 @@ pub async fn after_turn(
                 }
             }
             ports.compact(session_id).await;
+            // Son run s'est arrêté d'avancer pendant ce tour (#456) : elle se range ici, sa
+            // consigne gardée pour la reprise.
+            match hold::park(s, session_id, Some(text.clone())).await {
+                Ok(Some(asked)) => {
+                    let wait = format!(
+                        "⏸️ Mission en attente ({}) après {} tours : elle repart à la reprise \
+                         de son run.",
+                        asked.why, m.turns
+                    );
+                    return ports.notify(&m.origin(), &wait).await;
+                }
+                Ok(None) => {}
+                Err(e) => tracing::error!(error = %e, session = session_id, "mission non rangée"),
+            }
             // Un état relu après la compaction : un `mission stop` pendant ce temps gagne.
             if !is_running(s, session_id).await {
                 return;
             }
             let dedup = format!("mission:{session_id}:{}", m.turns);
-            // Le relais du dépôt (#424) suit la consigne : relu, il survit à la compaction.
-            let relay = m
-                .cwd
-                .as_deref()
-                .filter(|_| m.host.is_none())
-                .and_then(|c| dir_of(s, c))
-                .and_then(|d| relay::preamble(&d));
-            let text = match relay {
-                Some(r) => format!("{text}\n\n{r}"),
-                None => text,
-            };
+            let text = with_relay(s, &m, text);
             ports.enqueue(session_id, &text, &m.origin(), dedup).await;
         }
         Next::Finish(state, report) => {
             m.state = state;
             m.note = report.clone();
-            match advance(s, &m).await {
+            match advance(s, &mut m).await {
                 Ok(true) => {}
                 // L'arrêt du propriétaire a déjà clos la mission et prévenu : son état
                 // reste, même si la vérification rend son verdict au même instant.
@@ -871,6 +906,20 @@ pub async fn after_turn(
 pub async fn absorbs(s: &Services, session_id: &str, outcome: &TurnOutcome) -> bool {
     matches!(outcome, TurnOutcome::Failed { error } if error.starts_with(CALLS_EXHAUSTED))
         && is_running(s, session_id).await
+}
+
+/// Le relais du dépôt (#424) suit la consigne : relu, il survit à la compaction.
+fn with_relay(s: &Services, m: &Mission, text: String) -> String {
+    let relay = m
+        .cwd
+        .as_deref()
+        .filter(|_| m.host.is_none())
+        .and_then(|c| dir_of(s, c))
+        .and_then(|d| relay::preamble(&d));
+    match relay {
+        Some(r) => format!("{text}\n\n{r}"),
+        None => text,
+    }
 }
 
 /// Une mission finie : son événement, et son worktree retiré s'il est propre (#397).
@@ -899,9 +948,11 @@ async fn event(s: &Services, m: &Mission, kind: &str) {
 }
 
 pub mod check;
+pub mod hold;
 pub mod relay;
 pub mod worktree;
 pub use check::{Verdict, remote_request, run_check, run_check_remote};
+pub use hold::{Held, Hold, Relaunch, hold, release};
 
 #[cfg(test)]
 mod tests;

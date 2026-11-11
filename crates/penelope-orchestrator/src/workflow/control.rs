@@ -42,6 +42,9 @@ pub async fn control(
             if *op == Control::Cancel {
                 super::step_mission::stop_current(d, run_id).await;
                 finish(d, &run, RunState::Cancelled, "annulé par le propriétaire").await?;
+            } else {
+                // L'état « en pause » est écrit : sa mission attend avec lui (#456).
+                super::step_mission::hold_current(d, run_id).await;
             }
             st
         }
@@ -71,6 +74,11 @@ pub async fn control(
             let step = wf
                 .step(&step_id)
                 .ok_or_else(|| anyhow::anyhow!("étape `{step_id}` absente"))?;
+            // Passer une étape `mission` arrête sa mission, en cours ou rangée (#456) :
+            // plus rien n'attendrait son résultat, ni ne la relancerait.
+            if step.kind == "mission" {
+                super::step_mission::stop_own(s, run_id).await;
+            }
             let result = StepResult::Choice("skipped".into());
             let output = json!({"skipped": true});
             let metadata = session_metadata(s, &run.session_id).await;

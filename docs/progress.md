@@ -12,6 +12,41 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.110
+
+**Workflow : la mission d'une étape `mission` suit son run, en pause comme au budget
+(#456).**
+
+- Une étape `mission` lance la mission dans une autre session et attend. Le run mis en
+  pause, ou bloqué par une borne, cessait d'être piloté ; la mission, elle, continuait de
+  se relancer tour après tour, en autonomie : elle codait, poussait et dépensait sous une
+  carte qui disait « en pause ». Et ses tours, facturés à sa session, n'entraient pas dans
+  la dépense du run : celui d'une `story` affichait 0 $, quoi que sa mission ait dépensé.
+- La mission **attend avec son run** (`mission/hold.rs`). La pause, ou le blocage par une
+  borne, lui demande d'attendre : la relance en file est annulée ; un tour ou une
+  vérification en cours finit, puis `after_turn` range la mission avec la consigne du tour
+  suivant au lieu de le lancer. Rangée, elle ne prend plus de tour, n'est plus autonome,
+  ne dépense plus ; `/mission` dit « en attente de son run ». Ce n'est pas un arrêt : la
+  reprise du run la relance dans la même session, au même tour, son échéance reculée du
+  temps d'attente.
+- La pause d'une liste vaut pour les missions de ses sous-runs : une `story` ne relance
+  pas la sienne tant que le `backlog` qui l'a demandé est en pause ou bloqué.
+- Un run qui atteint une borne pendant un tour de sa mission attend la fin de ce tour,
+  puis se bloque avec un motif qui nomme la mission ; si elle a fini pendant ce tour,
+  l'étape rend son résultat au lieu de laisser un run bloqué sur une tâche terminée.
+- L'usage de la session d'une mission entre dans la dépense de son run (`refresh_spent`),
+  dollars et tokens : la même mesure que le budget de la mission. La borne la plus basse
+  des deux arrête ; relever l'une ne relève pas l'autre.
+- Une mission rangée s'arrête comme une mission en cours : `/mission stop`, l'annulation
+  du run, et désormais `skip-step` sur son étape, qui la laissait tourner sans personne
+  pour lire son résultat.
+- **Effet à connaître** : un workflow d'instance avec une étape `mission` et le budget par
+  défaut (5 $, 2 M tokens, 2 h) se bloque maintenant à ces bornes ; `wf control <run>
+  budget` les relève. La dépense d'un run parent ne compte toujours pas celle de ses
+  sous-runs.
+- Pas rejoué : `penelope eval mission-bench` (#369), faute de clé OpenRouter dans la
+  session qui a écrit ce lot.
+
 ### 1.0.109
 
 **Mission : un `/mission stop` pendant la vérification `--check` tient, et tue la

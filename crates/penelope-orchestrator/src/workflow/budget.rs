@@ -7,8 +7,15 @@ use penelope_workflow::model::Budget;
 /// ceux **facturés** : l'entrée hors cache plus la sortie. Un préfixe servi par le cache
 /// (décision 0008, #40) est l'économie voulue, pas une dépense (issue #136) : il est
 /// compté à part, avec son plafond optionnel (#337).
+///
+/// Les tours d'une mission lancée par une étape `mission` du run comptent (#456) : ils
+/// tournent dans la session de la mission, sans `run_id`, et le run les payait sans les
+/// voir. La même mesure que le budget de la mission : l'usage de sa session.
 pub(super) async fn refresh_spent(s: &Services, mut run: Run) -> anyhow::Result<Run> {
     let id = run.id.clone();
+    // Les sessions des missions du run : ses clés de visite `wf.mission.{run}.…`, lues
+    // par intervalle pour rester sur l'index de `kv`.
+    let (from, to) = (format!("wf.mission.{id}."), format!("wf.mission.{id}/"));
     let (usd, tokens, cached): (f64, i64, i64) = s
         .store
         .read(move |c| {
@@ -16,8 +23,11 @@ pub(super) async fn refresh_spent(s: &Services, mut run: Run) -> anyhow::Result<
                 "SELECT COALESCE(SUM(cost_usd), 0),
                         COALESCE(SUM(MAX(prompt - cached, 0) + completion), 0),
                         COALESCE(SUM(MIN(cached, prompt)), 0)
-                 FROM usage WHERE run_id = ?1",
-                [id],
+                 FROM usage
+                 WHERE run_id = ?1
+                    OR (run_id IS NULL
+                        AND session_id IN (SELECT v FROM kv WHERE k >= ?2 AND k < ?3))",
+                [id, from, to],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?)
         })

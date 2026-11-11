@@ -116,8 +116,11 @@ async fn drive_claimed(
         };
         let (run, budget, limit) = limits_now(s, run, &wf).await?;
         if limit != Limit::Ok {
+            // Sa mission attend avec lui, ou rend d'abord son résultat (#456).
             let reason = limit_reason(&limit, &run, &budget);
-            return finish(d, &run, RunState::Blocked, &reason).await;
+            if let Some(state) = super::step_mission::on_limit(d, &run, &wf, reason).await? {
+                return Ok(state);
+            }
         }
         let Some(step_id) = run.current_step.clone() else {
             return finish(d, &run, RunState::Done, "").await;

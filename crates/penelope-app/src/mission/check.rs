@@ -38,6 +38,11 @@ pub(super) fn interrupt(s: &Services, session_id: &str) {
     s.jobs.cancel(&job(session_id));
 }
 
+/// Vrai si la vérification de la session tourne.
+pub(super) fn running(s: &Services, session_id: &str) -> bool {
+    s.jobs.covers(&job(session_id))
+}
+
 /// Lance la vérification de `m`, interruptible tant qu'elle tourne.
 pub(super) async fn verify(s: &Services, m: &Mission, check: &str) -> Verdict {
     let cancel = CancelToken::new();
@@ -45,7 +50,8 @@ pub(super) async fn verify(s: &Services, m: &Mission, check: &str) -> Verdict {
     s.jobs.insert(&id, &m.session_id, cancel.clone());
     // Arrêtée entre la fin du tour et cette inscription : l'arrêt n'a trouvé personne à
     // interrompre, la vérification ne part pas.
-    if !super::is_running(s, &m.session_id).await {
+    let live = super::load(s, &m.session_id).await;
+    if !live.is_some_and(|m| m.live()) {
         s.jobs.forget(&id);
         return Verdict::Interrupted;
     }
