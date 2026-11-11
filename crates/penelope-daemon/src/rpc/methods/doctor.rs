@@ -153,7 +153,7 @@ pub(super) async fn tool_jobs_check(s: &Services) -> DoctorCheck {
         .live()
         .await
         .unwrap_or_default();
-    let here = s.jobs.len();
+    let here = live.iter().filter(|j| s.jobs.covers(&j.id)).count();
     if live.is_empty() {
         return DoctorCheck::ok(ID, LABEL, "aucun job en cours".to_string());
     }

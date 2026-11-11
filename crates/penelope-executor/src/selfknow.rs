@@ -265,7 +265,7 @@ pub async fn status(
             "jobs".into(),
             json!({
                 "running": live.iter().map(|j| j.view(now)).collect::<Vec<_>>(),
-                "in_this_process": s.jobs.len(),
+                "in_this_process": live.iter().filter(|j| s.jobs.covers(&j.id)).count(),
                 "max_per_session": cfg.tools.jobs_per_session,
                 "max_total": cfg.tools.jobs_total,
                 // #396 : au-delà de dix réveils de suite sans message du propriétaire, les
