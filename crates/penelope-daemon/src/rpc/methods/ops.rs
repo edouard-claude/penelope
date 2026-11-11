@@ -83,20 +83,10 @@ impl Rpc {
                 let jobs = penelope_executor::jobs::store(s);
                 let all = p.get("all").and_then(|v| v.as_bool()) == Some(true);
                 let now = s.clock.now_ms();
-                let rows = if all {
-                    let mut v = jobs.live().await?;
-                    for sess in s.sessions.list(None, 100).await? {
-                        v.extend(
-                            jobs.of_session(sess.id.as_str(), false)
-                                .await?
-                                .into_iter()
-                                .filter(|j| j.state.is_terminal()),
-                        );
-                    }
-                    v
-                } else {
-                    jobs.live().await?
-                };
+                let mut rows = jobs.live().await?;
+                if all {
+                    rows.extend(jobs.finished(200).await?);
+                }
                 // Une ligne par job, sans son résultat : `penelope jobs` dit ce qui
                 // tourne, `penelope logs` dit ce que ça a donné.
                 Ok(json!(

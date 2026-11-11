@@ -92,6 +92,24 @@ pub async fn silence(
     Ok(cancelled)
 }
 
+/// `session.list` : les cent conversations les plus récentes. `kind` nomme un autre type
+/// (`scheduled`, `workflow_run`, `sub_agent`, `heartbeat`), `all` les prend tous. Le type se
+/// choisit avant de plafonner : tous types confondus, les tirs de planification
+/// occupaient la liste entière (#459).
+pub async fn listing(s: &Services, p: &Value) -> anyhow::Result<Value> {
+    let kind = match p.get("kind").and_then(Value::as_str) {
+        None => Some(SessionKind::Chat),
+        Some("all") => None,
+        Some(k) => Some(SessionKind::parse(k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "type de session inconnu : `{k}` (chat, scheduled, workflow_run, sub_agent, \
+                 heartbeat, all)"
+            )
+        })?),
+    };
+    Ok(serde_json::to_value(s.sessions.list(kind, 100).await?)?)
+}
+
 /// Ferme une session : tour en cours arrêté, file vidée, chat détaché, épisode relu.
 pub async fn close(
     s: &Arc<Services>,
@@ -108,6 +126,7 @@ pub async fn close(
         .cancel_for_session(session_id, "session fermée")
         .await?;
     s.sessions.unbind_telegram(session_id).await?;
+    penelope_app::session_keys::closed(s, session_id, false).await;
     crate::episodes::spawn_ingest(
         s.clone(),
         providers,

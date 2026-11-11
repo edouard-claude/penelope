@@ -180,6 +180,22 @@ impl JobStore {
             .await?)
     }
 
+    /// Les jobs finis, les plus récents d'abord, toutes sessions confondues (`jobs
+    /// --all`). Ils se lisaient par les cent sessions les plus récentes, bientôt toutes
+    /// des tirs de planification (#459).
+    pub async fn finished(&self, limit: i64) -> anyhow::Result<Vec<ToolJob>> {
+        Ok(self
+            .store
+            .read(move |c| {
+                let mut st = c.prepare(&format!(
+                    "{SELECT} WHERE NOT ({LIVE}) ORDER BY updated_at DESC LIMIT ?1"
+                ))?;
+                let rows = st.query_map([limit], row_to_job)?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await?)
+    }
+
     /// Compte les jobs vivants d'une session et du daemon entier, en une lecture.
     pub async fn counts(&self, session_id: &str) -> anyhow::Result<(usize, usize)> {
         let sid = session_id.to_string();

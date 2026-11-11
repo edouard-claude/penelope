@@ -12,6 +12,43 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.113
+
+**Sessions : celle d'un tir ou d'un run fini se ferme, et les listes ne dépendent plus
+d'un plafond (#459).**
+
+Chaque tir de planification et chaque run ouvre sa session, et rien ne la fermait. Le
+11/11, une instance comptait 445 sessions de tir et 54 de run « actives » pour 28
+conversations. Trois effets : `/stop tout` lisait les 200 sessions les plus récentes tous
+types confondus, donc plus aucune conversation ; `status` comptait les sessions ouvertes
+parmi les 1 000 dernières ; `jobs --all` passait par les 100 dernières sessions. Et les
+clés de travail restaient : 6,7 Mo de listes d'outils gelées.
+
+- **Fermeture** (`scheduler/closing.rs`, à chaque passage de l'ordonnanceur, par lots de
+  cent). Une session de tir ou de run se ferme après cinq minutes sans activité, quand
+  plus rien ne peut y écrire : aucun tour en file ni en cours, aucune carte en attente ni
+  tranchée depuis moins de cinq minutes, aucun job vivant, à livrer ou tout juste livré,
+  aucun run ouvert ou tout juste fini. La session d'une étape à contexte neuf suit le run
+  de sa session parente. Le délai couvre les écritures en deux temps (carte tranchée puis
+  tour de reprise, #379 et #399).
+- **Ce qui reste au propriétaire** : une session où il a écrit, ou qu'il a rouverte
+  (`/switch`), ne se ferme plus toute seule.
+- **Rien n'est effacé** : transcript, coût et lien à la planification restent ;
+  `updated_at` n'est pas touché, la session garde sa place dans les listes.
+- **Clés de travail** (`penelope_app::session_keys`) : la liste d'outils gelée part à
+  toute fermeture (`/new`, `/close`, `session close`) ; une session de tir ou de run finie
+  perd aussi ses outils à la demande, son état gardé et son repère d'activité.
+- **Comptages et listes** : `sessions_active` est un `COUNT` ; `/stop tout` lit toutes
+  les sessions ouvertes ; `jobs --all` lit les jobs finis dans leur table ;
+  `session list` rend les conversations, `--kind` nomme un autre type
+  (`scheduled`, `workflow_run`, `sub_agent`, `all`).
+- **À savoir en installant** : le premier passage rattrape l'existant, cent sessions
+  toutes les dix secondes ; `penelope session list` ne montre plus les tirs sans
+  `--kind`.
+- Limites : une session dont un résultat de job n'est jamais livré (garde de réveil
+  plafonnée à dix réveils sans message) reste ouverte jusqu'à ce que la rétention efface
+  le job ; les listes de runs gardent leur plafond (`/stop tout` lit les 50 derniers).
+
 ### 1.0.112
 
 **Planifications : un cron traverse les changements d'heure, et une planification sans

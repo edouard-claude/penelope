@@ -243,7 +243,7 @@ pub(super) fn backup_params(local: bool, db: bool, media: bool) -> Value {
 /// Sessions : ouvrir, nommer, borner, forker, rembobiner.
 fn session_route(cmd: &SessionCmd) -> (&'static str, Value) {
     match cmd {
-        SessionCmd::List => (m::SESSION_LIST, json!({})),
+        SessionCmd::List { kind } => (m::SESSION_LIST, json!({"kind": kind})),
         SessionCmd::New { title } => (m::SESSION_NEW, json!({"title": title})),
         SessionCmd::Close { session } => (m::SESSION_CLOSE, json!({"session": session})),
         SessionCmd::Purge {

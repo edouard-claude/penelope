@@ -2297,6 +2297,15 @@ planification et le jour (« Veille agents IA · 17/09 »), et répond dans le c
 sujet d'origine : fermer la conversation où la planification est née (`/new`, `/close`)
 ne l'arrête plus. Un rappel manqué pendant un arrêt part une fois au redémarrage.
 
+**La session d'un tir se ferme seule** (1.0.113, #459). Une fois le tour fini, et après
+cinq minutes sans activité, la session d'un tir passe à « fermée » ; celle d'un run fait
+de même cinq minutes après sa fin. Rien n'est effacé : transcript et coût se relisent
+(`penelope session list --kind scheduled`, `/sessions` avec les sessions fermées), seules
+ses clés de travail partent (liste d'outils gelée, outils à la demande, état gardé). Une
+session qui attend reste ouverte : une carte d'approbation posée, un job en cours ou dont
+le résultat n'est pas livré, un run en pause ou bloqué. Une session où tu as écrit, ou que
+tu as rouverte par `/switch`, est à toi : elle ne se ferme plus que par `/close`.
+
 **Changement d'heure** (1.0.112, #458). Un `cron` s'écrit à l'heure locale de son fuseau
 (`tz`, sinon celui du propriétaire) et la garde toute l'année : `0 8 * * *` part à 08:00,
 été comme hiver. Les deux nuits de changement ont leur règle : une heure qui revient deux
@@ -3195,7 +3204,9 @@ Telegram.
 Chaque session reçoit un titre de quelques mots après son premier échange (réglage
 `context.auto_title`, modèle `fast`) ; `/title` ou `penelope session title <session>
 <titre>` le remplace, et un titre posé à la main n'est jamais écrasé. `/sessions` et
-`penelope session list` affichent titres et dates. Sur Telegram, `/sessions` rend un
+`penelope session list` affichent titres et dates. La liste de la CLI rend les cent
+conversations les plus récentes ; `--kind scheduled` (tirs de planification),
+`workflow_run`, `sub_agent` ou `all` montrent les autres sessions. Sur Telegram, `/sessions` rend un
 bouton par session : un clic lie le chat à cette session, « ⋯ » propose de la forker, de
 la renommer ou de la fermer, et les sessions fermées n'apparaissent qu'à la demande.
 `/switch` accepte un identifiant, un préfixe unique ou un titre ; `/close` ou

@@ -124,6 +124,11 @@ pub async fn tick_after(
     };
 
     rearm(d, ports).await?;
+    // Les sessions des tirs et des runs finis se ferment ici (#459) ; un échec n'arrête
+    // pas le passage.
+    if let Err(error) = closing::close_finished(d).await {
+        tracing::warn!(%error, "sessions finies non fermées");
+    }
     let cfg = s.config.config();
     let tz = cfg.owner.timezone.clone();
     let quiet_range = cfg.quiet_range();
@@ -363,6 +368,7 @@ pub(super) async fn finish(
 }
 
 mod agenda;
+mod closing;
 mod digest;
 mod fire;
 mod origin;

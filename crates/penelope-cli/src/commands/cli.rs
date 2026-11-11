@@ -454,7 +454,13 @@ pub enum MissionCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum SessionCmd {
-    List,
+    /// Les conversations récentes ; `--kind` nomme un autre type de session.
+    List {
+        /// `scheduled` (tirs de planification), `workflow_run`, `sub_agent`, `heartbeat`,
+        /// ou `all` pour tous les types.
+        #[arg(long)]
+        kind: Option<String>,
+    },
     New {
         title: Option<String>,
     },
