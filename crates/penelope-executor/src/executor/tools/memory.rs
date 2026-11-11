@@ -228,6 +228,21 @@ impl NativeToolExecutor {
                     }
                 };
                 let texte = str_arg(args, "texte")?;
+                // L'entrée est signée de qui l'a dite (#447) : du propriétaire s'il l'a
+                // dite dans ce tour, de l'agent sinon. Un tour qui a lu une page, un
+                // courriel ou un résultat MCP n'écrit rien ici hors de ses mots : ce
+                // niveau est injecté d'office.
+                let trust = self.turn_trust().await?;
+                let origin = trust.origin_of(&texte);
+                if !origin.can_be_promoted() {
+                    return Err(ToolError::Denied(format!(
+                        "ce tour a lu du contenu externe ({}) et ce texte ne reprend pas une \
+                         phrase du propriétaire : rien n'est écrit directement en mémoire. \
+                         Demande-lui s'il veut le retenir ; un fait tiré de ce contenu se \
+                         note par `mem_note`, trié au prochain rêve",
+                        trust.sources()
+                    )));
+                }
                 // Deux règles opposées ne cohabitent pas dans ce qui est injecté d'office :
                 // le propriétaire tranche, pas le modèle (#224).
                 if let Some(e) = penelope_vault::vault_ops::contradicted(s, level, &texte).await {
@@ -238,16 +253,16 @@ impl NativeToolExecutor {
                     )));
                 }
                 let vault = penelope_app::helpers::vault_dir(s);
-                let uid = penelope_vault::vault_ops::remember(
-                    s,
-                    &vault,
-                    level,
-                    &texte,
+                let prov = penelope_memory::Provenance::new(
+                    origin,
                     &self.env.session_id,
-                )
-                .await
-                .map_err(ToolError::Denied)?;
-                json!({"uid": uid, "niveau": level.as_str()})
+                    "interactive",
+                    &s.clock.now_rfc3339(),
+                );
+                let uid = penelope_vault::vault_ops::remember_with(s, &vault, level, &texte, prov)
+                    .await
+                    .map_err(ToolError::Denied)?;
+                json!({"uid": uid, "niveau": level.as_str(), "origine": origin.as_str()})
             }
             "mem_forget" => {
                 let vault = penelope_app::helpers::vault_dir(s);

@@ -357,6 +357,7 @@ mod meta;
 mod post_hooks;
 mod precheck;
 mod tools;
+mod turn_trust;
 
 use args::{
     FS_LIST_INLINE_CHARS, b_arg, new_workflow_plan, render_listing, str_arg, summarise_listing,

@@ -12,6 +12,60 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.101
+
+**`mem_remember` : l'entrée est signée de qui l'a dite, et un tour qui a lu du contenu
+externe n'écrit plus en mémoire sous le nom du propriétaire (#447).**
+
+- La description de l'outil disait « Refusé si le message courant ne le demande pas
+  explicitement » ; l'exécution n'avait aucune garde, et écrivait toujours avec la
+  provenance `owner`. Une page web, un courriel ou un résultat d'outil lu pendant le tour
+  pouvait donc faire écrire une « règle » au cœur, injectée d'office aux tours suivants
+  et protégée par le rêve comme une parole du propriétaire. La contamination de tour
+  (`TurnContamination`, §6.5) existait dans `penelope-memory` sans être branchée. Trouvé
+  à la relecture du code, rejoué par un test ; non observé en production.
+- L'exécuteur relit le tour en cours dans le transcript (`executor::turn_trust`), de la
+  dernière réponse finale à l'appel : ce que le propriétaire y a écrit, et ce qui y est
+  entré d'ailleurs. Contamine le tour : un outil réseau (`http_fetch`, `git_clone`…), un
+  outil MCP, y compris derrière `tool_call`, une commande lancée avec `network: true`, un
+  résultat ou un message encadré comme donnée non fiable (terminal, note de sous-agent,
+  passage d'un document ingéré, message transféré). Un tour dont le début sort de la
+  fenêtre relue (200 messages) est tenu pour contaminé.
+- `mem_remember` signe alors l'entrée : `owner` si le texte reprend une phrase du
+  propriétaire du tour, même reformulée (le recouvrement de #245), y compris après une
+  page lue ; `agent` sinon, dans un tour sans contenu externe (« Oui, retiens ça »
+  s'écrit comme avant, sans se dire parole du propriétaire) ; **refus** quand le tour est
+  contaminé et que le texte ne reprend pas ses mots. Le refus nomme les sources et les
+  deux sorties : demander au propriétaire (son « oui » ouvre un tour propre), ou
+  `mem_note`, trié au prochain rêve. Le résultat porte `origine`.
+- Ce qui change pour une entrée `agent` : elle est écrite et injectée comme avant, mais
+  le rêve ne la protège plus comme règle du propriétaire et le budget du cœur peut la
+  rétrograder si elle ne sert pas. Le profil reste protégé quel que soit son auteur. Une
+  consigne trop courte pour être reconnue (moins de trois mots pleins, « tutoie-moi
+  toujours ») est signée `agent`.
+- `Provenance::new(origine, …)` ; `/retiens`, le rêve et les propositions approuvées
+  gardent `owner` : c'est le propriétaire qui écrit ou qui valide.
+- Description de l'outil alignée, référence régénérée ; `docs/install-headless.md` dit
+  qui signe quoi.
+- Tests : `turn_trust` (chaque porte d'entrée contamine, sur les cadres réels ; la parole
+  du propriétaire tient après une page ; le tour suivant repart propre ; tour interne ou
+  tronqué), `tests::memory` de l'exécuteur, de bout en bout (la page ne fait rien écrire,
+  ni dans l'index ni dans le vault ; `owner` ; `agent` ; le « oui » du tour suivant).
+  Sans la garde, deux de ces tests sont rouges. Scénarios `outils-memoire`,
+  `outils-memoire-contradiction` et `outils-soi` régénérés (`origine`, la description).
+  `mem_longitudinal`, suite réseau, n'a pas été rejouée : pas de clé OpenRouter dans
+  cette session.
+- **Pas fait ici** : `mem_note` ne lit pas la contamination (une règle d'origine agent
+  sans citation est déjà demandée au propriétaire, un fait passe le tri du rêve ; marquer
+  non fiable tout candidat d'un tour qui a touché un outil MCP ferait rejeter l'essentiel
+  de ce que l'agent apprend) ; `mem_forget` non plus (réversible trente jours) ;
+  `fs_read` d'un fichier local n'est pas tenu pour externe ; dans un sous-agent, le brief
+  du parent se lit comme un message du propriétaire. La contamination est de tour, comme
+  au §6.5 : au message suivant, la page lue reste dans le contexte du modèle, et une
+  écriture qu'elle inspirerait alors est signée `agent`, pas refusée. Une compaction en
+  cours de tour ne change rien : le transcript relu est celui de l'historique, pas la
+  fenêtre du modèle.
+
 ### 1.0.100
 
 **Un hook qui réécrit les arguments : l'accord vaut pour ce que la carte a montré, et
