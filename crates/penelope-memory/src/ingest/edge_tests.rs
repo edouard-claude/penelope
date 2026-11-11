@@ -51,6 +51,73 @@ fn entities_are_decoded_and_unknown_ones_kept() {
     assert_eq!(decode_entities("&inconnu; &#xZZ;"), "&inconnu; &#xZZ;");
 }
 
+/// #452 : la fenêtre de 12 octets où chercher le `;` coupait au milieu d'un caractère
+/// accentué et la tranche paniquait. « R&D à Montréal » suffisait.
+#[test]
+fn an_ampersand_before_accented_text_is_kept() {
+    for text in [
+        "R&D à Montréal",
+        "Marks & Spencer à Montréal, Québec",
+        "&ééééééé",
+        "&aaaaaaaaaa€;",
+        "fin &",
+        "😀&😀😀😀😀;",
+    ] {
+        assert_eq!(decode_entities(text), text);
+    }
+    assert_eq!(
+        decode_entities(
+            "caf&eacute; &agrave; No&euml;l &laquo;&nbsp;&OElig;uvre&nbsp;&raquo; 12&nbsp;&euro;&hellip;"
+        ),
+        "café à Noël « Œuvre » 12 €…"
+    );
+    assert_eq!(decode_entities("&#233;&#xE9;&#x1F600;"), "éé😀");
+    let page = html_to_text("<p>R&D à Montréal</p><p>Budget&nbsp;: 3&nbsp;M&euro;</p>");
+    let lines: Vec<&str> = page.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, ["R&D à Montréal", "Budget : 3 M€"]);
+}
+
+/// #452 : aucune suite de caractères ne fait paniquer le décodage. Toutes les chaînes
+/// de cinq signes au plus sur un alphabet qui mêle les marques d'entité et des
+/// caractères d'un à quatre octets, puis une esperluette devant chaque décalage d'une
+/// queue multi-octets. Sans `;`, rien n'est décodé.
+#[test]
+fn no_string_makes_the_decoding_panic() {
+    const ALPHABET: [char; 9] = ['&', ';', '#', 'x', '4', 'a', 'é', '€', '😀'];
+    let mut count = 0usize;
+    let mut stack: Vec<String> = vec![String::new()];
+    while let Some(s) = stack.pop() {
+        let out = decode_entities(&s);
+        if !s.contains(';') {
+            assert_eq!(out, s);
+        }
+        count += 1;
+        if s.chars().count() < 5 {
+            stack.extend(ALPHABET.iter().map(|c| format!("{s}{c}")));
+        }
+    }
+    assert_eq!(count, (0..=5).map(|n| 9usize.pow(n)).sum::<usize>());
+    for pad in 0..16 {
+        for tail in ["é€😀é€😀é€😀", "😀😀😀😀;", "ééééééééé;"] {
+            let s = format!("&{}{tail}", "a".repeat(pad));
+            assert_eq!(decode_entities(&s), s);
+        }
+    }
+}
+
+/// #452 : une panique de la lecture est rendue comme une erreur qui nomme le document,
+/// pas comme une tâche perdue.
+#[test]
+fn a_panic_during_extraction_names_the_document() {
+    let err = guarded("rapport 2026.docx", || panic!("tranche")).unwrap_err();
+    assert!(
+        err.contains("`rapport 2026.docx`") && err.contains("contenu inattendu"),
+        "{err}"
+    );
+    let page = extract("note.html", "<p>R&D à Montréal</p>".as_bytes()).unwrap();
+    assert_eq!(page.text, "R&D à Montréal");
+}
+
 /// Du HTML tronqué (commentaire ou balise jamais fermés) ne fait rien perdre avant la
 /// coupure, et le contenu des scripts n'entre pas. Un commentaire jamais fermé est
 /// retiré jusqu'à la fin.

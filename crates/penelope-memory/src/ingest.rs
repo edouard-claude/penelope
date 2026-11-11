@@ -15,6 +15,9 @@ use penelope_kernel::frontmatter::{self, FmValue};
 use std::collections::BTreeMap;
 use std::io::Read;
 
+mod entities;
+use entities::decode_entities;
+
 /// Type d'entrée des passages de documents.
 pub const SOURCE_ETYPE: &str = "source";
 /// Répertoire des fiches, relatif au vault.
@@ -62,12 +65,28 @@ pub fn is_ingestible(name: &str) -> bool {
     INGESTIBLE.contains(&extension(name).as_str())
 }
 
-/// Extrait le texte d'un document d'après son extension.
+/// Extrait le texte d'un document d'après son extension. Une panique de la lecture (PDF
+/// ou archive malformés, texte inattendu) devient une erreur qui nomme le document : elle
+/// emportait la tâche et ne laissait qu'« extraction interrompue » (#452).
 pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
+    guarded(name, || extract_unguarded(name, bytes))
+}
+
+fn guarded(
+    name: &str,
+    read: impl FnOnce() -> Result<Extracted, String> + std::panic::UnwindSafe,
+) -> Result<Extracted, String> {
+    std::panic::catch_unwind(read).unwrap_or_else(|_| {
+        Err(format!(
+            "`{name}` : extraction interrompue par un contenu inattendu (document malformé ?)"
+        ))
+    })
+}
+
+fn extract_unguarded(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
     let ext = extension(name);
     let raw = match ext.as_str() {
-        "pdf" => std::panic::catch_unwind(|| extract_pdf(bytes))
-            .map_err(|_| "PDF malformé : l'extraction a échoué".to_string())??,
+        "pdf" => extract_pdf(bytes)?,
         "docx" => extract_docx(bytes)?,
         "html" | "htm" => Extracted {
             format: "html",
@@ -299,50 +318,6 @@ pub fn html_to_text(html: &str) -> String {
     if skipping.is_none() {
         out.push_str(&decode_entities(rest));
     }
-    out
-}
-
-/// Entités XML et HTML courantes.
-fn decode_entities(s: &str) -> String {
-    if !s.contains('&') {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        let tail = &rest[amp..];
-        let Some(semi) = tail[..tail.len().min(12)].find(';') else {
-            out.push('&');
-            rest = &tail[1..];
-            continue;
-        };
-        let entity = &tail[1..semi];
-        let decoded = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some(' '),
-            e if e.starts_with("#x") || e.starts_with("#X") => u32::from_str_radix(&e[2..], 16)
-                .ok()
-                .and_then(char::from_u32),
-            e if e.starts_with('#') => e[1..].parse::<u32>().ok().and_then(char::from_u32),
-            _ => None,
-        };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &tail[semi + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
     out
 }
 

@@ -12,6 +12,35 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.106
+
+**Ingestion HTML et DOCX : une esperluette devant un caractère accentué ne fait plus
+paniquer l'extraction (#452).**
+
+- `decode_entities` cherchait le `;` d'une entité dans les 12 octets qui suivent `&` et
+  coupait la chaîne à cet endroit, sans regarder les frontières de caractères :
+  « R&D à Montréal » tombait au milieu du « é » et la tranche paniquait. La tâche
+  d'extraction était perdue et l'ingestion rendait « extraction interrompue », sans
+  nommer ni le document ni la cause.
+- La fenêtre se compte sur les octets sans couper la chaîne (`ingest/entities.rs`).
+  Test exhaustif : toutes les chaînes de cinq signes sur un alphabet mêlant `&`, `;`,
+  `#` et des caractères d'un à quatre octets, plus une esperluette à chaque décalage
+  devant une queue multi-octets.
+- Entités nommées : l'issue supposait `&eacute;` décodé, il ne l'était pas (seules
+  `amp`, `lt`, `gt`, `quot`, `apos`, `nbsp` et les formes numériques). Les lettres
+  accentuées et la ponctuation qu'un export HTML en français écrit ainsi (`&eacute;`,
+  `&agrave;`, `&laquo;`, `&rsquo;`, `&hellip;`, `&euro;`…) sont décodées ; une entité
+  inconnue reste en clair.
+- Garde commune : `extract` rattrape une panique de la lecture pour tous les formats (le
+  PDF seul l'était) et rend une erreur qui nomme le document ; l'ingestion nomme aussi
+  le document quand la tâche est perdue.
+- Relecture des tranches par octets de `penelope-memory`, `penelope-vault` et
+  `penelope-context` : une seconde fautive, l'extrait d'un résumé dans la recherche de
+  l'historique (`excerpt_around`). La position venait de la copie en minuscules, dont
+  les octets ne s'alignent pas sur l'original quand une majuscule change de longueur
+  (« İ »). Les autres coupent sur une position rendue par `find`, `char_indices` ou
+  une expression régulière.
+
 ### 1.0.105
 
 **Index mémoire : une réindexation ne rajeunit plus les entrées, la récence joue enfin

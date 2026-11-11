@@ -176,7 +176,7 @@ pub async fn ingest(
     let (extracted, bytes) =
         tokio::task::spawn_blocking(move || (doc::extract(&owned, &bytes), bytes))
             .await
-            .map_err(|_| "extraction interrompue".to_string())?;
+            .map_err(|_| format!("`{name}` : extraction interrompue"))?;
     let extracted = match extracted {
         // Document scanné : la couche texte manque, Vision lit les pages.
         Err(e) if e == doc::SCANNED_PDF => ocr(s, &sha, &bytes)

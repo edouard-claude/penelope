@@ -500,8 +500,19 @@ pub fn sanitise_fts(q: &str) -> String {
 }
 
 fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
-    let lower = text.to_lowercase();
-    let pos = lower.find(needle).unwrap_or(0);
+    let found = text.to_lowercase().find(needle).unwrap_or(0);
+    // La position vient de la copie en minuscules, dont les octets ne s'alignent pas
+    // toujours sur l'original (« İ » en prend un de plus) : la reporter caractère par
+    // caractère, sinon la coupe tombe au milieu d'une lettre et panique (#452).
+    let mut lowered = 0;
+    let pos = text
+        .char_indices()
+        .find_map(|(i, c)| {
+            let at = lowered;
+            lowered += c.to_lowercase().map(char::len_utf8).sum::<usize>();
+            (at >= found).then_some(i)
+        })
+        .unwrap_or(text.len());
     let start = text[..pos]
         .char_indices()
         .rev()
@@ -514,4 +525,27 @@ fn excerpt_around(text: &str, needle: &str, width: usize) -> String {
         .map(|(i, _)| pos + i)
         .unwrap_or(text.len());
     text[start..end].replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::excerpt_around;
+
+    /// #452 : la position trouvée dans la copie en minuscules ne vaut pas pour l'original
+    /// quand une majuscule change de longueur (« İ », deux octets, devient trois). La
+    /// coupe tombait au milieu de la lettre suivante et la recherche paniquait.
+    #[test]
+    fn an_excerpt_is_cut_on_the_original_text() {
+        assert_eq!(excerpt_around("İé x", "é", 10), "İé x");
+        let long = format!(
+            "{}İstanbul reçoit l'équipe à Noël{}",
+            "é".repeat(200),
+            "à".repeat(200)
+        );
+        let cut = excerpt_around(&long, "noël", 20);
+        assert!(cut.contains("Noël"), "{cut}");
+        assert!(cut.chars().count() <= 31, "{cut}");
+        assert_eq!(excerpt_around("sans le mot", "absent", 4), "sans");
+        assert_eq!(excerpt_around("", "rien", 4), "");
+    }
 }
