@@ -115,8 +115,40 @@ fn leading_assignments_keep_the_program_unless_they_hijack_it() {
         "GIT_CONFIG_COUNT=1 git log",
         "NODE_OPTIONS=--require=/tmp/x node -v",
         "PA\"TH\"=/tmp ls",
+        // #444 : toute la famille `GIT_*` qui lance, redirige ou écrit, la configuration
+        // de `rg` et de git, les tableaux liés de zsh, les programmes auxiliaires.
+        "GIT_SSH=./x git fetch",
+        "GIT_EDITOR=./x git commit",
+        "GIT_SEQUENCE_EDITOR=./x git rebase",
+        "GIT_ASKPASS=./x git fetch",
+        "GIT_PROXY_COMMAND=./x git fetch",
+        "GIT_EXEC_PATH=/tmp git status",
+        "GIT_DIR=/tmp/autre/.git git status",
+        "GIT_TRACE=/tmp/trace git status",
+        "GIT_VARIABLE_DE_DEMAIN=1 git status",
+        "RIPGREP_CONFIG_PATH=rc rg motif",
+        "XDG_CONFIG_HOME=/tmp/xdg git status",
+        "path=/tmp ls",
+        "SSH_ASKPASS=./x git fetch",
+        "GH_PAGER=./x gh pr view 1",
+        "BROWSER=./x gh pr view 1 --web",
+        "PAGER=./x git log",
     ] {
         assert!(simple(hijack).is_none(), "{hijack}");
+    }
+    // Ce qui ne fait que renseigner, et un pageur coupé, gardent la famille.
+    for inert in [
+        "GIT_TERMINAL_PROMPT=0 git fetch",
+        "GIT_AUTHOR_DATE=2026-01-01 GIT_COMMITTER_DATE=2026-01-01 git commit -m x",
+        "PAGER=cat git log",
+        "GIT_PAGER=cat git log",
+        "AWS_PAGER= aws s3 ls",
+        "GIT_EDITOR=true git rebase --continue",
+        "GIT_SEQUENCE_EDITOR=: git rebase -i HEAD~2",
+        "BROWSER=/usr/bin/false gh auth login",
+        "RUST_BACKTRACE=1 cargo test",
+    ] {
+        assert!(simple(inert).is_some(), "{inert}");
     }
     // Après le programme, `k=v` est un argument comme un autre.
     assert_eq!(words("make CC=gcc all"), ["make", "CC=gcc", "all"]);
@@ -612,4 +644,119 @@ fn uniq_really_writes_its_second_argument() {
         std::fs::read_to_string(dir.path().join("sortie")).expect("sortie"),
         "a\n"
     );
+}
+
+/// #444 : `export GIT_SSH_COMMAND=… && git fetch` partait sous une règle `git fetch`,
+/// l'étape `export` étant traversée sans qu'on regarde ce qu'elle posait. Un réglage du
+/// shell qui détourne la suite laisse la ligne composée, comme la variable en préfixe.
+#[test]
+fn a_setup_step_that_hijacks_the_rest_leaves_the_line_composed() {
+    for hijack in [
+        "export GIT_SSH_COMMAND='sh -c x' && git fetch origin",
+        "export A=1 GIT_SSH=./x && git fetch",
+        "export PATH=/tmp/bin && ls",
+        "export PATH && ls",
+        "export 'GIT_SSH'=./x && git fetch",
+        "export {GIT_SSH,A}=./x && git fetch",
+        "export -f f && git fetch",
+        "readonly PATH=/tmp/bin && ls",
+        "local PATH=/tmp/bin && ls",
+        "unset GIT_CONFIG_NOSYSTEM && git status",
+        "alias git=./x && git status",
+        "set -k && git fetch GIT_SSH=./x",
+        "set -a && git fetch",
+        "set -o allexport && git fetch",
+        "set -- a b && git fetch",
+        "set -eo posix && git fetch",
+        "shopt -so keyword && git fetch GIT_SSH=./x",
+        "typeset -x PATH=/tmp/bin && ls",
+        "declare -x PATH=/tmp/bin && ls",
+        "hash -p ./x git && git status",
+        "trap ./x EXIT && true",
+        "setopt aliases && git status",
+        "printf -v PATH %s ./bin && ls",
+        "printf -vPATH %s ./bin && ls",
+        "print -rv PATH ./bin && ls",
+        "cd repo && export GIT_SSH=./x && git fetch",
+    ] {
+        assert!(list(hijack).is_none(), "{hijack}");
+    }
+    // Sous une forme qui ne détourne rien, l'étape reste traversée (#123, #150).
+    for inert in [
+        "export RUST_BACKTRACE=1 && cargo test",
+        "export A=1 B='deux mots' && cargo test",
+        "export LANG=C LC_ALL=C && sort fichier",
+        "export GIT_TERMINAL_PROMPT=0 && git fetch",
+        "export PAGER=cat && git log",
+        "unset A B && cargo test",
+        "unset -v A && cargo test",
+        "set -e && cargo test",
+        "set -eux && cargo test",
+        "set -euo pipefail && cargo test",
+        "set -o errexit -o nounset && cargo test",
+        "set +x && cargo test",
+        "umask 077 && touch f",
+        "shopt -s globstar && cargo test",
+        "ulimit -n 4096 && cargo test",
+        "cd repo && cargo test",
+    ] {
+        let l = list(inert).unwrap_or_else(|| panic!("{inert}"));
+        assert!(sets_up_shell(&l.steps[0]), "{inert}");
+        assert!(needs_no_rule(&l.steps[0]), "{inert}");
+        assert!(!sets_up_shell(&l.steps[1]), "{inert}");
+    }
+    // `alias` n'est plus un réglage traversé, seul non plus.
+    assert!(simple("alias").is_none());
+    // `printf` sans `-v` reste la lecture qu'il était.
+    for read in ["printf '%s\\n' a", "printf -- -v", "printf '%d-%d' 1 2"] {
+        assert!(is_read_command(read), "{read}");
+    }
+    assert!(!is_read_command("printf -v PATH x"));
+    // Une lecture sous une variable qui détourne n'en est plus une.
+    for not_read in [
+        "RIPGREP_CONFIG_PATH=rc rg motif",
+        "XDG_CONFIG_HOME=/tmp/xdg git status",
+        "GIT_SSH=./x git log",
+        "GIT_TRACE=/tmp/trace git status",
+    ] {
+        assert!(!is_read_command(not_read), "{not_read}");
+    }
+}
+
+/// #444 : la carte nomme la variable ou le réglage qui empêche la règle, au lieu de
+/// renvoyer à `sh -c`.
+#[test]
+fn the_hijacking_variable_is_named_on_the_card() {
+    for (line, why) in [
+        (
+            "GIT_SSH=./x git fetch",
+            "la variable `GIT_SSH`, qui change ce que la commande lance",
+        ),
+        (
+            "cd repo && export A=1 PATH=/tmp/bin && ls",
+            "la variable `PATH`, qui change ce que la commande lance",
+        ),
+        (
+            "unset HOME && git status",
+            "la variable `HOME`, qui change ce que la commande lance",
+        ),
+        (
+            "alias git=./x && git status",
+            "`alias`, qui change ce que la suite de la ligne lance",
+        ),
+        (
+            "set -k && git fetch",
+            "`set -k`, un réglage du shell hors des formes connues",
+        ),
+        (
+            "printf -v PATH %s ./bin && ls",
+            "`printf -v`, qui pose une variable du shell",
+        ),
+        (
+            "sudo ls",
+            "la commande ne nomme pas ce qu'elle lance (`sh -c`, `sudo`, `env`…)",
+        ),
+    ] {
+        assert_eq!(why_composed(line).as_deref(), Some(why), "{line}");
+    }
 }

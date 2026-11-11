@@ -15,7 +15,8 @@
 //! (`$`, `` ` ``) ou un échappement (`\`) hors apostrophes — donc même entre guillemets
 //! doubles, où ils gardent leur pouvoir —, un saut de ligne, une négation (`!` en tête),
 //! des guillemets non fermés, ou une affectation d'environnement qui détourne
-//! l'interpréteur (`PATH=`, `LD_PRELOAD=`, `NODE_OPTIONS=`…).
+//! l'interpréteur (`PATH=`, `LD_PRELOAD=`, `NODE_OPTIONS=`…), en préfixe comme par
+//! `export` (#444, `cmdline/environment.rs`).
 //!
 //! Un **tube vers une lecture pure** fait exception (commentaire de #141) : `glab api … |
 //! jq -r '…'` prend la famille de sa première étape, parce que `jq`, `grep`, `head`,
@@ -297,34 +298,40 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Stage>>> {
 }
 
 /// Une étape, une fois ses mots connus : ses affectations de tête, puis son programme.
+/// `None` : elle détourne ce qui sera lancé, ou ne le nomme pas.
 fn command_of(stage: Stage) -> Option<SimpleCommand> {
-    let Stage { mut words, expands } = stage;
     // `! cmd` nie le code de retour d'un pipeline : la ligne n'est pas celle qu'on lit.
-    if words.first().is_some_and(|w| w == "!") {
+    if stage.words.first().is_some_and(|w| w == "!") {
         return None;
     }
-    let mut assignments = Vec::new();
-    let mut i = 0;
-    while let Some((name, value)) = words.get(i).and_then(|w| split_assignment(w)) {
-        // `PATH=/tmp ls` n'est pas `ls` : la ligne reste composée, aucune règle `ls` ne la
-        // couvre et ce n'est pas une lecture.
-        if hijacks_interpreter(&name) {
-            return None;
-        }
-        assignments.push((name, value));
-        i += 1;
+    let c = split_stage(stage);
+    // `PATH=/tmp ls` n'est pas `ls`, et `export PATH=/tmp && ls` non plus (#444) : la ligne
+    // reste composée, aucune règle ne la couvre et ce n'est pas une lecture.
+    if environment::obstacle(&c).is_some() {
+        return None;
     }
-    let words = words.split_off(i);
-    let c = SimpleCommand {
-        assignments,
-        words,
-        expands,
-    };
     // La famille doit nommer ce qui sera lancé, pas l'enveloppe ni l'interpréteur (#150).
     if runs_arbitrary_code(&c) {
         return None;
     }
     Some(c)
+}
+
+/// Sépare les affectations de tête (`VAR=valeur`) du programme et de ses arguments.
+fn split_stage(stage: Stage) -> SimpleCommand {
+    let Stage { mut words, expands } = stage;
+    let mut assignments = Vec::new();
+    let mut i = 0;
+    while let Some(assignment) = words.get(i).and_then(|w| split_assignment(w)) {
+        assignments.push(assignment);
+        i += 1;
+    }
+    let words = words.split_off(i);
+    SimpleCommand {
+        assignments,
+        words,
+        expands,
+    }
 }
 
 /// Une étape de tube qui ne peut que lire : ni écriture, ni exécution, ni environnement.
@@ -387,9 +394,33 @@ fn runs_arbitrary_code(c: &SimpleCommand) -> bool {
     };
     // Une enveloppe lance ce qu'on lui passe : la famille nommerait l'enveloppe.
     const WRAPPERS: &[&str] = &[
-        "sh", "bash", "zsh", "ksh", "dash", "fish", "csh", "tcsh", "eval", "exec", "source", ".",
-        "env", "xargs", "nohup", "sudo", "doas", "su", "time", "nice", "timeout", "watch",
-        "script", "command", "builtin",
+        "sh",
+        "bash",
+        "zsh",
+        "ksh",
+        "dash",
+        "fish",
+        "csh",
+        "tcsh",
+        "eval",
+        "exec",
+        "source",
+        ".",
+        "env",
+        "xargs",
+        "nohup",
+        "sudo",
+        "doas",
+        "su",
+        "time",
+        "nice",
+        "timeout",
+        "watch",
+        "script",
+        "command",
+        "builtin",
+        "noglob",
+        "nocorrect",
     ];
     if WRAPPERS.contains(&program) {
         return true;
@@ -407,39 +438,6 @@ fn runs_arbitrary_code(c: &SimpleCommand) -> bool {
         "php" => has(&["-r"]),
         _ => false,
     }
-}
-
-/// Une variable qui change ce que la ligne exécute vraiment : chemin de recherche,
-/// bibliothèque préchargée, fichier de démarrage ou options d'un interpréteur. Une ligne
-/// qui en porte une reste composée, quelle que soit la commande qui suit.
-fn hijacks_interpreter(name: &str) -> bool {
-    const NAMES: &[&str] = &[
-        "PATH",
-        "HOME",
-        "IFS",
-        "ENV",
-        "BASH_ENV",
-        "SHELLOPTS",
-        "BASHOPTS",
-        "CDPATH",
-        "PS4",
-        "NODE_OPTIONS",
-        "PYTHONSTARTUP",
-        "PYTHONPATH",
-        "PYTHONHOME",
-        "PERL5OPT",
-        "PERL5LIB",
-        "RUBYOPT",
-        "RUBYLIB",
-        "GIT_SSH_COMMAND",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_PAGER",
-        "PAGER",
-        "EDITOR",
-        "VISUAL",
-    ];
-    const PREFIXES: &[&str] = &["DYLD_", "LD_", "GIT_CONFIG", "BASH_FUNC_"];
-    NAMES.contains(&name) || PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
 /// Une ligne de commande qui ne fait que lire (issue #111) : un programme de lecture
@@ -481,24 +479,14 @@ pub fn is_read(line: &Pipeline) -> bool {
 /// `set`…). Il n'agit pas sur le monde, et une règle à son nom ne bornerait rien : c'est
 /// d'où venaient vingt des vingt-sept règles créées le 20/09, toutes à zéro usage
 /// (issues #123, #150). Dans une liste, il est traversé comme une lecture.
+///
+/// Seulement sous une forme qui ne détourne rien (#444, `cmdline/environment.rs`) :
+/// `export GIT_SSH_COMMAND=…`, `set -k` ou `alias` laissent la ligne composée dès le
+/// découpage, donc n'arrivent jamais ici.
 pub fn sets_up_shell(line: &Pipeline) -> bool {
-    line.head.program().is_some_and(|p| {
-        matches!(
-            p,
-            "cd" | "export"
-                | "set"
-                | "unset"
-                | "alias"
-                | "unalias"
-                | "umask"
-                | "ulimit"
-                | "pushd"
-                | "popd"
-                | "shopt"
-                | "local"
-                | "readonly"
-        )
-    })
+    line.head
+        .program()
+        .is_some_and(|p| environment::SETUP.contains(&p))
 }
 
 /// Une étape qui ne demande aucune règle : elle lit, ou elle règle le shell.
@@ -560,11 +548,19 @@ pub fn why_composed(line: &str) -> Option<String> {
             _ => {}
         }
     }
-    // Aucun opérateur : c'est une enveloppe, un interpréteur, ou une affectation qui
-    // détourne l'interpréteur.
+    // Aucun opérateur : une variable ou un réglage du shell qui détourne la suite (#444),
+    // sinon une enveloppe ou un interpréteur.
+    let stages = scan_list(line).into_iter().flatten().flatten();
+    if let Some(why) = stages
+        .filter_map(|stage| environment::obstacle(&split_stage(stage)))
+        .next()
+    {
+        return Some(why);
+    }
     Some("la commande ne nomme pas ce qu'elle lance (`sh -c`, `sudo`, `env`…)".into())
 }
 
+mod environment;
 mod options;
 #[cfg(test)]
 mod tests;

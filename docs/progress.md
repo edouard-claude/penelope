@@ -12,6 +12,53 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.98
+
+**Règles « Toujours » : une variable qui détourne est refusée par `export` comme en
+préfixe, et la liste couvre toute la famille `GIT_*` (#444).**
+
+- Avec une règle `git fetch`, `export GIT_SSH_COMMAND=./x && git fetch` partait sans
+  carte : l'étape `export` était traversée sans qu'on regarde ce qu'elle posait, alors que
+  `GIT_SSH_COMMAND=./x git fetch` était refusée. Trouvé à la relecture du code, rejoué le
+  11/11 (zsh 5.9, bash 3.2, git 2.54, ripgrep 15) avec un script témoin, non observé en
+  production.
+- Rejoués et confirmés aussi : `GIT_SSH`, `GIT_EDITOR`, `GIT_PROXY_COMMAND` lancent le
+  script ; `RIPGREP_CONFIG_PATH=rc rg motif` aussi, par un `--pre` écrit dans `rc`, alors
+  que la ligne était une lecture ; `XDG_CONFIG_HOME=d git status` et `GIT_DIR=… GIT_WORK_TREE=…
+  git status` lancent le `core.fsmonitor` de la configuration désignée ;
+  `GIT_TRACE=/chemin git status` écrit un fichier ; `path=/tmp ls` (zsh) et `readonly PATH=… && ls` changent
+  le chemin de recherche.
+- Trouvés en rejouant, même classe : `printf -v PATH %s ./bin && ls` (une lecture qui pose
+  une variable du shell), `typeset -x PATH=… && ls`, `hash -p ./x git && git status`,
+  `trap ./x EXIT && true`, et `set -k && git fetch GIT_SSH=./x` sous bash.
+- **Infirmé** : `alias git=… && git status` ne redéfinit rien, ni sous zsh ni sous bash,
+  l'alias n'étant lu qu'à la ligne suivante. `alias` n'est plus traversé pour autant :
+  aucune ligne réelle n'en porte.
+- Le correctif (`penelope_hitl::cmdline::environment`) : une seule fonction juge la
+  variable, en préfixe, par `export`, `readonly`, `local` ou `unset`. Détournent en plus
+  d'avant : toute variable `GIT_*` hors treize qui ne font que renseigner (auteur, date,
+  `GIT_TERMINAL_PROMPT`…), `XDG_CONFIG_HOME`, `RIPGREP_CONFIG_PATH`, `path` et `cdpath`,
+  et tout nom qui finit par `PAGER`, `EDITOR`, `ASKPASS` ou `BROWSER`. Couper un tel
+  programme reste anodin : `PAGER=cat`, `AWS_PAGER=`, `GIT_EDITOR=true`,
+  `BROWSER=/usr/bin/false` gardent leur famille, ce que `PAGER=cat git log` n'avait pas.
+- Un réglage du shell n'est traversé que sous une forme connue : `export NOM=valeur` sans
+  option, `set` avec `-e`, `-u`, `-x`, `-f`, `-C`, `-v` et `-o pipefail` et consorts. Le
+  reste (`set -k`, `set -a`, `shopt -o`, `alias`, `typeset`, `declare`, `hash`, `trap`,
+  `setopt`, `printf -v`…) laisse la ligne **composée** plutôt que réglable : une règle
+  `export` ou `trap` aurait couvert n'importe quel détournement. `noglob` et `nocorrect`
+  rejoignent les enveloppes (`command`, `env`…).
+- La carte nomme l'obstacle : « la variable `GIT_SSH`, qui change ce que la commande
+  lance », au lieu de renvoyer à `sh -c`.
+- **Ce qui change pour les règles existantes** : une ligne à `export` d'une variable
+  détournante, ou à `GIT_*=…` en préfixe hors des treize, redemande une carte à chaque
+  fois, et « Toujours » n'y écrit rien. Mesure sur les 7 643 `shell_exec` de l'instance du
+  propriétaire : 1 252 lectures, 5 431 lignes à famille et 55 lignes à réglage traversé
+  avant comme après, aucune ligne ne change de classe.
+- Pas fait ici : la liste reste une liste de noms. Une variable propre à un programme
+  couvert par une règle (`CARGO_TARGET_*_RUNNER`, `DOCKER_CONFIG`, `KUBECONFIG`,
+  `http_proxy`) n'y est pas ; ces familles lancent déjà du code ou parlent déjà au réseau
+  sous leur règle.
+
 ### 1.0.97
 
 **shell_exec : une option qui écrit ou qui lance n'est plus classée lecture, sous aucune

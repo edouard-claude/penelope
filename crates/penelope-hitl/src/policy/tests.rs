@@ -592,3 +592,67 @@ async fn a_session_grant_in_a_scheduled_session_holds_for_the_schedule() {
         "conversation ordinaire"
     );
 }
+
+/// #444 : une règle de famille ne couvre plus sa commande derrière un réglage du shell qui
+/// la détourne. Avec une règle `mkdir`, `export PATH=./bin && mkdir c` partait sans carte :
+/// l'étape `export` était traversée sans qu'on regarde ce qu'elle posait. Rejoué le 11/11.
+#[tokio::test]
+async fn a_family_rule_does_not_cover_its_command_behind_a_hijacking_setup() {
+    let e = engine();
+    let cfg = McpPolicy::default();
+    for family in ["mkdir", "rg"] {
+        e.create_rule(
+            RuleScope::Tool,
+            Some("shell_exec"),
+            None,
+            Some(json!({"command": {CMD_PREFIX_OP: family}})),
+            PolicyDecision::Auto,
+            PolicyWindow::Always,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let verdict = |command: &'static str| {
+        let (e, cfg) = (&e, &cfg);
+        async move {
+            e.evaluate(
+                cfg,
+                "shell_exec",
+                None,
+                &json!({"command": command}),
+                RiskClass::Write,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .decision
+        }
+    };
+    for covered in [
+        "mkdir a",
+        "cd work && mkdir a",
+        "export LC_ALL=C && mkdir a",
+        "set -euo pipefail && mkdir a",
+        "PAGER=cat rg motif",
+        "rg motif",
+    ] {
+        assert_eq!(verdict(covered).await, PolicyDecision::Auto, "{covered}");
+    }
+    for hijacked in [
+        "export PATH=./bin && mkdir a",
+        "export GIT_SSH_COMMAND=./x && mkdir a",
+        "readonly PATH=./bin && mkdir a",
+        "GIT_SSH=./x mkdir a",
+        "alias mkdir=./x && mkdir a",
+        "typeset -x PATH=./bin && mkdir a",
+        "hash -p ./x mkdir && mkdir a",
+        "printf -v PATH %s ./bin && mkdir a",
+        "set -k && mkdir a PATH=./bin",
+        "RIPGREP_CONFIG_PATH=rc rg motif",
+        "export RIPGREP_CONFIG_PATH=rc && rg motif",
+    ] {
+        assert_eq!(verdict(hijacked).await, PolicyDecision::Ask, "{hijacked}");
+    }
+}
