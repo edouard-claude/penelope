@@ -15,6 +15,7 @@ use penelope_telegram::mock::{MockTransport, updates};
 mod approval_cards;
 mod approvals;
 mod background;
+mod burst_topics;
 mod bursts;
 mod clicks;
 mod commands_more;

@@ -100,13 +100,17 @@ impl TelegramGateway {
             // (issue #49).
             let session = d.chat_session_for(&origin).await?;
             let tout = matches!(args.trim(), "tout" | "all");
-            let burst = self
+            // La rafale de ce sujet, pas celle du voisin ; ses updates ne reviendront pas
+            // au redémarrage (#462).
+            let dropped = self
                 .bursts
                 .lock()
                 .ok()
-                .and_then(|mut g| g.remove(&chat_id))
-                .map(|b| b.parts.len())
-                .unwrap_or(0);
+                .and_then(|mut g| g.remove(&(chat_id, topic_id)));
+            if let Some(b) = &dropped {
+                self.release_updates(&b.update_ids).await;
+            }
+            let burst = dropped.map(|b| b.parts.len()).unwrap_or(0);
             let running = d.bus.cancel_session(&session);
             // Ingestions en cours de cette session : comptées pour toute forme de
             // `/stop`, annulées par `/stop tout` (issue #155).
