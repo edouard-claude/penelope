@@ -578,6 +578,7 @@ pub fn source_entries(slug: &str, text: &str, maj: &str) -> Vec<IndexedEntry> {
             statut: "active".into(),
             depuis: None,
             maj: maj.to_string(),
+            revue: None,
             pinned: false,
             declencheurs: Vec::new(),
             retired_at: None,

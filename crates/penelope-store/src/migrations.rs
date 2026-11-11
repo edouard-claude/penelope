@@ -131,6 +131,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: "0029_workflow_items",
         sql: SQL_0029,
     },
+    Migration {
+        version: "0030_memory_freshness",
+        sql: SQL_0030,
+    },
 ];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
@@ -290,6 +294,7 @@ use init::SQL_0001;
 use since_0011::{
     SQL_0011, SQL_0012, SQL_0013, SQL_0014, SQL_0015, SQL_0016, SQL_0017, SQL_0018, SQL_0019,
     SQL_0021, SQL_0022, SQL_0023, SQL_0024, SQL_0025, SQL_0026, SQL_0027, SQL_0028, SQL_0029,
+    SQL_0030,
 };
 
 /// Double écriture de l'historique (épopée #208, T5, `design/v1/source-de-verite.md`

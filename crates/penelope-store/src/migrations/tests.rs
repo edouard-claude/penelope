@@ -381,3 +381,51 @@ fn an_existing_schedule_starts_with_no_failure_streak() {
         .unwrap();
     assert_eq!((failures, alerted), (0, None));
 }
+
+/// #451 : chaque réindexation posait `maj` au jour courant. À la montée, la date revient
+/// au dernier changement connu : l'historique, sinon la première observation ; une entrée
+/// sans trace garde la sienne, et aucune ne rajeunit.
+#[test]
+fn memory_dates_go_back_to_the_last_known_change() {
+    let mut c = Connection::open_in_memory().unwrap();
+    migrate(&mut c).unwrap();
+    c.execute_batch(
+        "DELETE FROM schema_migrations WHERE version = '0030_memory_freshness';
+         INSERT INTO mem_entries(uid, file, level, etype, text, maj, content_hash) VALUES
+            ('observee', 'notes.md', 'cure', 'fait', 'a', '2026-11-09', 'h'),
+            ('reecrite', 'notes.md', 'cure', 'fait', 'b', '2026-11-09', 'h'),
+            ('retiree', 'notes.md', 'cure', 'fait', 'c', '2026-11-09', 'h'),
+            ('sans-trace', 'notes.md', 'cure', 'fait', 'd', '2026-11-09', 'h'),
+            ('recente', 'notes.md', 'cure', 'fait', 'e', '2026-09-20', 'h');
+         INSERT INTO mem_provenance(uid, origin, session_kind, observed_at) VALUES
+            ('observee', 'owner', 'interactive', '2026-09-16T10:00:00Z'),
+            ('reecrite', 'owner', 'interactive', '2026-09-16T10:00:00Z'),
+            ('retiree', 'owner', 'interactive', '2026-09-18T10:00:00Z'),
+            ('recente', 'owner', 'interactive', '2026-10-30T10:00:00Z');
+         INSERT INTO mem_history(uid, file, op, ts) VALUES
+            ('reecrite', 'notes.md', 'replace_entry', '2026-10-02T03:00:00Z'),
+            ('reecrite', 'notes.md', 'demote_entry', '2026-10-20T03:00:00Z'),
+            ('retiree', 'notes.md', 'retire_entry', '2026-10-25T03:00:00Z');",
+    )
+    .unwrap();
+    migrate(&mut c).unwrap();
+    let mut stmt = c
+        .prepare("SELECT uid, maj FROM mem_entries ORDER BY uid")
+        .unwrap();
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let expected = [
+        ("observee", "2026-09-16"),
+        ("recente", "2026-09-20"),
+        ("reecrite", "2026-10-02"),
+        ("retiree", "2026-09-18"),
+        ("sans-trace", "2026-11-09"),
+    ];
+    for ((uid, maj), (want_uid, want)) in rows.iter().zip(expected) {
+        assert_eq!((uid.as_str(), maj.as_str()), (want_uid, want));
+    }
+    assert_eq!(rows.len(), expected.len());
+}

@@ -259,3 +259,64 @@ async fn a_pass_that_would_empty_the_index_retires_nothing_unless_confirmed() {
     assert_eq!(report.retired.len(), 8);
     assert_eq!(s.memory.live().await.unwrap().len(), 1);
 }
+
+/// #451 : la réindexation ne rajeunit pas la mémoire. 200 jours plus tard, une entrée
+/// intacte a gardé sa date, donc son âge dans le classement ; celle que le propriétaire
+/// a réécrite dans son éditeur, ou validée, prend le jour de sa dernière vérité.
+#[tokio::test]
+async fn a_reindex_two_hundred_days_later_only_dates_what_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::default());
+    let s = Services::for_tests(dir.path().to_path_buf(), clock.clone())
+        .await
+        .unwrap();
+    let vault = penelope_app::helpers::vault_dir(&s);
+    let mut uids = Vec::new();
+    for text in [
+        "Le serveur de prod est à Paris",
+        "Le serveur de recette est à Lyon",
+        "Le serveur de secours est à Lille",
+    ] {
+        uids.push(remember(&s, &vault, Level::Cure, text, "s1").await.unwrap());
+    }
+    let maj = |uid: String| {
+        let s = &s;
+        async move { s.memory.get(&uid).await.unwrap().unwrap().maj }
+    };
+    let (born, file) = (maj(uids[0].clone()).await, {
+        s.memory.get(&uids[0]).await.unwrap().unwrap().file
+    });
+    reindex(&s, &vault).await.unwrap();
+
+    clock.advance_days(200);
+    let later = super::super::day(&s);
+    assert_ne!(later, born);
+    let raw = std::fs::read_to_string(vault.join(&file)).unwrap();
+    let edited: Vec<String> = raw
+        .lines()
+        .map(|l| match l {
+            l if l.contains(&uids[1]) => l.replace("Lyon", "Nantes"),
+            l if l.contains(&uids[2]) => format!("{l} <!-- revue: {born} -->"),
+            l => l.to_string(),
+        })
+        .collect();
+    std::fs::write(vault.join(&file), edited.join("\n") + "\n").unwrap();
+    reindex(&s, &vault).await.unwrap();
+
+    assert_eq!(maj(uids[0].clone()).await, born, "intacte");
+    assert_eq!(maj(uids[1].clone()).await, later, "réécrite à la main");
+    assert_eq!(maj(uids[2].clone()).await, born, "validée le jour dit");
+    assert!(recalled(&s, "serveur Nantes").await.contains(&uids[1]));
+
+    // Validée aujourd'hui : elle redevient fraîche sans que son texte ait bougé.
+    let raw = std::fs::read_to_string(vault.join(&file)).unwrap();
+    let today = format!("revue: {later}");
+    std::fs::write(
+        vault.join(&file),
+        raw.replace(&format!("revue: {born}"), &today),
+    )
+    .unwrap();
+    reindex(&s, &vault).await.unwrap();
+    assert_eq!(maj(uids[2].clone()).await, later, "validée aujourd'hui");
+    assert_eq!(maj(uids[0].clone()).await, born);
+}

@@ -2782,6 +2782,15 @@ message (`memory.trigger_threshold`, sur le rang de recherche seul) ; sa récenc
 que l'ordonner face aux autres. Une entrée de six mois reste donc rappelée quand la
 question la vise, après une plus récente équivalente.
 
+L'âge d'un souvenir se compte depuis le jour où son contenu a changé pour la dernière fois
+(texte ou annotation), pas depuis la dernière réindexation : relire le vault ne rajeunit
+rien, déplacer une ligne d'une note à l'autre non plus. Le bouton « ✅ Valider » de
+`/memory` (annotation `<!-- revue: AAAA-MM-JJ -->`, qu'on peut aussi poser à la main)
+redonne sa fraîcheur à une entrée ancienne mais toujours vraie, à la réindexation
+suivante. Les entrées du profil et du cœur, épinglées, ne vieillissent pas. Un index
+reconstruit (`penelope store rebuild`) reprend pour chaque entrée sa dernière écriture
+connue, sinon sa première observation.
+
 Le rappel ne retarde jamais un tour : passé son budget (`memory.recall_timeout_ms`,
 150 ms en conversation), le tour part avec ce qui est prêt, les résultats trouvés par les
 mots si la recherche par le sens est encore en route, et rien sinon. Un tour que personne

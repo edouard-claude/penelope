@@ -240,3 +240,20 @@ CREATE TABLE workflow_items (
 );
 CREATE INDEX workflow_items_child ON workflow_items(child_run) WHERE child_run IS NOT NULL;
 "#;
+
+/// Date de fraîcheur des entrées mémoire (#451). Jusqu'ici chaque réindexation posait
+/// `maj` au jour courant : toutes les entrées avaient l'âge de la dernière. La date
+/// redevient celle du dernier changement connu : la dernière écriture de l'historique,
+/// sinon la première observation (la provenance n'est écrite qu'une fois). Elle ne peut que
+/// reculer ; une entrée sans l'une ni l'autre garde la sienne. Une validation du
+/// propriétaire (annotation `revue` du vault) est relue à la réindexation suivante.
+pub(super) const SQL_0030: &str = r#"
+UPDATE mem_entries
+   SET maj = MIN(maj, COALESCE(
+         (SELECT substr(MAX(h.ts), 1, 10) FROM mem_history h
+           WHERE h.uid = mem_entries.uid
+             AND h.op IN ('add_entry','replace_entry','supersede_entry')),
+         (SELECT substr(p.observed_at, 1, 10) FROM mem_provenance p
+           WHERE p.uid = mem_entries.uid),
+         maj));
+"#;

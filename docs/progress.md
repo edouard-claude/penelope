@@ -12,6 +12,38 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.105
+
+**Index mémoire : une réindexation ne rajeunit plus les entrées, la récence joue enfin
+(#451).**
+
+- Constat sur l'instance : 5 820 entrées actives sur 5 844 portaient la même date `maj`,
+  celle de la dernière réindexation. `upsert` écrivait le jour courant à chaque passage,
+  que l'entrée ait changé ou non : la décroissance du classement
+  (`memory.half_life_days`, 180 jours) valait 1 pour tout le monde, et le repérage des
+  entrées jamais rappelées repartait de zéro à chaque démarrage.
+- `maj` devient le jour du dernier changement de contenu : il n'avance que si le texte
+  ou une annotation indexée (`quand`, `importance`, `projet`, `confiance`, `depuis`,
+  déclencheurs) a changé. Un déplacement de fichier, de section ou de niveau et un retour
+  après retrait gardent la date (`index/freshness.rs`).
+- Validation : l'annotation `revue` du vault (bouton « ✅ Valider » de `/memory`) sert
+  de plancher. Une entrée ancienne que le propriétaire confirme redevient fraîche sans
+  être réécrite ; une date future ou illisible est ignorée.
+- Index reconstruit (`store rebuild`) : l'entrée reprend la dernière écriture de son
+  historique, sinon sa première observation, au lieu du jour de la reconstruction.
+- Migration `0030_memory_freshness` : les dates existantes reculent vers ces mêmes
+  repères (historique du rêve, sinon provenance). Limite assumée : une entrée réécrite
+  à la main depuis sa première observation reçoit la date de cette observation, plus
+  ancienne que la vraie ; rien ne garde la trace de ces éditions.
+- Effet attendu : à pertinence égale, une entrée de septembre passe maintenant après une
+  entrée de novembre (facteur 0,79 à 60 jours). Le seuil de rappel ne regarde pas la
+  récence : seul l'ordre change, donc aussi ce qui tient sous le budget quand beaucoup
+  d'entrées répondent ; le profil et le cœur, épinglés, ne bougent pas.
+  `mem_longitudinal` (suite réseau) n'a pas été rejouée faute de clé.
+- Autre effet : le rêve retrouve les entrées durables jamais rappelées depuis 60 jours
+  (#37). Il n'en voyait aucune, toutes ayant l'âge de la dernière réindexation ; son
+  compte rendu en liste dix au plus par nuit, sans rien retirer.
+
 ### 1.0.104
 
 **Rappel mémoire : un tour planifié ne part plus sans mémoire pour 150 ms dépassées
