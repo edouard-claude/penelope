@@ -128,3 +128,42 @@ async fn a_vault_note_left_in_the_workspace_is_reported() {
     );
     assert!(fix.contains("penelope mem reindex"), "{fix}");
 }
+
+/// #450 : les tours partis sans mémoire se comptent par audience, et le réglage proposé
+/// est celui des tours qui dépassent.
+#[tokio::test]
+async fn recall_misses_name_the_turns_nobody_waited_for() {
+    let (_d, s) = services().await;
+    let today = chrono::DateTime::from_timestamp_millis(s.clock.now_ms())
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let total = format!("memory.recall.misses.{today}");
+    let unattended = format!("memory.recall.misses.unattended.{today}");
+    assert!(recall_misses_check(&s).await.ok);
+
+    s.kv_set(&total, "4").await.unwrap();
+    s.kv_set(&unattended, "3").await.unwrap();
+    let c = recall_misses_check(&s).await;
+    assert!(c.ok, "{c:?}");
+    assert!(
+        c.detail.contains("dont 3 sans interlocuteur"),
+        "{}",
+        c.detail
+    );
+
+    s.kv_set(&total, "19").await.unwrap();
+    s.kv_set(&unattended, "19").await.unwrap();
+    let c = recall_misses_check(&s).await;
+    assert!(!c.ok, "{c:?}");
+    assert!(c.detail.starts_with("19 tours"), "{}", c.detail);
+    let fix = c.fix.unwrap();
+    assert!(
+        fix.contains("`memory.recall_timeout_unattended_ms`"),
+        "{fix}"
+    );
+
+    s.kv_set(&unattended, "2").await.unwrap();
+    let fix = recall_misses_check(&s).await.fix.unwrap();
+    assert!(fix.contains("`memory.recall_timeout_ms`"), "{fix}");
+}

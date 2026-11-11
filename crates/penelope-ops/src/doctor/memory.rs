@@ -60,35 +60,50 @@ pub async fn recall_misses_check(s: &Services) -> DoctorCheck {
     const ID: &str = "memory.recall";
     const LABEL: &str = "Rappel mémoire dans son budget";
     let now = s.clock.now_ms();
-    let mut total = 0u64;
+    // Tous les tours, puis ceux que personne n'attendait (#450) : le remède n'est pas le
+    // même réglage.
+    let (mut total, mut unattended) = (0u64, 0u64);
     for d in 0..7 {
         let day = chrono::DateTime::from_timestamp_millis(now - d * 86_400_000)
             .unwrap_or_default()
             .format("%Y-%m-%d")
             .to_string();
-        total += s
-            .kv_get(&format!("memory.recall.misses.{day}"))
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
+        for (key, sum) in [
+            (format!("memory.recall.misses.{day}"), &mut total),
+            (
+                format!("memory.recall.misses.unattended.{day}"),
+                &mut unattended,
+            ),
+        ] {
+            let v = s.kv_get(&key).await.ok().flatten();
+            *sum += v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        }
     }
+    let whose = match unattended {
+        0 => String::new(),
+        n => format!(", dont {n} sans interlocuteur (planification, relance)"),
+    };
     if total < 10 {
         return DoctorCheck::ok(
             ID,
             LABEL,
-            format!("{total} tour(s) sans mémoire sur 7 jours"),
+            format!("{total} tour(s) sans mémoire sur 7 jours{whose}"),
         );
     }
+    // Le réglage à relever est celui des tours qui dépassent le plus.
+    let key = if unattended * 2 > total {
+        "memory.recall_timeout_unattended_ms"
+    } else {
+        "memory.recall_timeout_ms"
+    };
     DoctorCheck::fail(
         ID,
         LABEL,
-        format!("{total} tours partis sans mémoire sur 7 jours (budget du rappel dépassé)"),
-        Some(
-            "`memory.recall_timeout_ms` relève le budget ; `penelope mem audit` mesure l'index"
-                .into(),
-        ),
+        format!("{total} tours partis sans mémoire sur 7 jours{whose} (budget du rappel dépassé)"),
+        Some(format!(
+            "`{key}` relève le budget ; le journal dit l'étape qui l'a dépassé \
+             (« rappel : budget dépassé ») et `penelope mem audit` mesure l'index"
+        )),
     )
 }
 

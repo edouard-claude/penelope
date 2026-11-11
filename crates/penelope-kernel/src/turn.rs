@@ -42,6 +42,12 @@ pub enum TurnKind {
 }
 
 impl TurnKind {
+    /// Personne n'attend la réponse devant son écran : une planification, la relance
+    /// d'une tâche de fond. Une reprise (`Resume`) répond à un accord du propriétaire.
+    pub fn unattended(self) -> bool {
+        matches!(self, TurnKind::Trigger | TurnKind::Nudge)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             TurnKind::Message => "message",

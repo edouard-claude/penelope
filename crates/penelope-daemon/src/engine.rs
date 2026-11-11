@@ -189,16 +189,12 @@ impl Daemon {
         };
         // Le vecteur du message ne dépend pas du modèle choisi : les deux allers-retours
         // partent ensemble au lieu de s'attendre (issue #74).
-        let want_vector = turn.kind == TurnKind::Message;
+        // Un tour planifié cherche aussi par le sens, seule voie qui serve un long prompt (#450).
+        let asked = matches!(turn.kind, TurnKind::Message | TurnKind::Trigger);
+        let (embedder, asked) = (self.embedder(), if asked { text.as_str() } else { "" });
         let ((alias, model_id), vector) = tokio::join!(
             self.select_model(&session, &classified, &origin_turn),
-            async {
-                if want_vector {
-                    embeddings::query_vector(&self.embedder(), &text).await
-                } else {
-                    None
-                }
-            }
+            embeddings::query_vector(&embedder, asked)
         );
 
         // Photos : montrées au modèle de la session s'il lit les images, sinon décrites par
@@ -255,6 +251,7 @@ impl Daemon {
             None,
             (session.kind == SessionKind::Chat).then_some((turn.session_id.as_str(), episode)),
             vector.clone(),
+            turn.kind.unattended(),
         )
         .await;
         usage_feedback::served(

@@ -486,3 +486,11 @@ async fn turns_of_one_lane_run_one_after_the_other() {
     q.complete(&first).await.unwrap();
     assert_eq!(q.claim("r3").await.unwrap().unwrap().session_id, "s2");
 }
+
+/// #450 : une planification et une relance n'ont pas d'interlocuteur ; un message et la
+/// reprise après un accord, si.
+#[test]
+fn only_triggers_and_nudges_are_unattended() {
+    assert!(TurnKind::Trigger.unattended() && TurnKind::Nudge.unattended());
+    assert!(!TurnKind::Message.unattended() && !TurnKind::Resume.unattended());
+}

@@ -16,6 +16,10 @@ use std::collections::BTreeMap;
 mod search;
 mod signals;
 
+pub use search::Progress;
+#[cfg(test)]
+pub(crate) use search::Stall;
+
 /// Entrée indexée.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexedEntry {
@@ -304,21 +308,28 @@ impl MemoryIndex {
     }
 
     /// Un tour parti sans mémoire (budget du rappel dépassé), compté par jour dans `kv`
-    /// sous `memory.recall.misses.<jour>` (#411).
-    pub async fn count_recall_miss(&self) {
+    /// sous `memory.recall.misses.<jour>` (#411) ; `unattended` : personne n'attendait la
+    /// réponse (planification, relance), compté en plus sous
+    /// `memory.recall.misses.unattended.<jour>` (#450).
+    pub async fn count_recall_miss(&self, unattended: bool) {
         let day = chrono::DateTime::from_timestamp_millis(self.clock.now_ms())
             .unwrap_or_default()
             .format("%Y-%m-%d")
             .to_string();
-        let key = format!("memory.recall.misses.{day}");
+        let mut keys = vec![format!("memory.recall.misses.{day}")];
+        if unattended {
+            keys.push(format!("memory.recall.misses.unattended.{day}"));
+        }
         let _ = self
             .store
             .write(move |tx| {
-                tx.execute(
-                    "INSERT INTO kv(k, v, ts) VALUES (?1, '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                     ON CONFLICT(k) DO UPDATE SET v = CAST(v AS INTEGER) + 1, ts = excluded.ts",
-                    [key],
-                )?;
+                for key in keys {
+                    tx.execute(
+                        "INSERT INTO kv(k, v, ts) VALUES (?1, '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                         ON CONFLICT(k) DO UPDATE SET v = CAST(v AS INTEGER) + 1, ts = excluded.ts",
+                        [key],
+                    )?;
+                }
                 Ok(())
             })
             .await;
@@ -742,8 +753,16 @@ const STOPWORDS: &[&str] = &[
     "doit", "veux", "veut", "stp", "merci",
 ];
 
+/// Au-delà, les termes d'un message ne sont plus cherchés (#450). La requête lexicale
+/// coûte un parcours par terme (0,9 ms sur un index de 5 800 entrées) : un prompt planifié
+/// de 3 900 caractères en donnait 450, soit 400 ms pour un budget de 150, et le tour
+/// partait sans mémoire. Un message aussi long n'attend de toute façon rien de cette voie
+/// (aucune entrée n'en couvre les termes) : c'est la voie vectorielle qui le sert.
+pub const MAX_QUERY_TERMS: usize = 32;
+
 /// Les termes d'une requête : mots de trois lettres et plus hors mots vides, mais aussi
-/// les nombres et les sigles même courts (« 14 », « IA ») ; en minuscules (#411).
+/// les nombres et les sigles même courts (« 14 », « IA ») ; en minuscules (#411), chacun
+/// une fois, les [`MAX_QUERY_TERMS`] premiers.
 pub fn query_terms(q: &str) -> Vec<String> {
     let cleaned: String = q
         .chars()
@@ -760,7 +779,9 @@ pub fn query_terms(q: &str) -> Vec<String> {
         })
         .map(|w| w.to_lowercase())
         .collect();
-    terms.dedup();
+    let mut seen = std::collections::HashSet::new();
+    terms.retain(|t| seen.insert(t.clone()));
+    terms.truncate(MAX_QUERY_TERMS);
     terms
 }
 
@@ -777,9 +798,13 @@ fn stem(term: &str) -> String {
 
 /// Requête FTS assainie.
 pub fn fts_query(q: &str) -> String {
+    // Deux mots de même racine font le même parcours : une seule fois.
+    let mut seen = std::collections::HashSet::new();
     query_terms(q)
         .iter()
-        .map(|w| format!("\"{}\"*", stem(w)))
+        .map(|w| stem(w))
+        .filter(|root| seen.insert(root.clone()))
+        .map(|root| format!("\"{root}\"*"))
         .collect::<Vec<_>>()
         .join(" OR ")
 }

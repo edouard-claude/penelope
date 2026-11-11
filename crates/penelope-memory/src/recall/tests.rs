@@ -431,6 +431,137 @@ async fn ca_6_12_recall_never_blocks() {
     assert!(r.degraded);
 }
 
+/// Un index d'une entrée, son vecteur, et la question qui la retrouve par les deux voies.
+async fn deploy_index() -> MemoryIndex {
+    let i = index();
+    let e = simple_entry(
+        "u1",
+        "Le déploiement passe par CapRover.",
+        Level::Cure,
+        "2026-09-16",
+    );
+    i.upsert(&e, &prov()).await.unwrap();
+    i.put_embedding("u1", "m", &[1.0, 0.0, 0.0]).await.unwrap();
+    i
+}
+
+/// Un rappel dont la recherche est retenue devant `stall` jusqu'à son abandon.
+async fn stalled(
+    i: &MemoryIndex,
+    params: RecallParams,
+    stall: crate::index::Stall,
+) -> (RecallResult, Arc<Progress>) {
+    let mut progress = Progress::default();
+    progress.stall = Some(stall);
+    let progress = Arc::new(progress);
+    let r = Recall::new(i, params)
+        .path1_watched(
+            "déploiement CapRover",
+            &CurrentContext::default(),
+            Some(vec![1.0, 0.0, 0.0]),
+            &[],
+            progress.clone(),
+        )
+        .await;
+    (r, progress)
+}
+
+/// #450 : au dépassement, le rappel rendait une liste vide alors que la voie lexicale
+/// était classée. Elle est servie, le tour est marqué dégradé et rien n'est compté.
+#[tokio::test]
+async fn a_vector_lane_out_of_budget_serves_the_lexical_hits() {
+    let i = deploy_index().await;
+    let params = RecallParams {
+        timeout_ms: 500,
+        ..RecallParams::default()
+    };
+    let (r, progress) = stalled(&i, params, crate::index::Stall::Vectors).await;
+    let served: Vec<&str> = r.triggered.iter().map(|h| h.entry.uid.as_str()).collect();
+    assert_eq!(served, ["u1"]);
+    assert!(r.degraded, "un résultat partiel se dit");
+    assert_eq!(progress.stage().0, "voie vectorielle");
+    assert_eq!(i.recall_misses().await, (0, 0));
+    // Abandonnée, la recherche n'a décodé aucun vecteur pour personne.
+    assert_eq!(i.vectors_decoded(), 0);
+}
+
+/// #450 : quand rien n'est prêt, le tour part sans mémoire et il est compté, à part s'il
+/// n'avait pas d'interlocuteur ; la recherche dit l'étape où elle en était.
+#[tokio::test]
+async fn a_recall_with_nothing_ready_is_counted_by_audience() {
+    let i = deploy_index().await;
+    let short = RecallParams {
+        timeout_ms: 100,
+        ..RecallParams::default()
+    };
+    let (r, progress) = stalled(&i, short, crate::index::Stall::Lexical).await;
+    assert!(r.triggered.is_empty());
+    assert_eq!(progress.stage().0, "voie lexicale");
+    assert_eq!(i.recall_misses().await, (1, 0));
+
+    let unattended = RecallParams {
+        unattended: true,
+        ..short
+    };
+    stalled(&i, unattended, crate::index::Stall::Lexical).await;
+    assert_eq!(i.recall_misses().await, (2, 1));
+}
+
+/// #450 : un tour que personne n'attend a son propre budget, jamais plus court que celui
+/// d'une conversation.
+#[test]
+fn an_unattended_turn_has_its_own_budget() {
+    let mut m = penelope_kernel::config::Memory::default();
+    let talk = RecallParams::for_turn(&m, false);
+    assert_eq!((talk.timeout_ms, talk.unattended), (150, false));
+    let watch = RecallParams::for_turn(&m, true);
+    assert_eq!((watch.timeout_ms, watch.unattended), (2_000, true));
+    m.recall_timeout_unattended_ms = 50;
+    assert_eq!(RecallParams::for_turn(&m, true).timeout_ms, 150);
+}
+
+/// #450, le cas de l'incident : deux planifications lancées à la même seconde, chacune
+/// avec un prompt de plusieurs milliers de caractères, sur un index du nombre d'entrées
+/// de l'instance. Aucune ne part sans mémoire, et chacune retrouve par le sens ce que
+/// son prompt ne peut pas couvrir mot à mot.
+#[tokio::test]
+async fn two_scheduled_prompts_at_once_both_keep_their_memory() {
+    let i = index();
+    let words: Vec<String> = (0..400).map(|n| format!("sujet{n:03}")).collect();
+    for n in 0..5_800usize {
+        let text: Vec<&str> = (0..12)
+            .map(|k| words[(n * 7 + k * 31) % 400].as_str())
+            .collect();
+        let uid = format!("e{n}");
+        let e = simple_entry(&uid, &text.join(" "), Level::Cure, "2026-09-16");
+        i.upsert(&e, &prov()).await.unwrap();
+        // Tous loin de la question, sauf les deux cibles.
+        let v: [f32; 3] = match n {
+            17 => [1.0, 0.0, 0.0],
+            4_242 => [0.0, 1.0, 0.0],
+            _ => [0.0, 0.0, 1.0],
+        };
+        i.put_embedding(&uid, "m", &v).await.unwrap();
+    }
+    // 450 mots distincts, tous présents dans l'index : la voie lexicale a du travail.
+    let prompt: String = (0..450)
+        .map(|n| format!("{} consigne{n} ", words[n % 400]))
+        .collect();
+    assert!(prompt.len() > 3_900);
+
+    let params = RecallParams::for_turn(&penelope_kernel::config::Memory::default(), true);
+    let (a, b) = (Recall::new(&i, params), Recall::new(&i, params));
+    let ctx = CurrentContext::default();
+    let (ra, rb) = tokio::join!(
+        a.path1(&prompt, &ctx, Some(vec![1.0, 0.0, 0.0]), &[]),
+        b.path1(&prompt, &ctx, Some(vec![0.0, 1.0, 0.0]), &[]),
+    );
+    assert_eq!(i.recall_misses().await, (0, 0));
+    assert!(!ra.degraded && !rb.degraded);
+    assert_eq!(ra.triggered[0].entry.uid, "e17");
+    assert_eq!(rb.triggered[0].entry.uid, "e4242");
+}
+
 #[tokio::test]
 async fn practice_recall_is_context_dependent() {
     let i = index();

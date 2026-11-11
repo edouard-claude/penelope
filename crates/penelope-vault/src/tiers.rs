@@ -8,14 +8,17 @@ use penelope_app::helpers::{local_now, vault_dir};
 use penelope_app::services::Services;
 use penelope_context::tiers::{Tiers, TiersBuilder, volatile_header};
 
-/// Assemble les tuiles du prompt d'une session, instantanés mémoire recalculés.
+/// Assemble les tuiles du prompt d'une session, instantanés mémoire recalculés. Hors
+/// conversation (étape de workflow) : le rappel a le budget d'un tour sans interlocuteur.
 pub async fn build_tiers(
     s: &Services,
     user_text: &str,
     mcp_lines: &[String],
     run_state: Option<&str>,
 ) -> Tiers {
-    build_tiers_in(s, user_text, mcp_lines, run_state, None, None).await
+    build_turn_prompt(s, user_text, mcp_lines, run_state, None, None, true)
+        .await
+        .0
 }
 
 /// Comme [`build_tiers`], avec les instantanés T2 figés pour l'épisode `(session, n)` :
@@ -28,13 +31,23 @@ pub async fn build_tiers_in(
     episode: Option<(&str, i64)>,
     query_vector: Option<Vec<f32>>,
 ) -> Tiers {
-    build_turn_prompt(s, user_text, mcp_lines, run_state, episode, query_vector)
-        .await
-        .0
+    build_turn_prompt(
+        s,
+        user_text,
+        mcp_lines,
+        run_state,
+        episode,
+        query_vector,
+        false,
+    )
+    .await
+    .0
 }
 
 /// Comme [`build_tiers_in`], avec les uid des souvenirs que le rappel automatique a
 /// servis : le tour les compte et juge leur usage sur la réponse (issue #105).
+/// `unattended` : personne n'attend ce tour (planification, relance), son rappel a le
+/// budget de `memory.recall_timeout_unattended_ms` (#450).
 pub async fn build_turn_prompt(
     s: &Services,
     user_text: &str,
@@ -42,6 +55,7 @@ pub async fn build_turn_prompt(
     run_state: Option<&str>,
     episode: Option<(&str, i64)>,
     query_vector: Option<Vec<f32>>,
+    unattended: bool,
 ) -> (Tiers, Vec<String>) {
     let cfg = s.config.config();
     let vault = vault_dir(s);
@@ -130,7 +144,7 @@ pub async fn build_turn_prompt(
         ctx.injected_uids = snapshot_uids(s, &scope).await;
         let recall = penelope_memory::Recall::new(
             &s.memory,
-            penelope_memory::RecallParams::from_config(&cfg.memory),
+            penelope_memory::RecallParams::for_turn(&cfg.memory, unattended),
         )
         .path1(user_text, &ctx, query_vector, &practices)
         .await;

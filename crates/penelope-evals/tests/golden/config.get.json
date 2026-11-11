@@ -170,6 +170,7 @@
         "project_budget_tokens": "integer",
         "recall_budget_tokens": "integer",
         "recall_timeout_ms": "integer",
+        "recall_timeout_unattended_ms": "integer",
         "trigger_threshold": "number",
         "max_injected_per_turn": "integer",
         "half_life_days": "number",
