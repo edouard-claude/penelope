@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use crate::fence::Fences;
+
+mod layout;
 mod practice;
 pub use practice::{Practice, PracticeRecall, PracticeStatus};
 
@@ -177,6 +180,11 @@ pub struct Annotations {
     pub sensible: bool,
     /// uid de l'entrée que celle-ci remplace (`supersede`, issue #37) ; la date est `depuis`.
     pub remplace: Option<String>,
+    /// Annotations que le parseur ne lit pas (clé inconnue, valeur illisible), gardées
+    /// telles quelles : la réécriture d'une ligne ne perd rien de ce que le propriétaire y
+    /// a écrit (#453).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub autres: Vec<(String, String)>,
 }
 
 fn comment_re() -> &'static Regex {
@@ -238,40 +246,65 @@ impl Annotations {
         for c in comment_re().captures_iter(line) {
             let key = c[1].to_lowercase();
             let val = c[2].trim().to_string();
-            match key.as_str() {
-                "uid" => a.uid = Some(val),
-                "importance" => a.importance = val.parse().ok(),
+            // Une valeur illisible ne remplace pas une valeur lue, et reste sur la ligne.
+            let set = |slot: &mut Option<String>, val: &str| {
+                *slot = Some(val.to_string());
+                true
+            };
+            let read = match key.as_str() {
+                "uid" => set(&mut a.uid, &val),
+                "importance" => val.parse().map(|v| a.importance = Some(v)).is_ok(),
                 "declencheurs" => {
                     a.declencheurs = val
                         .split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
-                        .collect()
+                        .collect();
+                    true
                 }
-                "projet" => a.projet = Some(val),
-                "depuis" => a.depuis = Some(val),
-                "source" => a.source = Some(val),
-                "quand" => a.quand = When::parse(&val).ok(),
-                "confiance" => a.confiance = val.parse().ok(),
+                "projet" => set(&mut a.projet, &val),
+                "depuis" => set(&mut a.depuis, &val),
+                "source" => set(&mut a.source, &val),
+                "quand" => When::parse(&val).map(|w| a.quand = Some(w)).is_ok(),
+                "confiance" => val.parse().map(|v| a.confiance = Some(v)).is_ok(),
                 "preuves" => {
                     a.preuves = val
                         .split(',')
                         .map(|s| s.trim().trim_matches(|c| c == '[' || c == ']').to_string())
                         .filter(|s| !s.is_empty())
-                        .collect()
+                        .collect();
+                    true
                 }
-                "occurrences" => a.occurrences = val.parse().ok(),
-                "revue" => a.revue = Some(val),
-                "expire" => a.expire = Some(val),
-                "sensible" => a.sensible = matches!(val.as_str(), "oui" | "true" | "1"),
-                "remplace" => a.remplace = Some(val),
-                _ => {}
+                "occurrences" => val.parse().map(|v| a.occurrences = Some(v)).is_ok(),
+                "revue" => set(&mut a.revue, &val),
+                "expire" => set(&mut a.expire, &val),
+                "sensible" => {
+                    a.sensible = matches!(val.as_str(), "oui" | "true" | "1");
+                    true
+                }
+                "remplace" => set(&mut a.remplace, &val),
+                _ => false,
+            };
+            if !read {
+                a.autres.push((c[1].to_string(), val));
             }
         }
         if a.uid.is_none() {
             a.uid = block_id(line);
         }
         a
+    }
+
+    /// Une valeur illisible gardée dans `autres` s'efface quand la clé a reçu depuis une
+    /// valeur lisible : la ligne ne porte pas les deux.
+    fn now_set(&self, key: &str) -> bool {
+        match key.to_lowercase().as_str() {
+            "importance" => self.importance.is_some(),
+            "quand" => self.quand.is_some(),
+            "confiance" => self.confiance.is_some(),
+            "occurrences" => self.occurrences.is_some(),
+            _ => false,
+        }
     }
 
     /// Vrai si l'uid est encore écrit en commentaire (format antérieur à 0.9.0).
@@ -331,6 +364,9 @@ impl Annotations {
         if let Some(r) = &self.revue {
             parts.push(format!("<!-- revue: {r} -->"));
         }
+        for (key, val) in self.autres.iter().filter(|(k, _)| !self.now_set(k)) {
+            parts.push(format!("<!-- {key}: {val} -->"));
+        }
         if let Some(u) = self.uid.as_ref().filter(|u| is_valid_block_id(u)) {
             parts.push(format!("^{u}"));
         }
@@ -377,9 +413,16 @@ pub fn parse_entries(raw: &str) -> (Vec<VaultEntry>, Option<String>) {
         .split('\n')
         .map(String::from)
         .collect();
+    let mut fences = Fences::default();
 
     for (i, line) in out_lines.clone().iter().enumerate() {
         if i < offset {
+            continue;
+        }
+        // Un bloc de code est un exemple : ni entrée, ni titre, et rien n'y est réécrit.
+        // Une ligne « - » y recevait un uid et devenait un souvenir (#453).
+        if fences.covers(line) {
+            callout = None;
             continue;
         }
         let trimmed = line.trim();

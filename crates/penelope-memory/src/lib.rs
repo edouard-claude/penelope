@@ -14,6 +14,7 @@ pub mod atlas;
 pub mod candidates;
 pub mod consolidation;
 pub mod edit;
+pub mod fence;
 pub mod grid;
 pub mod index;
 pub mod ingest;
