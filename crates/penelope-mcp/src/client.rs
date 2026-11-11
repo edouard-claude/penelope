@@ -101,18 +101,22 @@ impl McpClient {
     }
 
     /// Requête avec `_meta` adapté à la version, sous contrôle de concurrence.
-    async fn call(
-        &self,
-        method: &str,
-        mut params: Value,
-        timeout: Option<Duration>,
-    ) -> Result<Value> {
+    async fn call(&self, method: &str, params: Value, timeout: Option<Duration>) -> Result<Value> {
         let _permit = self
             .permits
             .acquire()
             .await
             .map_err(|_| McpError::Transport("sémaphore fermé".into()))?;
+        self.send(method, params, timeout).await
+    }
 
+    /// La requête elle-même, `_meta` compris ; l'appelant tient déjà son jeton.
+    async fn send(
+        &self,
+        method: &str,
+        mut params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value> {
         if self.negotiated.stateless {
             let meta = request_meta(
                 self.negotiated.version,
@@ -278,16 +282,24 @@ impl McpClient {
     /// est retenu pour la session et `ping` n'est plus envoyé ; seul un silence (délai) ou
     /// une coupure reste une panne. La tolérance ne vaut que pour `ping` : un `-32601` sur
     /// `tools/call` reste une erreur.
+    ///
+    /// La sonde ne fait pas la queue (#457) : sans jeton de concurrence libre, le serveur
+    /// traite déjà autant de requêtes qu'on lui en permet, il est occupé et non muet, et
+    /// le délai de ces requêtes dira une panne. Attendre un jeton, hors de tout délai,
+    /// retenait l'entretien de tous les autres serveurs.
     pub async fn health(&self) -> Result<()> {
+        let Ok(_permit) = self.permits.try_acquire() else {
+            return Ok(());
+        };
         if self.negotiated.stateless {
-            self.call("server/discover", json!({}), Some(HEALTH_TIMEOUT))
+            self.send("server/discover", json!({}), Some(HEALTH_TIMEOUT))
                 .await?;
             return Ok(());
         }
         if self.ping_unsupported.load(Ordering::Relaxed) {
             return Ok(());
         }
-        match self.call("ping", json!({}), Some(HEALTH_TIMEOUT)).await {
+        match self.send("ping", json!({}), Some(HEALTH_TIMEOUT)).await {
             Ok(_) => Ok(()),
             Err(McpError::Rpc { code, .. }) if code == METHOD_NOT_FOUND => {
                 self.ping_unsupported.store(true, Ordering::Relaxed);

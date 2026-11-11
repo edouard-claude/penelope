@@ -682,6 +682,26 @@ impl McpSupervisor {
     /// Ferme la connexion d'un serveur. Renvoie ses dernières lignes de journal.
     pub(super) async fn stop_slot(&self, slot: &Arc<Slot>) -> Vec<String> {
         let taken = slot.live.lock().await.take();
+        self.shut(slot, taken).await
+    }
+
+    /// Arrêt d'entretien (inactivité, plafond de processus) : seulement si aucun appel
+    /// n'est en cours (#457). Le compteur est relu sous le verrou de la connexion, que
+    /// l'appel prend après s'être annoncé : il trouve le serveur vivant et le garde, ou
+    /// arrêté et le relance, jamais fermé sous lui. Vrai si le serveur est arrêté.
+    pub(super) async fn stop_unused(&self, slot: &Arc<Slot>) -> bool {
+        let taken = {
+            let mut live = slot.live.lock().await;
+            if slot.info(|i| i.in_use > 0) {
+                return false;
+            }
+            live.take()
+        };
+        self.shut(slot, taken).await;
+        true
+    }
+
+    async fn shut(&self, slot: &Arc<Slot>, taken: Option<Live>) -> Vec<String> {
         let Some(l) = taken else {
             return Vec::new();
         };

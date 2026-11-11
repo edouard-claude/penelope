@@ -68,6 +68,7 @@ impl McpSupervisor {
     /// Lit une ressource : `{"contents": [{uri, mimeType, text|blob}, …]}`.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
         let slot = self.slot(server).await.ok_or_else(|| unknown(server))?;
+        let _in_use = slot.in_use();
         let client = self.ensure_live(&slot).await?;
         let started = std::time::Instant::now();
         let outcome = client.read_resource(uri).await;

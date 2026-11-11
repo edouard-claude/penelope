@@ -538,3 +538,31 @@ async fn a_mute_server_still_fails_and_method_not_found_on_a_call_stays_an_error
         Err(McpError::Rpc { code, .. }) if code == METHOD_NOT_FOUND
     ));
 }
+
+/// #457 : tous les jetons de concurrence pris, la sonde attendait le sien hors de tout
+/// délai et retenait l'entretien des autres serveurs. Un serveur saturé de requêtes est
+/// occupé, pas muet : la sonde rend la main sans rien envoyer.
+#[tokio::test]
+async fn the_probe_does_not_queue_behind_requests_in_flight() {
+    let tr = LoopbackTransport::new("stdio", |m, _| match m {
+        "server/discover" => Err(method_not_found(m)),
+        "initialize" => Ok(json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "occupé"}
+        })),
+        _ => Ok(json!({})),
+    });
+    let c = client(tr.clone()).await;
+    let all = c.permits.available_permits() as u32;
+    let taken = c.permits.acquire_many(all).await.unwrap();
+    tokio::time::timeout(t(200), c.health())
+        .await
+        .expect("la sonde n'attend pas")
+        .unwrap();
+    let pinged = |log: Vec<(String, Value)>| log.iter().filter(|(m, _)| m == "ping").count();
+    assert_eq!(pinged(tr.call_log().await), 0);
+    drop(taken);
+    c.health().await.unwrap();
+    assert_eq!(pinged(tr.call_log().await), 1);
+}

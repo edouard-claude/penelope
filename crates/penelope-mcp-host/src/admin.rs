@@ -20,6 +20,11 @@ impl McpSupervisor {
     }
 
     /// Rechargement si `mcp.d` a changé, arrêt des inactifs, santé, reconnexions.
+    ///
+    /// Deux horloges par serveur (#457). Le dernier **usage** mesure l'inactivité et
+    /// l'ordre d'éviction ; la dernière **sonde** réussie n'espace que les sondes. Elles
+    /// n'en faisaient qu'une : chaque `ping` rendu remettait l'inactivité à zéro, et aucun
+    /// serveur paresseux ne s'est jamais arrêté après `idle_timeout`.
     pub async fn maintenance(&self) {
         self.refresh().await;
 
@@ -27,57 +32,84 @@ impl McpSupervisor {
         let cfg = self.services.config.config();
         let slots: Vec<Arc<Slot>> = self.slots.read().await.values().cloned().collect();
         let mut running: Vec<(Arc<Slot>, i64)> = Vec::new();
+        let mut probes = Vec::new();
         for slot in &slots {
             let c = slot.config();
             // Un serveur dont une ressource est suivie par abonnement (#293) n'est jamais
             // « inactif » : l'arrêter perdrait l'abonnement, qu'il faudrait reposer.
-            let (is_live, subscribed) = {
+            let (client, subscribed) = {
                 let live = slot.live.lock().await;
                 (
-                    live.is_some(),
+                    live.as_ref().map(|l| l.client.clone()),
                     live.as_ref().is_some_and(|l| l.has_subscriptions()),
                 )
             };
-            let last_used = slot.info(|i| i.last_used_ms);
-            if is_live {
-                let idle = (now - last_used) as u128 >= c.idle_duration().as_millis();
-                if c.lazy_start && !c.eager_schemas && idle && !subscribed {
+            let Some(client) = client else {
+                if c.enabled
+                    && penelope_mcp::supervisor::should_start_eagerly(&c)
+                    && slot.info(|i| i.state == ServerState::Connecting && now >= i.next_attempt_ms)
+                {
+                    let _ = self.refresh_tools(slot).await;
+                }
+                continue;
+            };
+            let (last_used, last_probe, in_use) =
+                slot.info(|i| (i.last_used_ms, i.last_probe_ms, i.in_use > 0));
+            // Un appel en cours est un usage : ni arrêt, ni sonde. Son propre délai dira
+            // une panne ; un serveur qui travaille ne répond pas toujours à un `ping`.
+            if !in_use {
+                let idle = c
+                    .idle_after()
+                    .is_some_and(|d| (now - last_used) as u128 >= d.as_millis());
+                if c.lazy_start
+                    && !c.eager_schemas
+                    && idle
+                    && !subscribed
+                    && self.stop_unused(slot).await
+                {
                     tracing::debug!(server = %slot.name, "serveur MCP inactif arrêté");
-                    self.stop_slot(slot).await;
                     self.persist(slot).await;
                     continue;
                 }
-                if now - last_used >= HEALTH_AFTER_MS {
-                    let client = slot.live.lock().await.as_ref().map(|l| l.client.clone());
-                    if let Some(client) = client {
-                        match client.health().await {
-                            Ok(()) => slot.info(|i| i.last_used_ms = now),
-                            Err(e) => {
-                                self.connection_lost(slot, &e).await;
-                                continue;
-                            }
-                        }
+                if now - last_used.max(last_probe) >= HEALTH_AFTER_MS {
+                    probes.push((slot.clone(), client));
+                }
+            }
+            running.push((slot.clone(), last_used));
+        }
+        // Les sondes partent ensemble : un serveur muet met dix secondes à le prouver, et
+        // l'un après l'autre ils retenaient l'entretien de tous les suivants.
+        let lost: Vec<String> =
+            futures::future::join_all(probes.into_iter().map(|(slot, client)| async move {
+                match client.health().await {
+                    Ok(()) => {
+                        slot.info(|i| i.last_probe_ms = now);
+                        None
+                    }
+                    Err(e) => {
+                        self.connection_lost(&slot, &e).await;
+                        Some(slot.name.clone())
                     }
                 }
-                running.push((slot.clone(), last_used));
-            } else if c.enabled
-                && penelope_mcp::supervisor::should_start_eagerly(&c)
-                && slot.info(|i| i.state == ServerState::Connecting && now >= i.next_attempt_ms)
-            {
-                let _ = self.refresh_tools(slot).await;
-            }
-        }
-        // Plafond de processus : on arrête les serveurs lazy les moins récemment utilisés.
+            }))
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        running.retain(|(slot, _)| !lost.contains(&slot.name));
+        // Plafond de processus : on arrête les serveurs lazy les moins récemment utilisés,
+        // sauf celui qui a un appel en cours.
         if running.len() > cfg.mcp.max_processes {
             running.sort_by_key(|(_, t)| *t);
-            let excess = running.len() - cfg.mcp.max_processes;
-            for (slot, _) in running
-                .iter()
-                .filter(|(s, _)| s.config().lazy_start)
-                .take(excess)
-            {
-                self.stop_slot(slot).await;
-                self.persist(slot).await;
+            let mut excess = running.len() - cfg.mcp.max_processes;
+            for (slot, _) in running.iter().filter(|(s, _)| s.config().lazy_start) {
+                if excess == 0 {
+                    break;
+                }
+                if self.stop_unused(slot).await {
+                    self.persist(slot).await;
+                    excess -= 1;
+                }
             }
         }
     }

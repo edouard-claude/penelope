@@ -545,10 +545,26 @@ Un jeton rendu sous `authed_user` (réponse de `oauth.v2.access`) est lu là.
 
 ## Supervision
 
-- Démarrage paresseux par défaut, extinction après `idle_timeout`.
+- Démarrage paresseux par défaut, extinction après `idle_timeout` sans usage (dix minutes
+  par défaut). Un usage, c'est une connexion, un appel d'outil, une lecture de ressource
+  ou le relevé d'une tâche ; la sonde de santé n'en est pas un. Jusqu'à la 1.0.110 elle en
+  était un : chaque `ping` rendu remettait l'inactivité à zéro et aucun serveur ne
+  s'arrêtait (#457). L'appel suivant relance le serveur ; il paie ce démarrage.
+  Au repos, il reste compté parmi les serveurs prêts (`penelope status`, `doctor`).
+- `idle_timeout = "0"` : le serveur démarre à la demande et ne s'arrête plus de lui-même.
+  C'est le réglage d'un serveur qui garde un état en mémoire (une session de navigateur,
+  un pont de messagerie connecté) et le perdrait à l'arrêt. `eager_schemas = true` et un
+  abonnement à une ressource le gardent vivant aussi ; `lazy_start = false` le lance en
+  plus dès le démarrage du daemon.
+- Santé : un serveur vivant sans usage depuis une minute reçoit un `ping` par minute ; sans
+  réponse en dix secondes, sa connexion est tenue pour perdue. Un serveur qui a un appel
+  en cours n'est ni sondé ni arrêté, quelle que soit la durée de l'appel : le délai de
+  l'appel (`timeout`) dit la panne. Les sondes partent ensemble, un serveur muet ne
+  retarde pas l'entretien des autres.
 - Backoff exponentiel borné après un échec, avec un plafond de tentatives : un serveur
   cassé ne mange pas la machine.
-- Éviction LRU au-delà de `mcp.max_processes` (24 par défaut).
+- Éviction LRU au-delà de `mcp.max_processes` (24 par défaut), sur le dernier usage ; un
+  serveur qui a un appel en cours n'est pas évincé.
 - Quantiles de latence et taux d'erreur par serveur, visibles dans `penelope doctor`.
 - Au démarrage, les processus orphelins d'une vie antérieure sont tués à partir des
   fichiers laissés dans `state/mcp-pids`. Un fichier porte le pid et sa date de

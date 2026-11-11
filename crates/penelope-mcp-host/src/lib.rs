@@ -36,7 +36,7 @@ use std::time::Duration;
 
 /// Intervalle de la boucle d'entretien : rechargement, arrêt des inactifs, santé.
 const MAINTENANCE_EVERY: Duration = Duration::from_secs(15);
-/// Un serveur actif mais silencieux depuis ce délai reçoit un `ping`.
+/// Un serveur vivant, sans usage ni sonde réussie depuis ce délai, reçoit un `ping`.
 const HEALTH_AFTER_MS: i64 = 60_000;
 /// Relances MRTR au plus, avant d'abandonner un appel qui demande encore une saisie.
 const MAX_INPUT_ROUNDS: usize = 4;
@@ -89,7 +89,13 @@ struct Info {
     /// Dernières lignes de stderr, gardées après un échec pour `mcp logs`.
     last_logs: Vec<String>,
     metrics: ServerMetrics,
+    /// Dernier usage : connexion, appel d'outil, lecture de ressource. C'est lui qui
+    /// mesure l'inactivité ; la sonde de santé n'y touche pas (#457).
     last_used_ms: i64,
+    /// Dernière sonde de santé réussie : elle espace les sondes, rien d'autre.
+    last_probe_ms: i64,
+    /// Appels en cours (`InUse`). Tant qu'il y en a, le serveur n'est ni sondé ni arrêté.
+    in_use: u32,
     protocol: Option<String>,
     server_info: Value,
     capabilities: Value,
@@ -116,6 +122,26 @@ impl Slot {
     fn info<R>(&self, f: impl FnOnce(&mut Info) -> R) -> R {
         let mut g = self.info.lock().unwrap_or_else(|p| p.into_inner());
         f(&mut g)
+    }
+
+    /// Marque un appel en cours, jusqu'à la chute du garde. À poser avant `ensure_live` :
+    /// l'entretien relit ce compteur sous le verrou de la connexion avant d'arrêter.
+    fn in_use(self: &Arc<Self>) -> InUse {
+        self.info(|i| i.in_use += 1);
+        InUse(self.clone())
+    }
+}
+
+/// Un appel en cours sur un serveur (#457). `last_used_ms` n'est écrit qu'à la fin d'un
+/// appel : sans ce garde, un outil qui travaille trois minutes passait pour un serveur
+/// muet, recevait un `ping` auquel il ne pouvait pas répondre et perdait sa connexion en
+/// plein travail ; et une saisie attendue du propriétaire aussi longtemps que
+/// `idle_timeout` le faisait arrêter.
+struct InUse(Arc<Slot>);
+
+impl Drop for InUse {
+    fn drop(&mut self) {
+        self.0.info(|i| i.in_use = i.in_use.saturating_sub(1));
     }
 }
 
@@ -146,6 +172,8 @@ impl Info {
             last_logs: Vec::new(),
             metrics: ServerMetrics::default(),
             last_used_ms: 0,
+            last_probe_ms: 0,
+            in_use: 0,
             protocol: None,
             server_info: Value::Null,
             capabilities: Value::Null,

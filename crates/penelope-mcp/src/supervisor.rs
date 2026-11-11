@@ -133,6 +133,17 @@ pub struct ServerStatus {
     pub keychain: bool,
 }
 
+impl ServerStatus {
+    /// Le serveur répondra à un appel : vivant, ou au repos avec ses outils connus (il
+    /// démarre au premier appel, ce que `doctor` tient déjà pour sain). Depuis que les
+    /// serveurs paresseux s'arrêtent vraiment après `idle_timeout` (#457), le repos est
+    /// leur état ordinaire : un compteur de serveurs « prêts » qui ne lirait que
+    /// `is_usable` les prendrait pour des pannes.
+    pub fn available(&self) -> bool {
+        self.state.is_usable() || (self.state == ServerState::Configured && self.tool_count > 0)
+    }
+}
+
 /// Décide quels serveurs `lazy_start` inactifs évincer pour respecter le plafond de
 /// processus (§8.6).
 ///
@@ -322,6 +333,41 @@ mod tests {
         assert_eq!(next_state(Disabled, Enable), Configured);
         // Un serveur désactivé ne se reconnecte pas tout seul.
         assert_eq!(next_state(Disabled, Connected), Ready);
+    }
+
+    /// #457 : au repos, outils connus, un serveur compte parmi les prêts ; jamais listé,
+    /// en reprise ou en panne, non.
+    #[test]
+    fn a_server_at_rest_is_available() {
+        let status = |state, tool_count| ServerStatus {
+            name: "forge".into(),
+            state,
+            transport: "stdio".into(),
+            protocol: None,
+            tool_count,
+            failures: 0,
+            last_error: None,
+            last_ok: None,
+            p50_ms: 0.0,
+            p95_ms: 0.0,
+            calls: 0,
+            errors: 0,
+            running: false,
+            lazy: true,
+            keychain: false,
+        };
+        assert!(status(ServerState::Ready, 3).available());
+        assert!(status(ServerState::Degraded, 3).available());
+        assert!(status(ServerState::Configured, 3).available());
+        assert!(!status(ServerState::Configured, 0).available());
+        for down in [
+            ServerState::Connecting,
+            ServerState::Failed,
+            ServerState::Disabled,
+            ServerState::AuthRequired,
+        ] {
+            assert!(!status(down, 3).available(), "{down:?}");
+        }
     }
 
     #[test]
