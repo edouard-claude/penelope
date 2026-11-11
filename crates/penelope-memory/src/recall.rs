@@ -3,10 +3,11 @@
 //! **La mémoire ne bloque jamais une réponse** : la voie 1 est déterministe, bornée à
 //! 150 ms, et dégrade en FTS seul si le backend d'embeddings est indisponible.
 
-use crate::index::{MemoryIndex, Scored, SearchFilter};
+use crate::index::{MemoryIndex, Progress, Scored, SearchFilter};
 use crate::vault::{Level, Practice, PracticeRecall};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::future::Future;
 
 /// Contexte courant, calculé de façon **déterministe** à chaque tour (§6.7).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -312,6 +313,9 @@ pub struct RecallParams {
     pub budget_tokens: u64,
     pub timeout_ms: u64,
     pub verify_threshold: f64,
+    /// Personne n'attend la réponse de ce tour (planification, relance, étape de
+    /// workflow) : son budget de temps est large, ses dépassements comptés à part (#450).
+    pub unattended: bool,
 }
 
 impl Default for RecallParams {
@@ -322,6 +326,7 @@ impl Default for RecallParams {
             budget_tokens: 1000,
             timeout_ms: 150,
             verify_threshold: 0.8,
+            unattended: false,
         }
     }
 }
@@ -334,7 +339,21 @@ impl RecallParams {
             budget_tokens: m.recall_budget_tokens as u64,
             timeout_ms: m.recall_timeout_ms,
             verify_threshold: 0.8,
+            unattended: false,
         }
+    }
+
+    /// Les réglages d'un tour. `unattended` : personne n'attend la réponse, le budget de
+    /// temps est celui de `recall_timeout_unattended_ms` ; 150 ms comptent pour une
+    /// conversation, pas pour une veille de 07 h 30 qui partait sans mémoire pour les
+    /// avoir dépassées (#450).
+    pub fn for_turn(m: &penelope_kernel::config::Memory, unattended: bool) -> Self {
+        let mut params = Self::from_config(m);
+        if unattended {
+            params.timeout_ms = m.recall_timeout_unattended_ms.max(m.recall_timeout_ms);
+            params.unattended = true;
+        }
+        params
     }
 }
 
@@ -351,7 +370,8 @@ impl<'a> Recall<'a> {
 
     /// Exécute la voie 1 sous contrainte de temps.
     ///
-    /// Le dépassement du budget n'est **jamais** une erreur : on renvoie ce qu'on a.
+    /// Le dépassement du budget n'est **jamais** une erreur : on renvoie ce qu'on a, la
+    /// voie lexicale si la voie vectorielle est encore en route (#450).
     pub async fn path1(
         &self,
         message: &str,
@@ -359,33 +379,40 @@ impl<'a> Recall<'a> {
         query_vector: Option<Vec<f32>>,
         practices: &[Practice],
     ) -> RecallResult {
-        let degraded = query_vector.is_none();
+        let progress = std::sync::Arc::new(Progress::default());
+        self.path1_watched(message, ctx, query_vector, practices, progress)
+            .await
+    }
+
+    /// [`Self::path1`], la recherche suivie par `progress`.
+    pub(crate) async fn path1_watched(
+        &self,
+        message: &str,
+        ctx: &CurrentContext,
+        query_vector: Option<Vec<f32>>,
+        practices: &[Practice],
+        progress: std::sync::Arc<Progress>,
+    ) -> RecallResult {
+        let mut degraded = query_vector.is_none();
         let filter = SearchFilter {
             limit: 20,
             automatic: true,
             ..Default::default()
         };
 
-        let search = self
-            .index
-            .search(message, query_vector, &filter, &ctx.active_projects);
-        let timeout = std::time::Duration::from_millis(self.params.timeout_ms.max(1));
-
-        let hits: Vec<Scored> = match tokio::time::timeout(timeout, search).await {
-            Ok(Ok(h)) => h,
-            // Ni une erreur d'index ni un dépassement de délai ne retardent la réponse.
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, "rappel : index indisponible, tour sans mémoire");
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::warn!("rappel : budget de 150 ms dépassé, tour sans mémoire");
-                // Compté par jour pour `doctor` : 118 tours sans mémoire en une semaine
-                // n'apparaissaient que dans le journal (#411).
-                self.index.count_recall_miss().await;
-                Vec::new()
-            }
-        };
+        let hits = self
+            .within_budget(
+                self.index.search_watched(
+                    message,
+                    query_vector,
+                    &filter,
+                    &ctx.active_projects,
+                    Some(progress.clone()),
+                ),
+                &progress,
+                &mut degraded,
+            )
+            .await;
 
         let max_score = hits.iter().map(|h| h.relevance).fold(0.0, f64::max);
 
@@ -463,6 +490,53 @@ impl<'a> Recall<'a> {
             tokens_used,
             seen,
         }
+    }
+}
+
+impl Recall<'_> {
+    /// La recherche sous son budget. Ni une erreur d'index ni un dépassement ne retardent
+    /// la réponse ; au dépassement, la voie lexicale déjà classée vaut mieux que rien.
+    async fn within_budget(
+        &self,
+        search: impl Future<Output = penelope_store::Result<Vec<Scored>>>,
+        progress: &Progress,
+        degraded: &mut bool,
+    ) -> Vec<Scored> {
+        let budget_ms = self.params.timeout_ms.max(1);
+        let budget = std::time::Duration::from_millis(budget_ms);
+        match tokio::time::timeout(budget, search).await {
+            Ok(Ok(h)) => return h,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "rappel : index indisponible, tour sans mémoire");
+                return Vec::new();
+            }
+            Err(_) => progress.abandon(),
+        }
+        // Où le temps est parti : c'est la mesure qui manquait pour choisir un remède.
+        let (stage, reader_ms, lexical_ms) = progress.stage();
+        let unattended = self.params.unattended;
+        if let Some(hits) = progress.lexical() {
+            tracing::warn!(
+                budget_ms,
+                reader_ms,
+                lexical_ms,
+                unattended,
+                "rappel : voie vectorielle hors budget, voie lexicale seule"
+            );
+            *degraded = true;
+            return hits;
+        }
+        tracing::warn!(
+            budget_ms,
+            stage,
+            reader_ms,
+            unattended,
+            "rappel : budget dépassé, tour sans mémoire"
+        );
+        // Compté par jour pour `doctor` : 118 tours sans mémoire en une semaine
+        // n'apparaissaient que dans le journal (#411).
+        self.index.count_recall_miss(unattended).await;
+        Vec::new()
     }
 }
 

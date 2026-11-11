@@ -194,6 +194,7 @@ core_budget_tokens = 1200
 project_budget_tokens = 800
 recall_budget_tokens = 1000
 recall_timeout_ms = 150
+recall_timeout_unattended_ms = 2000
 trigger_threshold = 0.72
 max_injected_per_turn = 3
 half_life_days = 180.0

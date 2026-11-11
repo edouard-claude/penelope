@@ -496,6 +496,28 @@ fn fts_query_keeps_numbers_and_acronyms_and_drops_stopwords() {
     );
 }
 
+/// #450 : un prompt planifié de 3 900 caractères donnait 450 termes à chercher, 400 ms de
+/// voie lexicale pour 150 de budget. La requête n'en garde que les premiers, chacun une
+/// fois, et une racine ne se cherche qu'une fois.
+#[test]
+fn a_long_message_asks_for_a_bounded_number_of_terms() {
+    let long: String = (0..600).map(|n| format!("consigne{n:03} ")).collect();
+    assert!(long.len() > 3_900);
+    let terms = query_terms(&long);
+    assert_eq!(terms.len(), MAX_QUERY_TERMS);
+    assert_eq!(terms[0], "consigne000");
+    assert_eq!(terms[31], "consigne031");
+
+    assert_eq!(
+        query_terms("portail code portail résidence code"),
+        ["portail", "code", "résidence"]
+    );
+    assert_eq!(
+        fts_query("déployer le déploiement, puis déployer"),
+        "\"déplo\"* OR \"puis\"*"
+    );
+}
+
 /// #411 : la pertinence est absolue. Deux requêtes sans rapport ne rendent pas les mêmes
 /// scores ; un mot discriminant court (un nombre) trouve l'entrée qui le porte ; une
 /// requête sans entrée pertinente reste sous le seuil.

@@ -459,6 +459,7 @@ défaut ; le test `docs` échoue si une clé manque ou si la table est périmée
 | `memory.project_budget_tokens` | `800` | Budget des projets injectés (`projets.md`), en jetons. |
 | `memory.recall_budget_tokens` | `1000` | Budget du rappel automatique par tour, en jetons. |
 | `memory.recall_timeout_ms` | `150` | Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes. |
+| `memory.recall_timeout_unattended_ms` | `2000` | Temps accordé au rappel automatique d'un tour que personne n'attend (planification, relance, étape de workflow), en millisecondes. |
 | `memory.trigger_threshold` | `0.72` | Pertinence minimale d'une entrée pour être rappelée automatiquement, entre 0 et 1 : part des termes de la requête retrouvés, ou similarité vectorielle calibrée (#411). La récence et l'importance ne font qu'ordonner. |
 | `memory.max_injected_per_turn` | `3` | Entrées rappelées automatiquement au plus par tour. |
 | `memory.half_life_days` | `180.0` | Demi-vie de la récence dans le classement des souvenirs, en jours : un souvenir ancien passe après un récent équivalent, il reste rappelable. |
@@ -2780,6 +2781,17 @@ message (`memory.trigger_threshold`, sur le rang de recherche seul) ; sa récenc
 (`memory.half_life_days`, 180 jours), son importance, le projet et la confiance ne font
 que l'ordonner face aux autres. Une entrée de six mois reste donc rappelée quand la
 question la vise, après une plus récente équivalente.
+
+Le rappel ne retarde jamais un tour : passé son budget (`memory.recall_timeout_ms`,
+150 ms en conversation), le tour part avec ce qui est prêt, les résultats trouvés par les
+mots si la recherche par le sens est encore en route, et rien sinon. Un tour que personne
+n'attend (planification, relance d'une tâche de fond, étape de workflow) a un budget
+large, `memory.recall_timeout_unattended_ms` (2 s), et un tour planifié cherche aussi par
+le sens : son prompt est trop long pour qu'une entrée en couvre les mots. D'un message
+long, seuls les 32 premiers mots utiles sont cherchés. `penelope doctor` (« Rappel mémoire
+dans son budget ») compte les tours partis sans mémoire et dit combien n'avaient pas
+d'interlocuteur ; le journal (`rappel : budget dépassé`) donne l'étape qui a dépassé :
+attente d'un lecteur de la base, voie lexicale ou voie vectorielle.
 
 **Retour d'usage.** Chaque souvenir servi au modèle (rappel automatique ou `mem_search`)
 est compté, et chaque apparition dans les résultats sans être retenu aussi. Une entrée de

@@ -171,6 +171,9 @@ pub struct Memory {
     pub recall_budget_tokens: usize,
     /// Temps accordé au rappel automatique avant de répondre sans lui, en millisecondes.
     pub recall_timeout_ms: u64,
+    /// Temps accordé au rappel automatique d'un tour que personne n'attend (planification,
+    /// relance, étape de workflow), en millisecondes.
+    pub recall_timeout_unattended_ms: u64,
     /// Pertinence minimale d'une entrée pour être rappelée automatiquement, entre 0 et 1 :
     /// part des termes de la requête retrouvés, ou similarité vectorielle calibrée (#411).
     /// La récence et l'importance ne font qu'ordonner.
@@ -228,6 +231,7 @@ impl Default for Memory {
             project_budget_tokens: 800,
             recall_budget_tokens: 1000,
             recall_timeout_ms: 150,
+            recall_timeout_unattended_ms: 2000,
             trigger_threshold: 0.72,
             max_injected_per_turn: 3,
             half_life_days: 180.0,

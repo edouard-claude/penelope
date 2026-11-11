@@ -12,6 +12,42 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.104
+
+**Rappel mémoire : un tour planifié ne part plus sans mémoire pour 150 ms dépassées
+(#450).**
+
+- Constat sur l'instance : 19 « tour sans mémoire » en 7 jours, tous sur deux
+  planifications lancées à la même seconde. L'issue supposait deux rappels qui se
+  disputent la base. La mesure dit autre chose : leurs prompts font 2 300 et 3 900
+  caractères, soit 250 et 450 termes cherchés un par un, et la voie lexicale coûte
+  0,9 ms par terme sur un index de 5 800 entrées (mesuré machine chargée) : 200 et
+  400 ms pour un budget de 150. Chacune pouvait dépasser seule, sans concurrence.
+- La requête ne garde que les 32 premiers termes d'un message, chacun une fois, et ne
+  cherche une racine qu'une fois (`MAX_QUERY_TERMS`). Un message de cette longueur
+  n'attendait rien des mots (aucune entrée n'en couvre 72 %) : un tour planifié reçoit
+  maintenant un vecteur de requête, comme un message, et cherche par le sens.
+- Résultat partiel : au dépassement, la voie lexicale déjà classée est servie et le tour
+  marqué dégradé, au lieu d'une liste vide. La recherche abandonnée s'arrête et rend son
+  lecteur ; elle décodait jusque-là tous les vecteurs pour personne.
+- Budget selon le tour : `memory.recall_timeout_unattended_ms` (2 s) pour une
+  planification, une relance de tâche de fond ou une étape de workflow ;
+  `memory.recall_timeout_ms` (150 ms) reste celui d'une conversation et d'une reprise.
+- Mesure : le journal du dépassement porte le budget, l'étape atteinte (attente d'un
+  lecteur, voie lexicale, voie vectorielle) et les millisecondes de chacune.
+  `penelope doctor` dit combien de tours sans mémoire n'avaient pas d'interlocuteur et
+  nomme le réglage qui les concerne.
+- Tests : `two_scheduled_prompts_at_once_both_keep_their_memory` (5 800 entrées, deux
+  prompts de 450 termes en même temps ; rouge sans le plafond de termes),
+  `a_vector_lane_out_of_budget_serves_the_lexical_hits`,
+  `a_recall_with_nothing_ready_is_counted_by_audience`,
+  `a_long_message_asks_for_a_bounded_number_of_terms`,
+  `recall_misses_name_the_turns_nobody_waited_for`.
+- **Pas fait ici** : la voie vectorielle reste exhaustive (7 300 vecteurs décodés par
+  rappel) ; le pool de lecteurs et la sérialisation des rappels ne sont pas touchés, la
+  mesure ne les désignant pas ; le vecteur d'un tour planifié coûte un appel d'embedding
+  par déclenchement, borné par le même délai qu'un message.
+
 ### 1.0.103
 
 **Index mémoire : une entrée effacée du vault n'est plus rappelée après réindexation
