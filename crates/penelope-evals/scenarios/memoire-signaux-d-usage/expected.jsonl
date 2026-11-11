@@ -1,4 +1,4 @@
-{"type":"outcome","step":1,"input":"rpc : mem.reindex","result":{"entries":1}}
+{"type":"outcome","step":1,"input":"rpc : mem.reindex","result":{"entries":1,"retired":0}}
 {"type":"outcome","step":2,"input":"message : Rappelle-moi où est basé le client Martin","outcome":"answered","text":"Le client Martin est basé à Grenoble.","iterations":1}
 {"type":"outcome","step":3,"input":"message : parfait, merci","outcome":"answered","text":"Avec plaisir.","iterations":1}
 {"type":"outcome","step":4,"input":"message : Rappelle-moi où est basé le client Martin","outcome":"answered","text":"Le client Martin est basé à Grenoble.","iterations":1}

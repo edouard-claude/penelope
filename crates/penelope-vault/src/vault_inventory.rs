@@ -38,6 +38,9 @@ pub struct Inventory {
     pub not_indexed: Vec<Gap>,
     /// Exclu à dessein (en attente, comptes rendus, pages générées).
     pub excluded: Vec<Gap>,
+    /// Dans l'index sans ligne dans le vault : effacé ou supprimé à la main, encore
+    /// rappelé tant que `penelope mem reindex` n'est pas passé (#449).
+    pub stale: Vec<Gap>,
 }
 
 /// Exclusion documentée d'un chemin, s'il y en a une.
@@ -173,6 +176,18 @@ pub async fn inventory(s: &Services) -> anyhow::Result<Inventory> {
                     .into(),
             });
         }
+    }
+    let scan = crate::vault_ops::drift::Scan::of(&vault);
+    let drift = crate::vault_ops::drift::drift(s, &vault, &scan)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    for (path, n) in crate::vault_ops::drift::by_file(&drift.gone) {
+        inv.stale.push(Gap {
+            path,
+            reason: format!(
+                "{n} entrée(s) indexée(s) que le vault ne porte plus : `penelope mem reindex`"
+            ),
+        });
     }
     Ok(inv)
 }

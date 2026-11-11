@@ -284,6 +284,9 @@ pub async fn vault_check(s: &Services) -> Value {
         for g in &inv.not_indexed {
             issues.push(json!({"file": g.path, "severity": "warning", "message": format!("hors index : {}", g.reason)}));
         }
+        for g in &inv.stale {
+            issues.push(json!({"file": g.path, "severity": "warning", "message": format!("hors vault : {}", g.reason)}));
+        }
     }
     json!({
         "files": files,

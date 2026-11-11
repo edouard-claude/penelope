@@ -3,7 +3,15 @@
   "params": {},
   "response": {
     "result": {
-      "entries": "integer"
+      "entries": "integer",
+      "retired": "integer",
+      "held": {
+        "entries": "integer",
+        "files": {
+          "profil.md": "integer"
+        },
+        "message": "string"
+      }
     }
   }
 }

@@ -437,6 +437,38 @@ impl MemoryIndex {
             .await
     }
 
+    /// Entrées vivantes et leur fichier : ce que `reindex` confronte au vault (#449).
+    pub async fn live(&self) -> penelope_store::Result<Vec<(String, String)>> {
+        self.store
+            .read(|c| {
+                let mut st = c.prepare(
+                    "SELECT uid, file FROM mem_entries WHERE statut != 'retiree' ORDER BY file, uid",
+                )?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .await
+    }
+
+    /// Retire d'un seul geste des entrées que le vault ne porte plus, comme
+    /// [`Self::retire`] une à une : provenance et signaux restent, une ligne qui revient
+    /// dans le vault retrouve les siens à la réindexation suivante (#449).
+    pub async fn retire_all(&self, uids: &[String]) -> penelope_store::Result<()> {
+        let (uids, now) = (uids.to_vec(), self.clock.now_rfc3339());
+        self.store
+            .write(move |tx| {
+                for uid in &uids {
+                    tx.execute(
+                        "UPDATE mem_entries SET statut='retiree', retired_at=?2 WHERE uid=?1",
+                        params![uid, now],
+                    )?;
+                    tx.execute("DELETE FROM mem_fts WHERE uid = ?1", [uid])?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
     /// Retire toutes les entrées vivantes d'un fichier, comme [`Self::retire`] une à une :
     /// c'est ce qui sort de l'index un fichier devenu exclu (issue #282). Rend le nombre
     /// d'entrées retirées.

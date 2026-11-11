@@ -2987,6 +2987,18 @@ texte sans entrées, des lignes sans uid, une note illisible) est nommé par `pe
 modèle, qui dit « je ne trouve rien dans ce que j'ai indexé » plutôt que « cela n'existe
 pas ».
 
+**Corriger sa mémoire dans son éditeur** (1.0.103). Une ligne effacée dans une note, une
+note supprimée : `penelope mem reindex` sort leurs entrées de l'index, elles ne sont plus
+rappelées ni servies d'office. Une ligne déplacée d'une note à l'autre garde son
+identifiant (`^…`), donc son entrée et ses signaux ; une ligne remise retrouve les siens.
+Tant que la réindexation n'est pas passée, `penelope vault check`, `penelope doctor` et
+`penelope mem audit` comptent ces entrées « sans ligne dans le vault ». Seul ce qui a été
+relu compte : une note illisible, ou que la synchronisation n'a pas encore descendue
+(`.nom.md.icloud`), ne fait rien retirer. Et une passe qui retirerait plus du quart de
+l'index, ou qui n'a rien pu relire (volume démonté), ne retire rien et le dit : si les
+notes ont bien été supprimées, `penelope mem reindex --prune` le confirme. Les passages
+d'un document ingéré ne partent qu'avec sa fiche `sources/`.
+
 **Écrire dans le vault par les outils de fichiers.** Un chemin relatif de `fs_*` vise le
 premier workspace, pas le vault : `sources/x.md` atterrit dans `workspace/sources/`, ni
 indexé ni versionné (issue #256). Le préfixe `vault:` vise le vault (`vault:sources/x.md`)

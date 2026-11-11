@@ -9,6 +9,8 @@ use penelope_memory::index::simple_entry;
 use penelope_memory::{IndexedEntry, Level, Provenance};
 use std::path::Path;
 
+pub mod drift;
+
 /// Fichier du vault qui porte un niveau.
 pub fn file_for(level: Level, day: &str) -> String {
     match level {
@@ -194,11 +196,55 @@ pub async fn forget(s: &Services, vault: &Path, uid: &str) -> Result<bool, Strin
     Ok(true)
 }
 
+/// Bilan d'une réindexation.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct Reindexed {
+    /// Entrées et passages relus du vault.
+    pub entries: usize,
+    /// Entrées retirées de l'index : le vault ne les porte plus (#449).
+    pub retired: Vec<drift::Orphan>,
+    /// Retraits retenus par la garde ([`drift::Drift::held`]) : rien n'a été retiré.
+    pub held: Vec<drift::Orphan>,
+}
+
+impl Reindexed {
+    /// Le bilan tel que `penelope mem reindex` le rend : les nombres, et par fichier ce
+    /// qui est parti ou ce qui attend une confirmation.
+    pub fn to_json(&self) -> serde_json::Value {
+        use drift::by_file;
+        let mut out = serde_json::json!({"entries": self.entries, "retired": self.retired.len()});
+        if !self.retired.is_empty() {
+            out["retired_files"] = serde_json::json!(by_file(&self.retired));
+        }
+        if !self.held.is_empty() {
+            out["held"] = serde_json::json!({
+                "entries": self.held.len(),
+                "files": by_file(&self.held),
+                "message": format!(
+                    "{} entrée(s) de l'index n'ont plus de ligne dans le vault : trop pour les \
+                     retirer sans confirmation (vault démonté, synchronisation en cours ?). \
+                     Rien n'est retiré. Si ces notes ont bien été supprimées : \
+                     `penelope mem reindex --prune`",
+                    self.held.len()
+                ),
+            });
+        }
+        out
+    }
+}
+
+/// Reconstruit l'index depuis le vault : [`reindex_report`] sans confirmation, réduit au
+/// nombre d'entrées relues.
+pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
+    reindex_report(s, vault, false).await.map(|r| r.entries)
+}
+
 /// Reconstruit l'index depuis le vault. Les uid manquants sont ajoutés aux fichiers ;
 /// la provenance existante est conservée par uid. Un fichier devenu exclu perd ses
 /// entrées : sans cela, `DREAMS.md` indexé par une version antérieure restait dans le
-/// rappel (issue #282).
-pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
+/// rappel (issue #282). Une entrée dont la ligne a disparu du vault est retirée (#449) ;
+/// `prune` : même si la passe en retire plus que la garde ne le permet.
+pub async fn reindex_report(s: &Services, vault: &Path, prune: bool) -> Result<Reindexed, String> {
     for rel in s.memory.files().await.map_err(|e| e.to_string())? {
         if let Some(why) = crate::vault_inventory::excluded(&rel) {
             let retired = s
@@ -215,6 +261,7 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
     let now = s.clock.now_rfc3339();
     let day = today(s);
     let mut n = 0;
+    let mut scan = drift::Scan::default();
 
     for rel in files {
         let path = vault.join(&rel);
@@ -227,6 +274,7 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             .strip_prefix(&format!("{}/", penelope_memory::ingest::SOURCES_DIR))
             .and_then(|f| f.strip_suffix(".md"))
         {
+            scan.source(&rel);
             if let Some(src) = penelope_memory::ingest::parse_source(&raw) {
                 n += crate::concepts::index_source(
                     s,
@@ -249,6 +297,7 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             continue;
         }
         let (entries, rewritten) = penelope_memory::vault::parse_entries(&raw);
+        scan.note(&rel, rewritten.as_deref().unwrap_or(&raw));
         if let Some(body) = rewritten {
             save_note(vault, &rel, &body, &day)?;
         }
@@ -289,7 +338,33 @@ pub async fn reindex(s: &Services, vault: &Path) -> Result<usize, String> {
             n += 1;
         }
     }
-    Ok(n)
+    let mut report = Reindexed {
+        entries: n,
+        ..Default::default()
+    };
+    let drift = drift::drift(s, vault, &scan).await?;
+    if drift.held() && !prune {
+        tracing::warn!(
+            entrees = drift.gone.len(),
+            vivantes = drift.live,
+            fichiers_relus = drift.read,
+            "réindexation : trop d'entrées sans ligne dans le vault, rien n'est retiré \
+             (`penelope mem reindex --prune` pour confirmer)"
+        );
+        report.held = drift.gone;
+    } else if !drift.gone.is_empty() {
+        let uids: Vec<String> = drift.gone.iter().map(|o| o.uid.clone()).collect();
+        s.memory
+            .retire_all(&uids)
+            .await
+            .map_err(|e| e.to_string())?;
+        tracing::info!(
+            retirees = uids.len(),
+            "entrées que le vault ne porte plus sorties de l'index"
+        );
+        report.retired = drift.gone;
+    }
+    Ok(report)
 }
 
 /// Type d'une entrée de pratique d'après sa section (issue #58).

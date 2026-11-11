@@ -54,6 +54,19 @@ async fn a_vault_file_outside_the_index_is_reported() {
     crate::vault_ops::reindex(&s, &vault).await.unwrap();
     let c = vault_index_check(&s).await;
     assert!(c.ok, "{c:?}");
+
+    // #449 : l'inverse. La ligne effacée à la main est encore dans l'index.
+    std::fs::write(vault.join("profil.md"), "# Profil\n\n## Préférences\n").unwrap();
+    let c = vault_index_check(&s).await;
+    assert!(!c.ok, "{c:?}");
+    assert!(
+        c.detail.contains("n'ont plus de ligne dans le vault") && c.detail.ends_with("profil.md"),
+        "{}",
+        c.detail
+    );
+    assert_eq!(c.fix.as_deref(), Some("penelope mem reindex"));
+    crate::vault_ops::reindex(&s, &vault).await.unwrap();
+    assert!(vault_index_check(&s).await.ok);
 }
 
 /// #11 : le rôle `embedding` refusé, muet ou joignable, chacun a son verdict.

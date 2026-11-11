@@ -132,6 +132,22 @@ pub async fn vault_index_check(s: &Services) -> DoctorCheck {
     const ID: &str = "vault_index";
     const LABEL: &str = "Vault indexé";
     match crate::vault_inventory::inventory(s).await {
+        // #449 : l'inverse, ce que l'index rappelle encore et que le vault ne porte plus.
+        Ok(inv) if inv.not_indexed.is_empty() && !inv.stale.is_empty() => DoctorCheck::fail(
+            ID,
+            LABEL,
+            format!(
+                "des entrées de l'index n'ont plus de ligne dans le vault et sont encore \
+                 rappelées : {}",
+                inv.stale
+                    .iter()
+                    .take(5)
+                    .map(|g| g.path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Some("penelope mem reindex".into()),
+        ),
         Ok(inv) if inv.not_indexed.is_empty() => DoctorCheck::ok(
             ID,
             LABEL,
