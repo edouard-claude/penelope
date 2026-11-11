@@ -524,7 +524,7 @@ pub async fn retention(s: &Services) -> anyhow::Result<Value> {
                 )?;
                 updates = tx.execute(
                     "UPDATE tg_updates SET payload = '{}'
-                     WHERE processed = 1 AND received_at < ?1 AND payload <> '{}'",
+                     WHERE processed <> 2 AND received_at < ?1 AND payload <> '{}'",
                     [c],
                 )?;
                 for prefix in EPHEMERAL_KEYS {

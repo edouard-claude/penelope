@@ -1,6 +1,27 @@
 //! Rafales de texte et messages retenus hors du sujet actif (issue #49).
+//!
+//! Une rafale vit en mémoire le temps de sa fenêtre, mais ses updates restent en base
+//! (#462) : `tg_updates.processed` vaut `HELD` et le contenu est gardé jusqu'à la mise en
+//! file. Un arrêt pendant la fenêtre ne perd rien, le démarrage suivant les rejoue.
+//!
+//! ```text
+//!  reçu (0) ──► traité (1, contenu effacé)
+//!     └──► retenu dans une rafale (2, contenu gardé) ──► en file ou abandonné (1)
+//!                      └── arrêt ──► rejoué au démarrage, la file dédoublonne
+//! ```
 
 use super::*;
+
+/// `tg_updates.processed` d'un update qui attend dans une rafale ouverte (#462).
+pub(super) const HELD: i64 = 2;
+
+/// Une rafale appartient à sa conversation **et** à son sujet : deux sujets d'un groupe
+/// ont chacun leur session, leurs messages ne se regroupent pas (#462).
+pub(super) type BurstKey = (i64, Option<i64>);
+
+pub(super) fn burst_key(origin: &Origin) -> BurstKey {
+    origin.telegram_chat().unwrap_or((0, None))
+}
 
 /// Sortie d'une session en arrière-plan, mise de côté jusqu'à son retour au focus du chat
 /// (issue #10).
@@ -58,8 +79,9 @@ pub(super) struct TextBurst {
     pub(super) session: String,
     pub(super) parts: Vec<String>,
     pub(super) message_ids: Vec<i64>,
-    /// `update_id` du premier morceau : clé de déduplication du tour.
-    pub(super) update_id: i64,
+    /// `update_id` de chaque morceau : le premier est la clé de déduplication du tour,
+    /// tous restent retenus en base jusqu'à la mise en file (#462).
+    pub(super) update_ids: Vec<i64>,
     pub(super) chars: usize,
     /// Instant à partir duquel la rafale est considérée comme finie.
     pub(super) deadline: std::time::Instant,
@@ -106,15 +128,12 @@ impl TelegramGateway {
     ) -> anyhow::Result<()> {
         let cfg = self.daemon.services.config.config();
         let window = cfg.telegram.text_group_window_ms;
-        let chat_id = match origin {
-            Origin::Telegram { chat_id, .. } => *chat_id,
-            _ => 0,
-        };
+        let key = burst_key(origin);
         let piece = forwarded || text.chars().count() >= TELEGRAM_TEXT_LIMIT;
         let open = self
             .bursts
             .lock()
-            .map(|g| g.contains_key(&chat_id))
+            .map(|g| g.contains_key(&key))
             .unwrap_or(false);
         if window == 0 || (!piece && !open) {
             self.daemon
@@ -131,30 +150,34 @@ impl TelegramGateway {
         } else {
             TAIL_QUIET.min(Duration::from_millis(window))
         };
+        // Retenu avant d'être mis de côté : l'update, déjà acquitté auprès de Telegram,
+        // garde son contenu en base tant que sa rafale n'est pas en file (#462).
+        self.hold_update(update_id).await?;
         let deadline = std::time::Instant::now() + wait;
         let first = {
             let mut g = self
                 .bursts
                 .lock()
                 .map_err(|_| anyhow::anyhow!("rafales verrouillées"))?;
-            match g.get_mut(&chat_id) {
+            match g.get_mut(&key) {
                 Some(b) => {
                     b.chars += text.chars().count();
                     b.parts.push(text);
                     b.message_ids.push(message_id);
+                    b.update_ids.push(update_id);
                     b.deadline = deadline;
                     false
                 }
                 None => {
                     g.insert(
-                        chat_id,
+                        key,
                         TextBurst {
                             origin: origin.clone(),
                             session: session.to_string(),
                             chars: text.chars().count(),
                             parts: vec![text],
                             message_ids: vec![message_id],
-                            update_id,
+                            update_ids: vec![update_id],
                             deadline,
                         },
                     );
@@ -164,19 +187,19 @@ impl TelegramGateway {
         };
         if first {
             let me = self.clone();
-            tokio::spawn(async move { me.flush_burst(chat_id).await });
+            tokio::spawn(async move { me.flush_burst(key).await });
         }
         Ok(())
     }
     /// Attend la fin de la rafale, puis en fait un tour unique (ou demande quoi en faire).
-    async fn flush_burst(self: Arc<Self>, chat_id: i64) {
+    async fn flush_burst(self: Arc<Self>, key: BurstKey) {
         loop {
             let left = {
                 let g = match self.bursts.lock() {
                     Ok(g) => g,
                     Err(_) => return,
                 };
-                match g.get(&chat_id) {
+                match g.get(&key) {
                     Some(b) => b
                         .deadline
                         .saturating_duration_since(std::time::Instant::now()),
@@ -189,13 +212,106 @@ impl TelegramGateway {
             tokio::time::sleep(left).await;
         }
         let burst = match self.bursts.lock() {
-            Ok(mut g) => g.remove(&chat_id),
+            Ok(mut g) => g.remove(&key),
             Err(_) => None,
         };
         let Some(burst) = burst else { return };
+        let (ids, origin) = (burst.update_ids.clone(), burst.origin.clone());
         if let Err(e) = self.deliver_burst(burst).await {
             tracing::warn!(error = %e, "rafale Telegram non transmise");
+            // Jamais de silence (#71) : le propriétaire sait que sa demande n'est pas partie.
+            if let Origin::Telegram {
+                chat_id,
+                topic_id,
+                message_id,
+            } = origin
+            {
+                let text = format!("⚠️ Ta demande n'a pas pu être traitée : {e}");
+                if let Err(e) = self.reply(chat_id, topic_id, message_id, &text).await {
+                    tracing::warn!(error = %e, "échec non signalé au propriétaire");
+                }
+            }
         }
+        self.release_updates(&ids).await;
+    }
+    /// Marque un update retenu : il n'est pas « traité » tant que sa rafale attend.
+    async fn hold_update(&self, update_id: i64) -> anyhow::Result<()> {
+        self.daemon
+            .services
+            .store
+            .write(move |tx| {
+                tx.execute(
+                    "UPDATE tg_updates SET processed = ?2 WHERE update_id = ?1",
+                    params![update_id, HELD],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+    /// Les updates d'une rafale partie en file, tranchée par sa carte ou abandonnée :
+    /// traités, contenu effacé (#46). Un échec d'écriture les laisse retenus, le
+    /// démarrage suivant les rejoue.
+    pub(super) async fn release_updates(&self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let ids = ids.to_vec();
+        let done = self
+            .daemon
+            .services
+            .store
+            .write(move |tx| {
+                for id in &ids {
+                    tx.execute(
+                        "UPDATE tg_updates SET processed = 1, payload = '{}' WHERE update_id = ?1",
+                        [id],
+                    )?;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(e) = done {
+            tracing::warn!(error = %e, "updates d'une rafale encore retenus : rejoués au démarrage");
+        }
+    }
+    /// Vrai tant que l'update attend dans une rafale ouverte.
+    fn in_burst(&self, update_id: i64) -> bool {
+        self.bursts
+            .lock()
+            .map(|g| g.values().any(|b| b.update_ids.contains(&update_id)))
+            .unwrap_or(false)
+    }
+    /// Rejoue les updates qu'un arrêt a laissés dans une rafale ouverte (#462), dans
+    /// l'ordre : la rafale se reforme et part à la fin de sa fenêtre. La clé de
+    /// déduplication de la file écarte un tour déjà créé avant l'arrêt. Rend leur nombre.
+    pub async fn resume_held_updates(self: &Arc<Self>) -> anyhow::Result<usize> {
+        let held: Vec<(i64, String)> = self
+            .daemon
+            .services
+            .store
+            .read(|c| {
+                let mut st = c.prepare(
+                    "SELECT update_id, payload FROM tg_updates WHERE processed = ?1
+                     ORDER BY update_id",
+                )?;
+                let rows = st.query_map([HELD], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        for (id, raw) in &held {
+            if let Ok(update) = serde_json::from_str::<Value>(raw)
+                && let Err(e) = self.process(&update, true).await
+            {
+                tracing::error!(update = id, error = %e, "update retenu non rejoué");
+                self.report_failure(&update, &e).await;
+            }
+            // Ni retenu de nouveau, ni rejouable : il ne reviendra pas à chaque démarrage.
+            if !self.in_burst(*id) {
+                self.release_updates(&[*id]).await;
+            }
+        }
+        Ok(held.len())
     }
     /// Un seul tour pour toute la rafale, sauf si elle dépasse les seuils : Pénélope
     /// demande alors quoi en faire avant de dépenser quoi que ce soit.
@@ -212,7 +328,7 @@ impl TelegramGateway {
                 &burst.session,
                 &burst.joined(),
                 &burst.origin,
-                Some(format!("tg:{}", burst.update_id)),
+                burst.update_ids.first().map(|id| format!("tg:{id}")),
             )
             .await?;
         if let Some((chat, topic)) = burst.origin.telegram_chat() {

@@ -12,6 +12,44 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.116
+
+**Rafales Telegram : une par sujet, et un arrêt pendant la fenêtre ne perd plus ses messages (#462).**
+
+Deux défauts dans le regroupement des messages rapprochés (`bursts.rs`) :
+
+- **La clé.** Les rafales étaient rangées par conversation seule. Dans un groupe à
+  sujets, un message tapé dans le sujet B pendant la fenêtre d'un collage du sujet A
+  rejoignait sa rafale : il était traité dans la session de A et sa réponse arrivait dans
+  le mauvais sujet. La clé est maintenant (conversation, sujet), comme celle des sessions.
+  `/stop` vide la rafale du sujet où il est tapé, plus celle du voisin.
+- **L'arrêt.** Une rafale ne vivait qu'en mémoire alors que ses updates étaient déjà
+  acquittés auprès de Telegram et marqués traités, contenu effacé : un redémarrage
+  pendant la fenêtre les perdait sans un mot. Un update mis de côté passe maintenant à
+  l'état « retenu » (`tg_updates.processed = 2`) et garde son contenu jusqu'à la mise en
+  file de sa rafale (ou sa carte, ou son abandon par `/stop`) ; au démarrage, la
+  passerelle rejoue les updates retenus dans l'ordre, la rafale se reforme et part à la
+  fin de sa fenêtre. Un tour déjà créé avant l'arrêt n'est pas doublé : la clé de
+  déduplication de la file (`tg:<premier update>`) l'écarte.
+
+À côté :
+
+- une rafale que la file refuse n'est plus seulement journalisée : le propriétaire reçoit
+  « ⚠️ Ta demande n'a pas pu être traitée », comme pour un update en échec (#71) ;
+- un update retenu que Telegram renvoie n'entre pas deux fois dans sa rafale ;
+- la rétention efface aussi le contenu d'un update resté en échec (`processed = 0`), qui
+  le gardait sans limite ; elle ne touche pas à un update retenu.
+
+Pas fait ici : un album, une photo, un vocal et un document sont traités dans une tâche
+détachée après l'acquittement de leur update ; un arrêt pendant leur téléchargement les
+perd encore. Pas de migration : la colonne existe, seule une valeur s'ajoute.
+
+Tests : deux sujets à moins d'une fenêtre d'écart (un message court part chez lui, deux
+collages font deux rafales, trois tours dans les bonnes sessions) ; `/stop` d'un sujet
+laisse la rafale de l'autre ; arrêt pendant la fenêtre, puis passerelle neuve sur la même
+base (un tour, contenu effacé ensuite, rien au second rejeu, et la file dédoublonne un
+rejeu après mise en file) ; purge.
+
 ### 1.0.115
 
 **Canal : un message sans texte ne lance plus un tour vide (#461).**

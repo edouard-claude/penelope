@@ -100,8 +100,9 @@ pub struct TelegramGateway {
     outbox_wake: Notify,
     /// Albums en cours de réception, par `media_group_id`.
     albums: Arc<std::sync::Mutex<HashMap<String, Album>>>,
-    /// Morceaux d'un même envoi texte en cours de réception, par chat (issue #49).
-    bursts: Arc<std::sync::Mutex<HashMap<i64, TextBurst>>>,
+    /// Morceaux d'un même envoi texte en cours de réception, par conversation et par
+    /// sujet (issues #49, #462).
+    bursts: Arc<std::sync::Mutex<HashMap<bursts::BurstKey, TextBurst>>>,
     /// Sorties mises de côté des sessions en arrière-plan : lues et réécrites sous verrou.
     held_lock: tokio::sync::Mutex<()>,
     /// Indicateurs d'activité des tours en cours, par tour (issue #121).
@@ -236,6 +237,13 @@ impl TelegramGateway {
         if let Err(e) = self.close_orphan_traces().await {
             tracing::warn!(error = %e, "traces d'outils non closes");
         }
+        // Rafales qu'un arrêt a coupées : leurs messages repartent avant le premier
+        // update (#462). Ici et pas dans la boucle : une boucle relancée a encore sa mémoire.
+        match self.resume_held_updates().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(updates = n, "rafales coupées par l'arrêt : rejouées"),
+            Err(e) => tracing::warn!(error = %e, "rafales coupées par l'arrêt non rejouées"),
+        }
         // Surveillées : une panique relance la boucle au lieu de rendre le bot muet (#84).
         let (a, b, c, m) = (self.clone(), self.clone(), self.clone(), self.clone());
         let (t, n) = (self.clone(), self.clone());
@@ -364,8 +372,15 @@ impl TelegramGateway {
         }
     }
 
-    /// Traite un update. Idempotent : un update déjà traité est ignoré.
+    /// Traite un update. Idempotent : un update déjà traité est ignoré, un update retenu
+    /// dans une rafale aussi (#462).
     pub async fn process_update(self: &Arc<Self>, update: &Value) -> anyhow::Result<()> {
+        self.process(update, false).await
+    }
+
+    /// `replay` : l'update vient de la base, retenu par une rafale que l'arrêt a coupée ;
+    /// il est traité de nouveau, sa rafale n'étant plus en mémoire.
+    async fn process(self: &Arc<Self>, update: &Value, replay: bool) -> anyhow::Result<()> {
         let s = &self.daemon.services;
         let update_id = update
             .get("update_id")
@@ -396,7 +411,7 @@ impl TelegramGateway {
                     [update_id],
                     |r| r.get(0),
                 )?;
-                Ok(processed == 1)
+                Ok(processed == 1 || (processed == bursts::HELD && !replay))
             })
             .await?;
         if already {
@@ -431,11 +446,13 @@ impl TelegramGateway {
         self.handle(incoming).await?;
 
         // Traité : seul `update_id` sert encore (déduplication). Le texte intégral n'a
-        // plus de raison d'être gardé (issue #46).
+        // plus de raison d'être gardé (issue #46). Un update retenu dans une rafale garde
+        // le sien jusqu'à la mise en file (#462).
         s.store
             .write(move |tx| {
                 tx.execute(
-                    "UPDATE tg_updates SET processed = 1, payload = '{}' WHERE update_id = ?1",
+                    "UPDATE tg_updates SET processed = 1, payload = '{}'
+                     WHERE update_id = ?1 AND processed = 0",
                     [update_id],
                 )?;
                 Ok(())

@@ -46,7 +46,7 @@ impl ChannelDelivery for TelegramGateway {
             session: session_id.to_string(),
             parts,
             message_ids: Vec::new(),
-            update_id: 0,
+            update_ids: Vec::new(),
             chars,
             deadline: std::time::Instant::now(),
         })

@@ -445,6 +445,13 @@ async fn retention_removes_what_is_past_its_age_only() {
                  VALUES(1,?1,1,'{\"text\":\"salut\"}')",
                 p,
             )?;
+            // #462 : un update en échec (0) perd son contenu comme un update traité ; un
+            // update retenu dans une rafale (2) le garde, il sera rejoué.
+            tx.execute(
+                "INSERT INTO tg_updates(update_id, received_at, processed, payload)
+                 VALUES(2,?1,0,'{\"text\":\"raté\"}'), (3,?1,2,'{\"text\":\"retenu\"}')",
+                p,
+            )?;
             tx.execute(
                 "INSERT INTO mem_history(uid, file, op, before, after, ts)
                  VALUES('u1','memoire.md','update','avant','apres',?1)",
@@ -553,7 +560,7 @@ async fn retention_removes_what_is_past_its_age_only() {
     assert_eq!(attente, 1, "un message à envoyer reste");
     assert_eq!(report["turns"], 1, "{report}");
     assert_eq!(report["llm_requests"], 1);
-    assert_eq!(report["tg_updates"], 1);
+    assert_eq!(report["tg_updates"], 2, "traité et en échec, pas le retenu");
     assert_eq!(report["mem_history"], 1);
     assert_eq!(
         report["kv"], 2,

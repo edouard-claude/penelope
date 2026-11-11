@@ -311,6 +311,12 @@ la ferme après 300 ms de silence, comme dernier morceau. Un message court tapé
 part **tout de suite** : un « merci » n'attend rien. Chaque morceau reçoit sa réaction
 « reçu », mais une seule réponse part.
 
+Une rafale appartient à sa conversation **et à son sujet** (#462) : dans un groupe à
+sujets, un message tapé dans un autre sujet pendant la fenêtre part chez lui, dans sa
+session. Ses messages restent en base tant qu'elle n'est pas en file : si le daemon
+s'arrête pendant la fenêtre, le démarrage suivant les rejoue et la rafale part en un tour,
+une seule fois. `/stop` vide la rafale du sujet où il est tapé.
+
 Des messages distincts arrivés après cette fenêtre restent des entrées séparées. Si
 plusieurs attendent dans la même session et le même chat/sujet, Pénélope les réclame
 ensemble : chaque texte garde sa date de réception dans le transcript, mais une seule
