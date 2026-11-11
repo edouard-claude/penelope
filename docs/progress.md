@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.102
+
+**Vault : une note illisible n'est plus prise pour une note vide, et rien ne l'écrase
+(#448).**
+
+- `update_note` et `update_note_from` lisaient la note par
+  `read_to_string(…).unwrap_or_default()` : une erreur de lecture (octet hors UTF-8 après
+  une synchronisation, droits, dossier à la place du fichier) valait chaîne vide, et
+  `save_note` réécrivait tout le fichier avec la seule modification demandée. La
+  pré-image gardée par `mem_history` était vide elle aussi : rien à restaurer. Trouvé à
+  la relecture du code, rejoué par un test ; non observé en production.
+- `vault_ops::read_note` sépare les deux cas : absente, la note est vide et l'écriture la
+  crée, comme avant ; illisible, c'est une erreur qui nomme la note et sa cause
+  (« son contenu n'est pas de l'UTF-8 »), et le fichier reste identique octet pour octet.
+- La garde est dans `save_note`, le passage commun de toutes les écritures de notes :
+  `mem_remember`, `mem_forget`, notes de session, rêve, pages de concept. Le même motif
+  est retiré des autres lectures suivies d'une écriture : `audits/`, `index.md`,
+  `concepts/_a-definir.md`, la migration des pages de concept, la séance d'accueil, et
+  `penelope mem restore`, qui n'écrase plus un état qu'il ne peut pas garder.
+- L'inventaire du vault nomme une note illisible au lieu de la sauter : elle apparaît
+  dans `penelope vault check`, `penelope doctor` (« Vault indexé ») et le journal du
+  daemon. Le réindexage continue de la sauter, sans retirer ce qu'il en connaissait.
+- Tests : `an_unreadable_note_is_never_overwritten`, `a_missing_note_is_created`,
+  `memory_tools_leave_an_unreadable_note_alone_and_the_inventory_names_it`
+  (`penelope-vault`), et le cas de la restauration dans le test du rêve. Sans le
+  correctif, deux de ces tests sont rouges.
+- **Pas fait ici** : `fs_write` dans le vault reste un remplacement entier, demandé
+  comme tel (`fs_edit`, lui, échoue déjà sur un fichier illisible) ; le lint du graphe (`wiki::lint`) et le renommage de notes sautent toujours une note
+  illisible, sans rien y écrire.
+
 ### 1.0.101
 
 **`mem_remember` : l'entrée est signée de qui l'a dite, et un tour qui a lu du contenu

@@ -318,7 +318,7 @@ pub async fn run(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) -> anyhow::Result
     // `audit-AAAA-MM-JJ` : un nom unique dans tout le vault (issue #29).
     let vault = penelope_app::helpers::vault_dir(s);
     let rel = format!("audits/audit-{date}.md");
-    let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
+    let current = crate::vault_ops::read_note(&vault, &rel).map_err(anyhow::Error::msg)?;
     crate::vault_ops::save_note(
         &vault,
         &rel,

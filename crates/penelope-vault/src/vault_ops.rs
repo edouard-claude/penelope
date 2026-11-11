@@ -330,6 +330,8 @@ fn collect_markdown(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// `created`, `updated`, `date` pour le journal), écriture atomique. Renvoie le contenu
 /// écrit (issue #29).
 pub fn save_note(vault: &Path, rel: &str, content: &str, day: &str) -> Result<String, String> {
+    // Jamais par-dessus ce qu'on n'a pas pu lire (#448).
+    read_note(vault, rel)?;
     if rel.contains("..") || rel.starts_with('/') {
         return Err(format!("chemin refusé : {rel}"));
     }
@@ -356,6 +358,31 @@ pub fn save_note(vault: &Path, rel: &str, content: &str, day: &str) -> Result<St
     Ok(body)
 }
 
+/// Lit une note avant de la réécrire. Absente, elle est vide : c'est l'écriture qui la
+/// crée. Illisible (octet hors UTF-8 après une synchronisation, droits, verrou), c'est
+/// une erreur : prise pour vide, elle était réécrite en entier avec la seule modification
+/// demandée, et la pré-image gardée pour l'annulation était vide elle aussi (#448).
+pub fn read_note(vault: &Path, rel: &str) -> Result<String, String> {
+    match std::fs::read_to_string(vault.join(rel)) {
+        Ok(raw) => Ok(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!(
+            "note illisible : `{rel}` ({}). Rien n'est écrit, le fichier reste tel quel : \
+             à réparer à la main",
+            unreadable_cause(&e)
+        )),
+    }
+}
+
+/// Pourquoi une note ne se lit pas, en clair.
+pub fn unreadable_cause(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::InvalidData => "son contenu n'est pas de l'UTF-8".into(),
+        std::io::ErrorKind::PermissionDenied => "lecture refusée par le système".into(),
+        _ => e.to_string(),
+    }
+}
+
 /// Opération reportée : quelqu'un a modifié l'entrée visée pendant l'écriture.
 pub const CONFLICT: &str =
     "conflit : entrée modifiée ailleurs (éditeur, SSH) pendant l'écriture, opération reportée";
@@ -368,7 +395,7 @@ pub fn update_note(
     day: &str,
     f: impl Fn(&str) -> Result<String, String>,
 ) -> Result<Option<(String, String)>, String> {
-    let read = std::fs::read_to_string(vault.join(rel)).unwrap_or_default();
+    let read = read_note(vault, rel)?;
     update_note_from(vault, rel, &read, uid, day, f)
 }
 
@@ -385,10 +412,9 @@ pub fn update_note_from(
     day: &str,
     f: impl Fn(&str) -> Result<String, String>,
 ) -> Result<Option<(String, String)>, String> {
-    let path = vault.join(rel);
     let mut base = read.to_string();
     for _ in 0..3 {
-        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        let current = read_note(vault, rel)?;
         if current != base {
             if let Some(uid) = uid {
                 let was = penelope_memory::edit::line_of(&base, uid);
@@ -403,7 +429,7 @@ pub fn update_note_from(
             return Ok(None);
         }
         // Dernier contrôle au plus près de l'écriture.
-        if std::fs::read_to_string(&path).unwrap_or_default() != base {
+        if read_note(vault, rel)? != base {
             continue;
         }
         let written = save_note(vault, rel, &after, day)?;

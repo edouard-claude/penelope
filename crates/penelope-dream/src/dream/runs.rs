@@ -232,7 +232,9 @@ pub async fn restore(s: &Services, history_id: i64) -> anyhow::Result<Value> {
     }
     let vault = crate::helpers::vault_dir(s);
     let path = vault.join(&file);
-    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    // La restauration garde l'état qu'elle remplace : sans pouvoir le lire, elle ne
+    // l'écrase pas (#448).
+    let current = crate::vault_ops::read_note(&vault, &file).map_err(anyhow::Error::msg)?;
     let before = before.unwrap_or_default();
     penelope_kernel::config::atomic_write(&path, before.as_bytes())?;
     let (f, ts) = (file.clone(), s.clock.now_rfc3339());

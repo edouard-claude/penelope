@@ -131,8 +131,20 @@ pub async fn inventory(s: &Services) -> anyhow::Result<Inventory> {
             });
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(vault.join(&rel)) else {
-            continue;
+        let raw = match std::fs::read_to_string(vault.join(&rel)) {
+            Ok(raw) => raw,
+            // Ni indexée ni modifiable : aucune écriture ne passe par-dessus (#448).
+            Err(e) => {
+                inv.not_indexed.push(Gap {
+                    reason: format!(
+                        "note illisible ({}) : ni indexée ni modifiée par Pénélope, à réparer à \
+                         la main",
+                        crate::vault_ops::unreadable_cause(&e)
+                    ),
+                    path: rel,
+                });
+                continue;
+            }
         };
         if rel.starts_with("sources/") {
             if indexed == 0 && penelope_memory::ingest::parse_source(&raw).is_some() {

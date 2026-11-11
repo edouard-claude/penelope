@@ -219,7 +219,7 @@ pub fn migrate_pages(vault: &Path, day: &str) -> Result<usize, String> {
     let mut n = 0;
     for mut page in pages(vault) {
         let rel = format!("{DIR}/{}.md", page.slug);
-        let current = std::fs::read_to_string(vault.join(&rel)).unwrap_or_default();
+        let current = crate::vault_ops::read_note(vault, &rel)?;
         if page.created.is_empty() {
             page.created = day.to_string();
         }
@@ -627,8 +627,7 @@ fn update_to_define(
     pages: &[Page],
     day: &str,
 ) -> anyhow::Result<()> {
-    let path = vault.join(TO_DEFINE);
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let raw = crate::vault_ops::read_note(vault, TO_DEFINE).map_err(anyhow::Error::msg)?;
     let body_raw = penelope_memory::wiki::body_of(&raw);
     let defined = |term: &str| {
         let n = normalize(term);
@@ -753,7 +752,7 @@ async fn write_index(s: &Services, pages: &[Page], day: &str) -> anyhow::Result<
     for p in projects.iter().take(20) {
         t.push_str(&format!("- {p}\n"));
     }
-    let raw = std::fs::read_to_string(vault.join(INDEX)).unwrap_or_default();
+    let raw = crate::vault_ops::read_note(&vault, INDEX).map_err(anyhow::Error::msg)?;
     crate::vault_ops::save_note(
         &vault,
         INDEX,
