@@ -12,6 +12,39 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.96
+
+**shell_exec : un mot que le shell développe ne fait plus classer une exécution en lecture
+(#442).**
+
+- `find . -maxdepth 0 -{print,exec} sh -c '…' ';'` partait sans carte en mode `reads` (le
+  défaut) : le classement lisait le mot `-{print,exec}`, absent de la liste noire de
+  `find`, et le shell lançait `-print -exec sh`. Mêmes formes : `sort -{u,o} fichier`, `git
+  diff --{output=f,stat}`, `rg --{pre=./script,files}`, et après un tube `… | sort -{u,o}
+  f`. Trouvé à la relecture du code, non observé en production.
+- Le découpage (`penelope_hitl::cmdline`) suit maintenant, mot par mot et hors guillemets,
+  ce que le shell développera en d'autres mots : des accolades (`{a,b}`, `{1..3}`,
+  imbriquées ou à moitié entre guillemets), et un joker qui peut rendre une option (mot qui
+  commence par `*`, `?`, `[`, ou par `-` suivi d'un joker : un fichier nommé `-delete`
+  devient une option de `find . *`). `SimpleCommand::expands` le porte, par étape.
+- Un programme qui ne lit que selon ses options (`find`, `fd`, `git`, `rg`, `sort`, `tree`,
+  `date` ; `jq`, `cat`, `sort`, `rg` en fin de tube) n'est plus une lecture sur une telle
+  ligne. Les programmes qui ne font que lire le restent : `ls *.rs`, `cat src/{a,b}.rs`,
+  `wc -l *.rs`. Restent aussi des lectures `git show HEAD@{1}`, `jq '{a: .b}'`, `find .
+  -name '*.{rs,toml}'` et `git diff src/*.rs` (un joker après un préfixe de chemin ne rend
+  que des chemins).
+- Une famille ne se construit plus sur un mot développable : `git {status,push}` n'écrit
+  pas de règle, et une telle famille déclarée dans `tools.shell_allow` ne couvre rien.
+- Mesure sur les 7 643 `shell_exec` de l'instance du propriétaire : 1 225 lectures avant,
+  1 224 après ; la seule qui reprend une carte est `rg -n "…" *docker-compose.yml
+  docker-compose.yml`.
+- Un test lance bash et zsh sur chaque forme et compare les mots réellement passés au
+  programme à ceux qu'on lit : tout écart doit avoir été signalé. Les tests de `cmdline.rs`
+  passent dans `cmdline/tests.rs` (R1), sans changement.
+- Pas fait ici : les options qui écrivent sans développement (`git grep
+  --open-files-in-pager`, `sort -ofichier`, `uniq entrée sortie`, `fd -xsh`) sont le lot
+  #443.
+
 ### 1.0.95
 
 **Mission : un testeur qui exécute, des verdicts en fichiers, la main rendue après trois

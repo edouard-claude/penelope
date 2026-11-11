@@ -1425,6 +1425,19 @@ api "…"` est de la famille `glab`, `TZ=UTC date` est une lecture. Le même dé
 créer la règle, à la reconnaître, à lire `tools.shell_allow` et à classer les lectures :
 ce qu'un « Toujours » écrit est ce qui s'applique ensuite.
 
+**Un mot que le shell développe n'est pas celui qu'on lit (#442).** Hors guillemets,
+`-{print,exec}` devient `-print -exec`, et un joker en tête de mot (`*`, `?x`, `-*`) devient
+les noms des fichiers du dossier, `-delete` compris. Une ligne qui porte un tel mot n'est
+une lecture que si son programme ne sait que lire quels que soient ses arguments : `ls
+*.rs`, `cat src/{a,b}.rs`, `wc -l *.rs`, `grep x {a,b}.txt` passent toujours sans carte.
+Pour ceux qui ne lisent que selon leurs options (`find`, `fd`, `git`, `rg`, `sort`, `tree`,
+`date`, et `jq`, `cat`, `sort`, `rg` après un tube), la carte revient : `find .
+-{print,exec} sh` ou `sort -{u,o} fichier` ne sont pas des lectures. Un joker après un
+préfixe de chemin (`git diff src/*.rs`) ne peut rendre que des chemins et reste une
+lecture, comme les accolades entre guillemets (`find . -name '*.{rs,toml}'`) et celles qui
+ne développent rien (`git show HEAD@{1}`). Un mot développable ne nomme pas non plus de
+famille : `git {status,push}` s'autorise une fois, sans règle.
+
 Un « Toujours » sur une commande composée (`ls; pwd`, `a > f`, `$(…)`) l'autorise cette
 fois, sans créer de règle. La carte le dit **avant** le clic, et depuis #150 **aucun
 bouton ne prend la place de « Toujours »** : une coche verte à cet endroit se lisait comme
