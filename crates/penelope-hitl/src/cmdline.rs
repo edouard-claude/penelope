@@ -23,6 +23,10 @@
 //! cliqués pour rien en cinq minutes venaient de là. `| sh`, `| xargs`, `| tee`,
 //! `| python` ou une option qui écrit (`sort -o`, `jq --rawfile`) restent composés.
 //!
+//! Les programmes qui ne lisent que selon leurs options (`sort`, `find`, `git`, `rg`…) ont
+//! chacun la liste de ce qu'ils acceptent en restant une lecture (#443, `cmdline/options.rs`) :
+//! toute autre option demande une carte.
+//!
 //! Les mots rendus sont ceux qu'on **lit**. Le shell, lui, en lance parfois d'autres
 //! (#442) : `-{print,exec}` devient `-print -exec`, et un joker en tête de mot (`*`) devient
 //! les noms des fichiers du dossier, `-delete` compris. [`SimpleCommand::expands`] le
@@ -335,32 +339,17 @@ fn is_pure_filter(c: &SimpleCommand) -> bool {
         return false;
     };
     let args = &c.words[1..];
-    let has = |bad: &[&str]| {
-        args.iter().any(|w| {
-            bad.iter()
-                .any(|b| w == b || (b.starts_with("--") && w.starts_with(&format!("{b}="))))
-        })
-    };
     match program {
-        "grep" | "egrep" | "fgrep" | "head" | "tail" | "cut" | "wc" | "uniq" | "tr" | "nl"
-        | "rev" | "column" => true,
+        "grep" | "egrep" | "fgrep" | "head" | "tail" | "cut" | "wc" | "tr" | "nl" | "rev"
+        | "column" => true,
         // Les suivants ne lisent que selon leurs arguments : il faut les connaître tous,
         // donc aucun mot que le shell développera (#442, `sort -{u,o} fichier`).
         _ if c.expands => false,
         // Un `cat` de fin de tube ne sert qu'à dérouler la sortie ; avec un fichier, il
         // lit autre chose que ce que la première étape a produit.
         "cat" => args.iter().all(|a| a.starts_with('-')),
-        "jq" => !has(&[
-            "-f",
-            "--from-file",
-            "--rawfile",
-            "--slurpfile",
-            "--args",
-            "--jsonargs",
-        ]),
-        "sort" => !has(&["-o", "--output"]),
-        "rg" => !has(&["--pre"]),
-        _ => false,
+        // `jq`, `sort`, `rg`, `uniq` : rien que des options connues pour lire (#443).
+        _ => options::filter_reads(program, args).unwrap_or(false),
     }
 }
 
@@ -473,56 +462,18 @@ pub fn is_read(line: &Pipeline) -> bool {
     if program.contains('/') {
         return false;
     }
-    let has = |bad: &[&str]| {
-        words[1..].iter().any(|w| {
-            bad.iter()
-                .any(|b| w == b || (b.starts_with("--") && w.starts_with(&format!("{b}="))))
-        })
-    };
     match program.as_str() {
-        "ls" | "cat" | "head" | "tail" | "grep" | "egrep" | "fgrep" | "wc" | "file" | "stat"
-        | "du" | "df" | "pwd" | "which" | "whoami" | "id" | "uname" | "diff" | "cmp" | "uniq"
-        | "cut" | "basename" | "dirname" | "realpath" | "readlink" | "sha256sum" | "sha1sum"
-        | "shasum" | "md5" | "md5sum" | "jq" | "echo" | "printf" | "true" => true,
-        // Les suivants ne lisent que selon leurs options : `find . -{print,exec} sh` se
+        "ls" | "cat" | "head" | "tail" | "grep" | "egrep" | "fgrep" | "wc" | "stat" | "du"
+        | "df" | "pwd" | "which" | "whoami" | "id" | "uname" | "diff" | "cmp" | "cut"
+        | "basename" | "dirname" | "realpath" | "readlink" | "sha256sum" | "sha1sum" | "shasum"
+        | "md5" | "md5sum" | "jq" | "echo" | "printf" | "true" => true,
+        // Les suivants ne lisent que selon leurs arguments : `find . -{print,exec} sh` se
         // lit sans `-exec` et le lance (#442). Un mot que le shell développera, accolades
         // ou joker en tête, et ce n'est plus une lecture.
         _ if line.head.expands => false,
-        "date" => !has(&["-s", "--set"]),
-        "sort" => !has(&["-o", "--output"]),
-        "tree" => !has(&["-o"]),
-        "rg" => !has(&["--pre"]),
-        "find" => !has(&[
-            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
-            "-fls",
-        ]),
-        "fd" => !has(&["-x", "--exec", "-X", "--exec-batch"]),
-        // Sous-commande de lecture, sans option globale (`git -c …` peut lancer une
-        // commande) ni fichier de sortie.
-        "git" => {
-            let read = matches!(
-                words.get(1).map(String::as_str),
-                Some(
-                    "status"
-                        | "log"
-                        | "diff"
-                        | "show"
-                        | "ls-files"
-                        | "blame"
-                        | "rev-parse"
-                        | "describe"
-                        | "shortlog"
-                        | "grep"
-                )
-            ) || (words.get(1).map(String::as_str) == Some("branch")
-                && words[2..]
-                    .iter()
-                    .all(|w| matches!(w.as_str(), "-a" | "-r" | "-v" | "-vv" | "--list")))
-                || (words.get(1).map(String::as_str) == Some("remote")
-                    && words[2..].iter().all(|w| w == "-v"));
-            read && !has(&["--output", "--ext-diff", "--textconv"])
-        }
-        _ => false,
+        // `sort`, `uniq`, `find`, `fd`, `rg`, `git`, `tree`, `date`, `file` : rien que des
+        // options connues pour lire, toute autre demande une carte (#443).
+        _ => options::head_reads(program, &words[1..]).unwrap_or(false),
     }
 }
 
@@ -614,5 +565,6 @@ pub fn why_composed(line: &str) -> Option<String> {
     Some("la commande ne nomme pas ce qu'elle lance (`sh -c`, `sudo`, `env`…)".into())
 }
 
+mod options;
 #[cfg(test)]
 mod tests;
