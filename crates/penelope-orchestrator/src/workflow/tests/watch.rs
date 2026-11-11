@@ -160,6 +160,81 @@ async fn moving_a_run_moves_its_sub_runs() {
     }
 }
 
+/// #463 : le canal dit qu'une conversation a disparu (ici le sujet 21, supprimé). Le run
+/// qui y parlait et son sous-run sont rattachés là où il dit de livrer, la planification
+/// aussi ; ce qui livre ailleurs ne bouge pas, et un run fini garde sa destination.
+#[tokio::test]
+async fn a_lost_destination_moves_live_runs_and_schedules() {
+    let e = env().await;
+    let s = &e.d.services;
+    let place = |topic_id: Option<i64>, message_id: Option<i64>| Origin::Telegram {
+        chat_id: -100,
+        topic_id,
+        message_id,
+    };
+    // La réponse du canal : il ne regarde pas le message, seulement la conversation.
+    let moved = |origin: &Origin| match origin {
+        Origin::Telegram {
+            chat_id: -100,
+            topic_id: Some(21),
+            ..
+        } => Some(place(None, None)),
+        _ => None,
+    };
+    let run = waiting_list(&e, false).await;
+    let child = child_of(s, &run).await;
+    retarget(s, &run.id, &place(Some(21), None)).await.unwrap();
+    let mut schedules = Vec::new();
+    for origin in [
+        Some(place(Some(21), Some(7))),
+        Some(place(Some(22), None)),
+        None,
+    ] {
+        let mut target = json!({"type": "notify", "template": "🧭 Veille"});
+        if let Some(origin) = origin {
+            target["origin"] = origin.to_value();
+        }
+        let kind = penelope_workflow::TriggerKind::Cron;
+        let spec = json!({"expr": "0 9 * * *"});
+        let created = s.schedules.create(kind, spec, target, json!({})).await;
+        schedules.push(created.unwrap().id);
+    }
+
+    let done = crate::destinations::relocate(s, &moved).await.unwrap();
+    assert_eq!(done.schedules, vec![schedules[0].clone()]);
+    let mut runs = done.runs.clone();
+    runs.sort();
+    let mut family = vec![run.id.clone(), child.id.clone()];
+    family.sort();
+    assert_eq!(runs, family);
+    for id in [&run.id, &child.id] {
+        assert_eq!(origin_of(s, id).await, place(None, None), "{id}");
+    }
+    let target = |i: usize| {
+        let id = schedules[i].clone();
+        async move { s.schedules.get(&id).await.unwrap().unwrap().target }
+    };
+    assert_eq!(target(0).await["origin"], place(None, None).to_value());
+    assert_eq!(target(1).await["origin"], place(Some(22), None).to_value());
+    assert!(target(2).await["origin"].is_null());
+    // Rien ne pointe plus le sujet disparu : un second passage ne touche rien.
+    assert!(
+        crate::destinations::relocate(s, &moved)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Un run fini ne parle plus : sa destination reste ce qu'elle était.
+    retarget(s, &run.id, &place(Some(21), None)).await.unwrap();
+    control(&e.d, &run.id, &penelope_workflow::Control::Cancel)
+        .await
+        .unwrap();
+    let done = crate::destinations::relocate(s, &moved).await.unwrap();
+    assert!(!done.runs.contains(&run.id), "{done:?}");
+    assert_eq!(origin_of(s, &run.id).await, place(Some(21), None));
+}
+
 /// #358 : un sous-agent lancé depuis l'étape d'un run autonome (`sub_agent_spawn`) travaille
 /// pour ce run : une écriture du shell ne demande rien. Hors run, elle demande.
 #[tokio::test]

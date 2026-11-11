@@ -12,6 +12,52 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.117
+
+**Envoi Telegram : un message destiné à un sujet supprimé arrive dans le fil général (#463).**
+
+Telegram ne prévient pas quand un sujet disparaît : on l'apprend au refus d'un envoi, 400
+« message thread not found ». La file d'envoi traitait ce refus comme tout 4xx : la ligne
+passait `failed` au premier essai, et la note « Un message n'a pas pu être envoyé » disait
+qu'il manquait quelque chose, pas quoi. Quatre messages de planifications et de runs se
+sont perdus ainsi le 12/10.
+
+- **Le reroutage.** Sur ce refus, le même envoi repart sans sujet : il arrive dans le fil
+  général du groupe, précédé d'une ligne qui dit d'où il vient (« ↪️ Sujet « Veille »
+  supprimé : ce message lui était destiné. »). La ligne tient dans le message ; s'il est
+  déjà à la limite de Telegram, elle part seule, juste avant. La réponse à un message parti
+  avec le sujet est retirée. La ligne de la file garde l'envoi rerouté : si le second essai
+  tombe sur une panne, la nouvelle tentative ne refait pas le détour. Elle n'est `failed`,
+  avec sa note, que si le fil général refuse lui aussi.
+- **Les destinations.** Les planifications et les runs encore vivants qui livraient dans
+  ce sujet sont rattachés au fil général au même moment (`destinations::relocate`) : leurs
+  envois suivants arrivent sans détour, et `/schedules` montre la nouvelle destination. Le
+  cœur ne sait pas ce qu'est un sujet : il présente chaque destination mémorisée, le canal
+  répond « elle tient » ou « livre plutôt là ».
+- Un 400 d'une autre nature (message trop long, chat introuvable) reste un échec définitif
+  avec sa note, et ne déplace rien.
+
+L'envoi d'une ligne et ses seconds essais (sujet supprimé, HTML refusé) sortent de
+`flush_outbox` dans `lost_topic.rs`.
+
+Pas fait ici, et pourquoi :
+
+- la **session** du sujet garde sa liaison. La rattacher au fil général ferait continuer là
+  une conversation que le propriétaire a supprimée, ou délogerait la session qui s'y
+  trouve. Ses sorties tardives (le résultat d'un outil en arrière-plan) prennent le détour,
+  ligne comprise : rien ne se perd, mais chacune coûte un appel refusé ;
+- une **mission** en cours dans ce sujet, les messages retenus par les heures calmes et les
+  tours déjà en file gardent aussi leur destination, et prennent le même détour ;
+- les envois qui ne passent pas par la file (un document, un vocal, le brouillon, l'indicateur
+  d'activité) vers un sujet supprimé échouent comme avant : l'outil rend l'erreur au
+  modèle, le brouillon et l'indicateur l'ignorent.
+
+Tests : `lost_topic` (passerelle : le texte arrive une fois dans le fil général avec sa
+ligne, la planification est rattachée et sa voisine non ; un autre 400 et un second essai
+refusé restent `failed` avec leur note ; un message plein est précédé de sa ligne) et
+`a_lost_destination_moves_live_runs_and_schedules` (cœur : run, sous-run et planification
+rattachés, un run fini garde sa destination).
+
 ### 1.0.116
 
 **Rafales Telegram : une par sujet, et un arrêt pendant la fenêtre ne perd plus ses messages (#462).**
