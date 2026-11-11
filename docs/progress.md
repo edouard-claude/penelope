@@ -12,6 +12,58 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.96
+
+**shell_exec : un mot que le shell développe ne fait plus classer une exécution en lecture
+(#442).**
+
+- `find . -maxdepth 0 -{print,exec} sh -c '…' ';'` partait sans carte en mode `reads` (le
+  défaut) : le classement lisait le mot `-{print,exec}`, absent de la liste noire de
+  `find`, et le shell lançait `-print -exec sh`. Mêmes formes : `sort -{u,o} fichier`, `git
+  diff --{output=f,stat}`, `rg --{pre=./script,files}`, et après un tube `… | sort -{u,o}
+  f`. Trouvé à la relecture du code, non observé en production.
+- Le découpage (`penelope_hitl::cmdline`) suit maintenant, mot par mot et hors guillemets,
+  ce que le shell développera en d'autres mots : des accolades (`{a,b}`, `{1..3}`,
+  imbriquées ou à moitié entre guillemets), et un joker qui peut rendre une option (mot qui
+  commence par `*`, `?`, `[`, ou par `-` suivi d'un joker : un fichier nommé `-delete`
+  devient une option de `find . *`). `SimpleCommand::expands` le porte, par étape.
+- Un programme qui ne lit que selon ses options (`find`, `fd`, `git`, `rg`, `sort`, `tree`,
+  `date` ; `jq`, `cat`, `sort`, `rg` en fin de tube) n'est plus une lecture sur une telle
+  ligne. Les programmes qui ne font que lire le restent : `ls *.rs`, `cat src/{a,b}.rs`,
+  `wc -l *.rs`. Restent aussi des lectures `git show HEAD@{1}`, `jq '{a: .b}'`, `find .
+  -name '*.{rs,toml}'` et `git diff src/*.rs` (un joker après un préfixe de chemin ne rend
+  que des chemins).
+- Une famille ne se construit plus sur un mot développable : `git {status,push}` n'écrit
+  pas de règle, et une telle famille déclarée dans `tools.shell_allow` ne couvre rien.
+- Mesure sur les 7 643 `shell_exec` de l'instance du propriétaire : 1 226 lectures avant,
+  1 225 après ; la seule qui reprend une carte est `rg -n "…" *docker-compose.yml
+  docker-compose.yml`.
+- Un test lance bash et zsh sur chaque forme et compare les mots réellement passés au
+  programme à ceux qu'on lit : tout écart doit avoir été signalé. Les tests de `cmdline.rs`
+  passent dans `cmdline/tests.rs` (R1), sans changement.
+- Pas fait ici : les options qui écrivent sans développement (`git grep
+  --open-files-in-pager`, `sort -ofichier`, `uniq entrée sortie`, `fd -xsh`) sont le lot
+  #443.
+
+**SQLite embarqué monté à 3.54.1, runners macOS en `macos-15` : la CI était rouge sans
+rapport avec le lot.**
+
+- `cargo deny` refusait `libsqlite3-sys` 0.35 depuis l'avis RUSTSEC-2026-0459
+  (CVE-2026-119375) : avant 3.54, SQLite peut rendre de la mémoire non initialisée quand
+  il ouvre une base avec un fichier `-wal` forgé. Pénélope n'ouvre que ses propres bases,
+  l'exposition tient à une sauvegarde ou une base qu'un tiers aurait écrite. `rusqlite`
+  passe de 0.37 à 0.41, SQLite de 3.50.2 à 3.54.1 ; le plancher du test
+  `the_bundled_sqlite_is_recent_enough` monte à 3.54.
+- SQLite 3.54 ne nomme plus de la même façon un index FTS5 abîmé : `fts5: corruption found
+  reading blob 10 from table "messages_fts"` au lieu de `malformed inverted index for FTS5
+  table main.messages_fts`. `fts_tables` ne reconnaissait que l'ancienne phrase : un index
+  de recherche abîmé aurait arrêté le daemon au démarrage au lieu d'être reconstruit
+  (#158, puis retour arrière de #153). Les deux écritures sont reconnues ; ce sont les
+  tests de #158 qui l'ont vu, avant toute release.
+- GitHub ne sert plus `macos-14` (« The configuration 'macos-14-arm64-us-default' is not
+  supported ») : le job `verification` était annulé à la seconde. `ci.yml`, `release.yml`
+  et `signature.yml` passent à `macos-15`.
+
 ### 1.0.95
 
 **Mission : un testeur qui exécute, des verdicts en fichiers, la main rendue après trois

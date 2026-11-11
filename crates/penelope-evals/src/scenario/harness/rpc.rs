@@ -443,7 +443,7 @@ pub(super) async fn observe(s: &Services, wanted: &[Observe]) -> anyhow::Result<
             .store
             .read(move |c| {
                 let mut st = c.prepare(&sql)?;
-                let names: Vec<String> = st.column_names().iter().map(|n| n.to_string()).collect();
+                let names: Vec<String> = st.column_names().map(|n| n.to_string()).collect();
                 let rows = st.query_map([], |r| {
                     let mut row = serde_json::Map::new();
                     for (i, n) in names.iter().enumerate() {

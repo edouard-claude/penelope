@@ -97,7 +97,7 @@ jobs:
   # launchd, trousseau, binaire de release). Pas la suite entière une seconde fois.
   verification:
     name: Format, lint et plateforme (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

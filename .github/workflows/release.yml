@@ -24,7 +24,7 @@ env:
 jobs:
   verification:
     name: Vérifier avant de publier
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       # Avant tout, et avant même le checkout (#212) : la V1 vit en `1.0.0-alpha.N` sur sa
@@ -88,7 +88,7 @@ jobs:
   construire:
     name: Construire (${{ matrix.target }})
     needs: verification
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: true
@@ -180,7 +180,7 @@ jobs:
     name: Publier la release
     needs: [construire, construire-linux]
     if: ${{ !cancelled() && needs.construire.result == 'success' }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

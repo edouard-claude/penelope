@@ -18,7 +18,7 @@ référence est annulé par le suivant (`concurrency: ci-<ref>`).
 | Job | Machine | Ce qu'il fait |
 |---|---|---|
 | `tests` | `ubuntu-latest` | « La branche porte sa version » (sur `main`, la version du workspace est 1.x ; sur `v1`, `1.0.0-` ; #208, #212), puis `cargo test --workspace --no-fail-fast` : la suite entière, dix fois moins cher que macOS, et chacun peut la rejouer (issue #102 : sans bac à sable sur Linux, les tests de logique tournent sans profil imposé) ; puis le cliquet du gel, `scripts/check-budget.sh` (#209 : `budget.toml` ne remonte jamais sans le trailer `Dérogation-budget: #N`) |
-| `verification` | `macos-14` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, la plateforme (`penelope-platform`, Seatbelt réellement appliqué, `--ignored` compris), **`cargo test --workspace` une seconde fois** (la même suite que la release, #151 : les tests réservés à macOS ne sont compilés que là), le relais launchd contre le vrai `launchd` (issue #36, `PENELOPE_LAUNCHD_TESTS=1`), puis `cargo build --release --locked -p penelope-cli` |
+| `verification` | `macos-15` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, la plateforme (`penelope-platform`, Seatbelt réellement appliqué, `--ignored` compris), **`cargo test --workspace` une seconde fois** (la même suite que la release, #151 : les tests réservés à macOS ne sont compilés que là), le relais launchd contre le vrai `launchd` (issue #36, `PENELOPE_LAUNCHD_TESTS=1`), puis `cargo build --release --locked -p penelope-cli` |
 | `dependances` | `ubuntu-latest` | `cargo deny check` : avis de sécurité, licences, dépendances interdites, provenance ; ne lit que `Cargo.lock` |
 | `livraison` | `ubuntu-latest` | après les trois autres, sur un push vers `main` seulement, un seul à la fois : pose le tag et lance la release (ci-dessous) |
 
@@ -58,7 +58,7 @@ l'appelle).
 ```
 tag v1.0.4
    │
-   ├── verification   le tag = la version du workspace, fmt + clippy + tests   (macos-14)
+   ├── verification   le tag = la version du workspace, fmt + clippy + tests   (macos-15)
    │                  banc d'essai de la mémoire (rapport joint, issue #37)
    │
    ├── construire     aarch64-apple-darwin  ─┐   clé publique minisign intégrée
@@ -88,6 +88,6 @@ secrets de dépôt, ce qui n'est pas en place.
 ## `signature.yml`
 
 Issue #28 : `make sign` avec une identité stable doit donner la même exigence désignée
-d'un build à l'autre. Sur `macos-14`, `scripts/check-codesign.sh` le vérifie avec une
+d'un build à l'autre. Sur `macos-15`, `scripts/check-codesign.sh` le vérifie avec une
 identité de test dans un trousseau temporaire, sans secret. Déclenché seulement quand
 `Makefile`, `scripts/check-codesign.sh` ou le workflow lui-même changent, ou à la main.

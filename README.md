@@ -230,7 +230,7 @@ Version 1.0 : la V1 est sur `main` depuis le 27 septembre 2026 et publiée en re
   est lue, pas celle d'un autre système.
 - Le bac à sable n'existe que sur macOS : la suite entière tourne aussi sur Linux (la CI
   la rejoue sur `ubuntu-latest`), mais les tests de Seatbelt, de launchd et du trousseau
-  ne tournent que sur `macos-14`.
+  ne tournent que sur `macos-15`.
 - Les manques et les écarts trouvés en revue sont suivis dans les
   [issues](https://github.com/edouard-claude/penelope/issues) du dépôt, lisibles par
   tout le monde.

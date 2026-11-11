@@ -22,6 +22,12 @@
 //! `cat`, `wc` et consorts ne peuvent ni écrire ni lancer autre chose. Huit « Toujours »
 //! cliqués pour rien en cinq minutes venaient de là. `| sh`, `| xargs`, `| tee`,
 //! `| python` ou une option qui écrit (`sort -o`, `jq --rawfile`) restent composés.
+//!
+//! Les mots rendus sont ceux qu'on **lit**. Le shell, lui, en lance parfois d'autres
+//! (#442) : `-{print,exec}` devient `-print -exec`, et un joker en tête de mot (`*`) devient
+//! les noms des fichiers du dossier, `-delete` compris. [`SimpleCommand::expands`] le
+//! signale ; une ligne qui en porte ne se classe en lecture que si son programme ne sait
+//! ni écrire ni lancer, quelles que soient ses options.
 
 /// Une ligne de commande simple : les affectations d'environnement qui la précèdent, puis
 /// le programme et ses arguments, guillemets retirés.
@@ -31,6 +37,11 @@ pub struct SimpleCommand {
     pub assignments: Vec<(String, String)>,
     /// Programme puis arguments.
     pub words: Vec<String>,
+    /// Un mot au moins sera développé par le shell en **d'autres mots** que ceux lus ici
+    /// (#442) : des accolades hors guillemets (`{a,b}`, `{1..3}`), ou un joker qui peut
+    /// rendre une option (mot qui commence par `*`, `?`, `[`, ou par `-` suivi d'un joker).
+    /// `HEAD@{1}`, `'*.{rs,toml}'` et `src/*.rs` n'en sont pas.
+    pub expands: bool,
 }
 
 impl SimpleCommand {
@@ -86,8 +97,53 @@ pub fn pipeline(line: &str) -> Option<Pipeline> {
     pipeline_of(scan(line)?)
 }
 
+/// Une étape telle que lue : ses mots, guillemets retirés, et si le shell en fera d'autres.
+#[derive(Debug, Default)]
+struct Stage {
+    words: Vec<String>,
+    /// Voir [`SimpleCommand::expands`].
+    expands: bool,
+}
+
+/// Ce que le shell développera dans le mot en cours, hors guillemets (#442).
+#[derive(Default)]
+struct WordExpansion {
+    /// Accolades ouvertes et pas encore fermées.
+    depth: u32,
+    /// Une virgule ou `..` vue entre accolades : c'est un développement, pas `HEAD@{1}`.
+    separated: bool,
+    /// Le caractère précédent était un point hors guillemets.
+    dot: bool,
+}
+
+impl WordExpansion {
+    /// Lit un caractère hors guillemets du mot `word` (sans lui) ; vrai s'il achève un
+    /// développement d'accolades ou ouvre un joker qui peut rendre une option.
+    fn feed(&mut self, c: char, word: &str) -> bool {
+        let dot = std::mem::replace(&mut self.dot, c == '.');
+        match c {
+            '{' => self.depth += 1,
+            ',' if self.depth > 0 => self.separated = true,
+            '.' if self.depth > 0 && dot => self.separated = true,
+            '}' if self.depth > 0 => {
+                self.depth -= 1;
+                let found = self.separated;
+                if self.depth == 0 {
+                    self.separated = false;
+                }
+                return found;
+            }
+            // `*` seul, `*.rs` ou `-*` : un fichier nommé `-delete` devient une option.
+            // `src/*.rs` ne peut rendre que des chemins sous `src/`.
+            '*' | '?' | '[' => return word.is_empty() || word.starts_with('-'),
+            _ => {}
+        }
+        false
+    }
+}
+
 /// Une ligne déjà découpée en étapes de tube.
-fn pipeline_of(stages: Vec<Vec<String>>) -> Option<Pipeline> {
+fn pipeline_of(stages: Vec<Stage>) -> Option<Pipeline> {
     let mut stages = stages.into_iter();
     let head = command_of(stages.next()?)?;
     let mut filters = Vec::new();
@@ -114,7 +170,7 @@ pub fn simple(line: &str) -> Option<SimpleCommand> {
 
 /// Étapes de tube d'une ligne **sans `&&`**, en mots. `None` dès qu'un opérateur autre
 /// que le tube paraît.
-fn scan(line: &str) -> Option<Vec<Vec<String>>> {
+fn scan(line: &str) -> Option<Vec<Stage>> {
     let mut steps = scan_list(line)?;
     if steps.len() != 1 {
         return None;
@@ -124,10 +180,13 @@ fn scan(line: &str) -> Option<Vec<Vec<String>>> {
 
 /// Étapes d'une ligne : par `&&`, puis par tube, puis en mots. `None` dès qu'un opérateur
 /// autre que le tube et `&&` paraît hors guillemets.
-fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
-    let mut steps: Vec<Vec<Vec<String>>> = Vec::new();
-    let mut stages: Vec<Vec<String>> = Vec::new();
+fn scan_list(line: &str) -> Option<Vec<Vec<Stage>>> {
+    let mut steps: Vec<Vec<Stage>> = Vec::new();
+    let mut stages: Vec<Stage> = Vec::new();
     let mut words: Vec<String> = Vec::new();
+    // L'étape en cours porte un mot que le shell développera.
+    let mut expands = false;
+    let mut expansion = WordExpansion::default();
     let mut word = String::new();
     // Un mot peut être vide (`""`) : il faut le distinguer de « pas de mot en cours ».
     let mut started = false;
@@ -137,6 +196,7 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
             // Entre apostrophes, tout est littéral jusqu'à l'apostrophe suivante.
             '\'' => {
                 started = true;
+                expansion.dot = false;
                 loop {
                     match chars.next() {
                         Some('\'') => break,
@@ -148,6 +208,7 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
             // Entre guillemets doubles, tout est littéral sauf `$`, `` ` `` et `\`.
             '"' => {
                 started = true;
+                expansion.dot = false;
                 loop {
                     match chars.next() {
                         Some('"') => break,
@@ -166,10 +227,14 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
                     words.push(std::mem::take(&mut word));
                     started = false;
                 }
+                expansion = WordExpansion::default();
                 if words.is_empty() {
                     return None;
                 }
-                stages.push(std::mem::take(&mut words));
+                stages.push(Stage {
+                    words: std::mem::take(&mut words),
+                    expands: std::mem::take(&mut expands),
+                });
             }
             // `&&` enchaîne deux commandes nommables : une étape de liste de plus. Un
             // `&` seul met en arrière-plan, `&&&` n'est pas une ligne : composés.
@@ -185,11 +250,15 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
                     words.push(std::mem::take(&mut word));
                     started = false;
                 }
+                expansion = WordExpansion::default();
                 // `&& b`, `a | && b` : une étape vide ne s'exécute pas.
                 if words.is_empty() {
                     return None;
                 }
-                stages.push(std::mem::take(&mut words));
+                stages.push(Stage {
+                    words: std::mem::take(&mut words),
+                    expands: std::mem::take(&mut expands),
+                });
                 steps.push(std::mem::take(&mut stages));
             }
             c if OPERATORS.contains(&c) || EXPANSION.contains(&c) => return None,
@@ -198,8 +267,10 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
                     words.push(std::mem::take(&mut word));
                     started = false;
                 }
+                expansion = WordExpansion::default();
             }
             c => {
+                expands |= expansion.feed(c, &word);
                 started = true;
                 word.push(c);
             }
@@ -216,18 +287,18 @@ fn scan_list(line: &str) -> Option<Vec<Vec<Vec<String>>>> {
     if words.is_empty() && stages.is_empty() && !steps.is_empty() {
         return None;
     }
-    stages.push(words);
+    stages.push(Stage { words, expands });
     steps.push(stages);
     Some(steps)
 }
 
 /// Une étape, une fois ses mots connus : ses affectations de tête, puis son programme.
-fn command_of(words: Vec<String>) -> Option<SimpleCommand> {
+fn command_of(stage: Stage) -> Option<SimpleCommand> {
+    let Stage { mut words, expands } = stage;
     // `! cmd` nie le code de retour d'un pipeline : la ligne n'est pas celle qu'on lit.
     if words.first().is_some_and(|w| w == "!") {
         return None;
     }
-    let mut words = words;
     let mut assignments = Vec::new();
     let mut i = 0;
     while let Some((name, value)) = words.get(i).and_then(|w| split_assignment(w)) {
@@ -240,7 +311,11 @@ fn command_of(words: Vec<String>) -> Option<SimpleCommand> {
         i += 1;
     }
     let words = words.split_off(i);
-    let c = SimpleCommand { assignments, words };
+    let c = SimpleCommand {
+        assignments,
+        words,
+        expands,
+    };
     // La famille doit nommer ce qui sera lancé, pas l'enveloppe ni l'interpréteur (#150).
     if runs_arbitrary_code(&c) {
         return None;
@@ -269,6 +344,9 @@ fn is_pure_filter(c: &SimpleCommand) -> bool {
     match program {
         "grep" | "egrep" | "fgrep" | "head" | "tail" | "cut" | "wc" | "uniq" | "tr" | "nl"
         | "rev" | "column" => true,
+        // Les suivants ne lisent que selon leurs arguments : il faut les connaître tous,
+        // donc aucun mot que le shell développera (#442, `sort -{u,o} fichier`).
+        _ if c.expands => false,
         // Un `cat` de fin de tube ne sert qu'à dérouler la sortie ; avec un fichier, il
         // lit autre chose que ce que la première étape a produit.
         "cat" => args.iter().all(|a| a.starts_with('-')),
@@ -290,7 +368,8 @@ fn is_pure_filter(c: &SimpleCommand) -> bool {
 /// ne peut couvrir aucune ligne (composée, vide, ou faite d'affectations).
 pub fn family(prefix: &str) -> Option<Vec<String>> {
     let cmd = simple(prefix)?;
-    (!cmd.words.is_empty() && cmd.assignments.is_empty()).then_some(cmd.words)
+    // Une famille se relit telle qu'écrite : `git {status,push}` n'en nomme aucune (#442).
+    (!cmd.words.is_empty() && cmd.assignments.is_empty() && !cmd.expands).then_some(cmd.words)
 }
 
 /// `VAR=valeur` en tête de ligne : un nom de variable d'environnement valide, puis sa
@@ -405,6 +484,10 @@ pub fn is_read(line: &Pipeline) -> bool {
         | "du" | "df" | "pwd" | "which" | "whoami" | "id" | "uname" | "diff" | "cmp" | "uniq"
         | "cut" | "basename" | "dirname" | "realpath" | "readlink" | "sha256sum" | "sha1sum"
         | "shasum" | "md5" | "md5sum" | "jq" | "echo" | "printf" | "true" => true,
+        // Les suivants ne lisent que selon leurs options : `find . -{print,exec} sh` se
+        // lit sans `-exec` et le lance (#442). Un mot que le shell développera, accolades
+        // ou joker en tête, et ce n'est plus une lecture.
+        _ if line.head.expands => false,
         "date" => !has(&["-s", "--set"]),
         "sort" => !has(&["-o", "--output"]),
         "tree" => !has(&["-o"]),
@@ -532,281 +615,4 @@ pub fn why_composed(line: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn words(line: &str) -> Vec<String> {
-        simple(line).expect("ligne simple").words
-    }
-
-    /// #141 : un `&`, un `|` ou une parenthèse entre guillemets est un caractère, pas un
-    /// enchaînement.
-    #[test]
-    fn quoted_operators_are_characters_not_chaining() {
-        assert_eq!(
-            words("glab api --hostname h \"projects?a=1&b=2\""),
-            ["glab", "api", "--hostname", "h", "projects?a=1&b=2"]
-        );
-        assert_eq!(words("echo \"a & b\""), ["echo", "a & b"]);
-        assert_eq!(words("grep -n 'x | y' f"), ["grep", "-n", "x | y", "f"]);
-        assert_eq!(words("printf \"(%s)\" x"), ["printf", "(%s)", "x"]);
-        assert_eq!(words("jq '.[] | .path'"), ["jq", ".[] | .path"]);
-        // Guillemets collés au mot : un seul mot ; un mot vraiment vide reste un mot.
-        assert_eq!(words("git commit -m'wip'"), ["git", "commit", "-mwip"]);
-        assert_eq!(words("git commit -m \"\""), ["git", "commit", "-m", ""]);
-    }
-
-    /// Ce que #67 a fermé reste fermé : tout ce qui enchaîne, substitue ou redirige hors
-    /// apostrophes compose la ligne.
-    #[test]
-    fn chaining_outside_quotes_still_composes() {
-        for composed in [
-            "cargo test; rm -rf ~",
-            "cargo test && curl https://exfil.example",
-            "ls | sh",
-            "cat x > y",
-            "cat < x",
-            "echo $(rm -rf ~)",
-            "echo \"$(rm -rf ~)\"",
-            "echo \"$HOME\"",
-            "echo \"`id`\"",
-            "echo `id`",
-            "(ls)",
-            "ls\nrm -rf /",
-            "echo \"non fermé",
-            "grep 'x",
-            "l\\s",
-            "echo \"a\\$b\"",
-            "! ls",
-            "cat <<EOF\ndata\nEOF",
-        ] {
-            assert!(simple(composed).is_none(), "{composed}");
-        }
-    }
-
-    /// Commentaire de #141 : un tube dont toutes les étapes suivantes ne font que lire
-    /// garde la famille de sa première étape ; une étape qui écrit ou lance autre chose
-    /// compose la ligne.
-    #[test]
-    fn a_pipe_into_pure_reads_keeps_the_family_of_its_first_stage() {
-        let p = pipeline("glab api --hostname h \"pipelines?per_page=30\" | jq -r '.[].id'")
-            .expect("tube de lecture");
-        assert_eq!(p.head.program(), Some("glab"));
-        assert_eq!(p.head.words[1], "api");
-        assert_eq!(p.filters.len(), 1);
-        assert_eq!(p.filters[0].program(), Some("jq"));
-
-        for read in [
-            "glab api h \"p\" | cat",
-            "glab api h \"p\" | grep -inE \"error|failed\"",
-            "cat f | grep x | head -20 | wc -l",
-            "ls | sort | uniq -c",
-            "git log | tr -d x | cut -c1-20",
-        ] {
-            let p = pipeline(read).unwrap_or_else(|| panic!("{read}"));
-            assert!(!p.filters.is_empty(), "{read}");
-        }
-        // Ce qui écrit, lance autre chose, ou lit ailleurs, reste composé.
-        for composed in [
-            "glab api h \"p\" | sh",
-            "glab api h \"p\" | xargs rm",
-            "glab api h \"p\" | tee /tmp/x",
-            "glab api h \"p\" | python3 -",
-            "glab api h \"p\" | sed -i s/a/b/ f",
-            "cat f | jq --rawfile x /etc/passwd .",
-            "cat f | sort -o /tmp/vol",
-            "cat f | cat /etc/passwd",
-            "cat f | rg --pre danger x",
-            "cat f | grep x > sortie",
-            "cat f || rm -rf ~",
-            "ls |",
-            "| ls",
-            "cat f | TZ=UTC grep x",
-        ] {
-            assert!(pipeline(composed).is_none(), "{composed}");
-        }
-        // `simple` reste strict : une seule commande, pas de tube.
-        assert!(simple("cat f | grep x").is_none());
-    }
-
-    /// Les affectations de tête : la famille est celle du programme, sauf quand la
-    /// variable détourne ce qui sera exécuté.
-    #[test]
-    fn leading_assignments_keep_the_program_unless_they_hijack_it() {
-        let c = simple("GITLAB_HOST=h glab api \"p?x=1\"").expect("ligne simple");
-        assert_eq!(c.assignments, [("GITLAB_HOST".into(), "h".into())]);
-        assert_eq!(c.words, ["glab", "api", "p?x=1"]);
-        assert_eq!(c.program(), Some("glab"));
-        // Une valeur entre guillemets, et deux affectations.
-        let c = simple("A=1 B=\"deux mots\" ls -la").expect("ligne simple");
-        assert_eq!(c.words, ["ls", "-la"]);
-        assert_eq!(c.assignments.len(), 2);
-        for hijack in [
-            "PATH=/tmp ls",
-            "DYLD_INSERT_LIBRARIES=x.dylib glab api \"p\"",
-            "LD_PRELOAD=/tmp/x.so ls",
-            "IFS=, ls",
-            "GIT_SSH_COMMAND=x git fetch",
-            "GIT_CONFIG_COUNT=1 git log",
-            "NODE_OPTIONS=--require=/tmp/x node -v",
-            "PA\"TH\"=/tmp ls",
-        ] {
-            assert!(simple(hijack).is_none(), "{hijack}");
-        }
-        // Après le programme, `k=v` est un argument comme un autre.
-        assert_eq!(words("make CC=gcc all"), ["make", "CC=gcc", "all"]);
-    }
-
-    /// Une famille couvre une ligne ; une famille impossible n'en couvre aucune.
-    #[test]
-    fn a_family_is_a_simple_line_without_assignment() {
-        assert_eq!(
-            family("cargo test"),
-            Some(vec!["cargo".into(), "test".into()])
-        );
-        assert_eq!(family("glab"), Some(vec!["glab".into()]));
-        for useless in ["GITLAB_HOST=h", "cd /x && ls", "", "   ", "PATH=/tmp ls"] {
-            assert!(family(useless).is_none(), "{useless:?}");
-        }
-    }
-
-    /// #130 : les formes inhabituelles ne paniquent pas et ne rendent jamais une ligne
-    /// simple là où il y a un enchaînement.
-    #[test]
-    fn unusual_shapes_never_panic() {
-        for shape in [
-            "",
-            " ",
-            "ls",
-            "cd",
-            "cd /x &&",
-            "python3 - <<'PYEOF'\nprint(\"a\")\nPYEOF",
-            "cat <<EOF\n{{.Name}}\nEOF",
-            "\n\n",
-            "é",
-            "\"\"",
-            "''",
-            "=x ls",
-        ] {
-            let _ = simple(shape);
-        }
-        assert!(simple("").expect("vide").words.is_empty());
-        assert_eq!(words("ls"), ["ls"]);
-        // Un premier mot qui n'est pas une affectation valide reste le programme.
-        assert_eq!(words("=x ls"), ["=x", "ls"]);
-    }
-}
-
-#[cfg(test)]
-mod list_tests {
-    use super::*;
-
-    fn heads(line: &str) -> Option<Vec<String>> {
-        Some(
-            list(line)?
-                .steps
-                .iter()
-                .map(|s| s.head.words.join(" "))
-                .collect(),
-        )
-    }
-
-    /// #150 : trois commandes nommables collées par `&&` font trois étapes.
-    #[test]
-    fn a_chain_of_ands_is_a_list_of_steps() {
-        assert_eq!(
-            heads("yt-dlp --print x https://y && yt-dlp -o tmp/z https://y && ls -la tmp/z*"),
-            Some(vec![
-                "yt-dlp --print x https://y".into(),
-                "yt-dlp -o tmp/z https://y".into(),
-                "ls -la tmp/z*".into(),
-            ])
-        );
-        // Une ligne simple est une liste d'une étape : un seul chemin pour les deux cas.
-        assert_eq!(heads("ls -la"), Some(vec!["ls -la".into()]));
-        // Un tube de lecture pure reste une étape, avec la famille de sa tête (#141).
-        assert_eq!(
-            heads("glab api projects | jq -r .id && echo ok"),
-            Some(vec!["glab api projects".into(), "echo ok".into()])
-        );
-    }
-
-    /// Ce que #67 exclut reste exclu : la liste n'ouvre que `&&`.
-    #[test]
-    fn everything_but_and_stays_composed() {
-        for line in [
-            "cargo test; rm -rf ~",
-            "a || b",
-            "a && $(b)",
-            "a && b > f",
-            "a && sh -c \"b\"",
-            "a && b &",
-            "a && b | sh",
-            "a &&& b",
-            "&& b",
-            "a &&",
-            "a && ! b",
-            "a && PATH=/tmp ls",
-            "a && b `c`",
-            "a\n&& b",
-        ] {
-            assert!(list(line).is_none(), "« {line} » doit rester composée");
-        }
-    }
-
-    /// Un `&` entre guillemets reste un caractère (#141) : une URL n'enchaîne rien.
-    #[test]
-    fn an_ampersand_in_quotes_is_not_a_chain() {
-        assert_eq!(
-            heads("glab api \"projects?membership=true&per_page=100\""),
-            Some(vec![
-                "glab api projects?membership=true&per_page=100".into()
-            ])
-        );
-        assert_eq!(
-            heads("curl 'https://x?a=1&&b=2' && ls"),
-            Some(vec!["curl https://x?a=1&&b=2".into(), "ls".into()])
-        );
-    }
-
-    /// `pipeline` répond toujours pour une seule commande : une liste n'en est pas une.
-    #[test]
-    fn pipeline_still_refuses_a_list() {
-        assert!(pipeline("a && b").is_none());
-        assert!(pipeline("ls -la").is_some());
-    }
-
-    /// #150 : la carte nomme ce qui empêche une règle ; une ligne à famille n'a rien à
-    /// nommer.
-    #[test]
-    fn the_obstacle_to_a_family_is_named() {
-        assert_eq!(why_composed("cargo test && cargo build"), None);
-        for (line, why) in [
-            ("a; b", "`;`"),
-            ("a || b", "`||`"),
-            ("a & b", "`&` (arrière-plan)"),
-            ("a > f", "une redirection"),
-            ("(a)", "un sous-shell"),
-            ("echo $(id)", "`$(…)`"),
-            ("echo `id`", "`` ` ``"),
-            ("echo a\\ b", "un échappement"),
-            ("a\nb", "un retour à la ligne"),
-            ("echo \"$HOME\"", "`$` entre guillemets"),
-            ("echo \"abc", "guillemets non fermés"),
-            ("echo 'abc", "guillemets non fermés"),
-            ("echo 'a'; b", "`;`"),
-        ] {
-            assert_eq!(why_composed(line).as_deref(), Some(why), "{line}");
-        }
-    }
-
-    /// `||`, `&` seul et `&&&` ne sont pas des listes de commandes nommables.
-    #[test]
-    fn only_a_double_ampersand_chains() {
-        assert!(list("a && b").is_some());
-        assert!(list("a || b").is_none());
-        assert!(list("a & b").is_none());
-        assert!(list("a &&& b").is_none());
-        assert!(list("&& b").is_none());
-    }
-}
+mod tests;

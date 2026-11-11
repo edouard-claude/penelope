@@ -103,7 +103,7 @@ fn prompt_snapshots_replace_the_dead_request_column() {
     )
     .unwrap();
     let st = c.prepare("SELECT * FROM llm_requests").unwrap();
-    let columns: Vec<String> = st.column_names().iter().map(|c| c.to_string()).collect();
+    let columns: Vec<String> = st.column_names().map(|c| c.to_string()).collect();
     assert!(!columns.contains(&"request".to_string()), "{columns:?}");
     for k in ["system_hash", "tools_hash", "request_hash"] {
         assert!(columns.contains(&k.to_string()), "{k} absent : {columns:?}");
