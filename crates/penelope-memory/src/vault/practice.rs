@@ -1,3 +1,4 @@
+use super::layout::{Layout, SECTIONS, entry_line};
 use super::*;
 
 // ------------------------------------------------------------------ pratiques
@@ -44,6 +45,10 @@ pub struct Practice {
     /// Autres propriétés (`created`, `updated`, `tags`…), conservées à la réécriture.
     #[serde(skip)]
     pub extra: BTreeMap<String, FmValue>,
+    /// Corps du fichier tel qu'il est écrit : ce que le gabarit ne connaît pas (paragraphe,
+    /// autre section, exemple) est rendu tel quel (#453).
+    #[serde(skip)]
+    layout: Layout,
 }
 
 /// Résultat du rappel d'une pratique dans un contexte donné (§6.7 point 3).
@@ -84,7 +89,10 @@ impl Practice {
         if fm.str("type") != Some("pratique") {
             return Err("`type: pratique` attendu dans le frontmatter".into());
         }
-        let (entries, _) = parse_entries(raw);
+        // Le fichier tel que la lecture le laisse : uid ajoutés, anciens uid en commentaire
+        // devenus identifiants de bloc. Le rendu part de ces lignes.
+        let (entries, rewritten) = parse_entries(raw);
+        let written = rewritten.as_deref().unwrap_or(raw);
 
         let title = fm
             .body
@@ -102,9 +110,15 @@ impl Practice {
                 .collect()
         };
 
-        let defaults = by_section("Défaut");
-        let exceptions = by_section("Exceptions");
-        let ecarts = by_section("Écarts observés");
+        let default_entry = by_section(SECTIONS[0]).into_iter().next();
+        let exceptions = by_section(SECTIONS[1]);
+        let ecarts = by_section(SECTIONS[2]);
+        let layout = Layout::read(
+            written,
+            fm.header_lines,
+            &title,
+            [default_entry.as_slice(), &exceptions, &ecarts],
+        );
 
         Ok(Practice {
             id: {
@@ -125,9 +139,10 @@ impl Practice {
             maj: fm.string("maj"),
             declencheurs: fm.list("declencheurs"),
             title,
-            default_entry: defaults.into_iter().next(),
+            default_entry,
             exceptions,
             ecarts,
+            layout,
             extra: fm
                 .fields
                 .iter()
@@ -242,25 +257,40 @@ impl Practice {
             FmValue::List(self.declencheurs.clone()),
         );
 
-        let mut body = format!("# {}\n\n## Défaut\n", self.title);
+        let held = [
+            self.default_entry.iter().collect(),
+            self.exceptions.iter().collect(),
+            self.ecarts.iter().collect(),
+        ];
+        let body = self
+            .layout
+            .render(&self.title, held)
+            .unwrap_or_else(|| self.template());
+        frontmatter::render(&fields, &body)
+    }
+
+    /// Corps d'une pratique qui ne vient pas d'un fichier : le gabarit seul.
+    fn template(&self) -> String {
+        let mut body = format!("# {}\n", self.title);
         // Le défaut est une entrée de liste comme les autres : sans puce, il disparaîtrait
         // à la relecture.
-        if let Some(d) = &self.default_entry {
-            body.push_str(&format!("- {} {}\n", d.text, d.annotations.render()));
+        let held = [
+            self.default_entry.iter().collect::<Vec<_>>(),
+            self.exceptions.iter().collect(),
+            self.ecarts.iter().collect(),
+        ];
+        for (name, entries) in SECTIONS.iter().zip(held) {
+            body.push_str(&format!("\n## {name}\n"));
+            for e in entries {
+                body.push_str(&entry_line(e));
+                body.push('\n');
+            }
         }
-        body.push_str("\n## Exceptions\n");
-        for e in &self.exceptions {
-            body.push_str(&format!("- {} {}\n", e.text, e.annotations.render()));
-        }
-        body.push_str("\n## Écarts observés\n");
-        for e in &self.ecarts {
-            body.push_str(&format!("- {} {}\n", e.text, e.annotations.render()));
-        }
-        frontmatter::render(&fields, &body)
+        body
     }
 }
 
-fn section_matches(actual: &str, expected: &str) -> bool {
+pub(super) fn section_matches(actual: &str, expected: &str) -> bool {
     let norm = |s: &str| {
         s.to_lowercase()
             .replace(['é', 'è', 'ê'], "e")

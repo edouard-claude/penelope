@@ -191,13 +191,9 @@ pub struct WikiLink {
 /// Liens wiki d'un texte, blocs de code exclus.
 pub fn wiki_links(raw: &str) -> Vec<WikiLink> {
     let mut out = Vec::new();
-    let mut fenced = false;
+    let mut fences = crate::fence::Fences::default();
     for line in raw.lines() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced {
+        if fences.covers(line) {
             continue;
         }
         for c in link_re().captures_iter(line) {
@@ -608,13 +604,9 @@ fn loose_block_re() -> &'static Regex {
 /// Identifiants de bloc d'une note : (ligne, identifiant).
 fn block_ids(raw: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
-    let mut fenced = false;
+    let mut fences = crate::fence::Fences::default();
     for (i, line) in raw.lines().enumerate() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced {
+        if fences.covers(line) {
             continue;
         }
         if let Some(id) =

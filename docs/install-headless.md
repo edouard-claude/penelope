@@ -2945,6 +2945,14 @@ d'infrastructure utile se garde et s'injecte comme les autres. Un fait sur
 la configuration de Pénélope elle-même n'est pas retenu, `self_status` fait foi. Les deux
 annotations se posent aussi à la main et sont relues par `penelope mem reindex`.
 
+**Ce que tu écris à la main reste.** Dans une note, seules les entrées de liste (et les
+encadrés suivis d'un identifiant de bloc) sont des souvenirs. Un bloc de code (```` ``` ````
+ou `~~~`) est un exemple : rien n'y est lu ni réécrit, une liste n'y reçoit pas
+d'identifiant. Un commentaire que Pénélope ne connaît pas (`<!-- note: à revoir -->`) ou
+un `quand` mal écrit restent sur leur ligne. Dans une pratique, un paragraphe, une section
+de plus ou un exemple survivent aux réécritures (statut, exception ajoutée, écart
+promu) : seules les lignes des entrées qui changent sont touchées.
+
 **Le Cœur a un budget, la nuit le tient.** Le niveau Cœur (`memoire.md`) est servi
 d'office sous `memory.core_budget_tokens`, les entrées les plus importantes d'abord et, à
 importance égale, la plus récente d'abord. Quand il est plein, la nuit regarde la place

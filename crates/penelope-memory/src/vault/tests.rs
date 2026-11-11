@@ -323,3 +323,179 @@ fn a_rendered_practice_reads_back_identically() {
     assert_eq!(again.exceptions.len(), 1);
     assert_eq!(again.default_entry.unwrap().uid, "D1");
 }
+
+const HAND_WRITTEN: &str = "---\ntype: pratique\nid: langage-backend\nconfiance: 0.8\n---\n\
+# Langage backend\n\n\
+Pourquoi : l'équipe relit du Go depuis 2019.\n\n\
+## Défaut\n\
+- Go ^D1\n\n\
+Vaut pour tout service neuf.\n\n\
+## Exceptions\n\
+- Rust <!-- quand: tache=code --> ^E1\n\
+- Python pour un script jetable <!-- quand: tache=analyse --> ^E2\n\n\
+## Notes\n\n\
+Squelette d'un service :\n\n\
+```md\n\
+- pas une entrée\n\
+## Pas un titre\n\
+```\n\n\
+## Écarts observés\n";
+
+fn body(note: &str) -> &str {
+    &note[note.find("# Langage").unwrap()..]
+}
+
+fn entry(uid: &str, text: &str, quand: &str) -> VaultEntry {
+    VaultEntry {
+        uid: uid.into(),
+        text: text.into(),
+        annotations: Annotations {
+            uid: Some(uid.into()),
+            quand: Some(When::parse(quand).unwrap()),
+            ..Default::default()
+        },
+        section: String::new(),
+        line: 0,
+    }
+}
+
+/// #453 : le rendu reconstruisait le fichier depuis trois listes. Un paragraphe, une
+/// section « Notes », un exemple écrits à la main disparaissaient à la première
+/// réécriture, celle d'un simple changement de statut.
+#[test]
+fn a_practice_keeps_what_its_template_does_not_know() {
+    let mut p = Practice::parse(HAND_WRITTEN, "langage-backend").unwrap();
+    assert_eq!(body(&p.render()), body(HAND_WRITTEN), "rien à réécrire");
+
+    p.statut = PracticeStatus::Contestee;
+    p.exceptions[0].text = "Rust sur un projet critique".into();
+    p.exceptions
+        .push(entry("N1", "Zig pour l'embarqué", "tache=code"));
+    p.ecarts
+        .push(entry("X1", "2026-11-10 : PHP imposé", "client=client-x"));
+    let out = p.render();
+    assert!(out.contains("statut: contestee"));
+    assert_eq!(
+        body(&out),
+        "# Langage backend\n\n\
+         Pourquoi : l'équipe relit du Go depuis 2019.\n\n\
+         ## Défaut\n\
+         - Go ^D1\n\n\
+         Vaut pour tout service neuf.\n\n\
+         ## Exceptions\n\
+         - Rust sur un projet critique <!-- quand: tache=code --> ^E1\n\
+         - Python pour un script jetable <!-- quand: tache=analyse --> ^E2\n\
+         - Zig pour l'embarqué <!-- quand: tache=code --> ^N1\n\n\
+         ## Notes\n\n\
+         Squelette d'un service :\n\n\
+         ```md\n\
+         - pas une entrée\n\
+         ## Pas un titre\n\
+         ```\n\n\
+         ## Écarts observés\n\
+         - 2026-11-10 : PHP imposé <!-- quand: client=client-x --> ^X1\n"
+    );
+
+    let back = Practice::parse(&out, "langage-backend").unwrap();
+    let uids =
+        |entries: &[VaultEntry]| -> Vec<String> { entries.iter().map(|e| e.uid.clone()).collect() };
+    assert_eq!(back.default_entry.as_ref().unwrap().uid, "D1");
+    assert_eq!(uids(&back.exceptions), ["E1", "E2", "N1"]);
+    assert_eq!(uids(&back.ecarts), ["X1"]);
+    assert_eq!(body(&back.render()), body(&out), "stable à la relecture");
+}
+
+/// #453 : une entrée retirée n'emporte que sa ligne, un encadré intact reste un encadré,
+/// et une section que le fichier n'avait pas est ajoutée à la fin.
+#[test]
+fn a_practice_is_rewritten_line_by_line() {
+    let raw = "---\ntype: pratique\nid: x\n---\n# Langage\n\n## Défaut\n- Go ^D1\n\n\
+               ## Exceptions\n\
+               > [!abstract] Rust si le projet est critique\n\
+               > <!-- quand: tache=code -->\n\
+               ^E1\n\n\
+               - Zig <!-- quand: tache=analyse --> ^E2\n\n\
+               Relu en novembre.\n";
+    let mut p = Practice::parse(raw, "x").unwrap();
+    assert_eq!(p.exceptions.len(), 2);
+    p.exceptions.retain(|e| e.uid != "E2");
+    p.ecarts.push(entry("X1", "PHP imposé", "client=client-x"));
+    let out = p.render();
+    assert_eq!(
+        &out[out.find("# Langage").unwrap()..],
+        "# Langage\n\n## Défaut\n- Go ^D1\n\n\
+         ## Exceptions\n\
+         > [!abstract] Rust si le projet est critique\n\
+         > <!-- quand: tache=code -->\n\
+         ^E1\n\n\
+         Relu en novembre.\n\n\
+         ## Écarts observés\n\
+         - PHP imposé <!-- quand: client=client-x --> ^X1\n"
+    );
+
+    // L'encadré modifié devient une entrée de liste, à sa place.
+    let mut p = Practice::parse(&out, "x").unwrap();
+    p.exceptions[0].annotations.confiance = Some(0.9);
+    let out = p.render();
+    assert!(
+        out.contains(
+            "## Exceptions\n- Rust si le projet est critique <!-- quand: tache=code --> \
+             <!-- confiance: 0.9 --> ^E1\n\nRelu en novembre.\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("[!abstract]"));
+}
+
+/// #453 : une liste dans un bloc de code est un exemple. Elle recevait un uid, la note
+/// était réécrite et chaque ligne devenait un souvenir ; un `## ` y changeait la section.
+#[test]
+fn a_code_block_holds_neither_entries_nor_headings() {
+    let raw = "# Note\n\n## Faits\n- un fait ^F1\n\n\
+               ```md\n- exemple de liste\n## Faux titre\n* autre\n> encadré\n^B1\n```\n\n\
+               ~~~\n- encore un exemple\n~~~\n\
+               - après les blocs ^F2\n";
+    let (entries, rewritten) = parse_entries(raw);
+    assert_eq!(rewritten, None, "rien n'est réécrit");
+    let seen: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|e| (e.uid.as_str(), e.section.as_str()))
+        .collect();
+    assert_eq!(seen, [("F1", "Faits"), ("F2", "Faits")]);
+
+    let links: Vec<String> = crate::wiki::wiki_links("~~~\n[[exemple]]\n~~~\n[[vrai]]")
+        .into_iter()
+        .map(|l| l.target)
+        .collect();
+    assert_eq!(links, ["vrai"]);
+}
+
+/// #453 : la réécriture d'une ligne (uid ajouté ou migré) ne rendait que les annotations
+/// connues. Une annotation du propriétaire, ou un `quand` mal écrit, disparaissaient.
+#[test]
+fn an_unknown_annotation_survives_the_rewrite_of_its_line() {
+    let raw = "- Un fait <!-- uid: 01J9A --> <!-- note: à revoir --> <!-- quand: inconnue=x -->\n";
+    let (entries, rewritten) = parse_entries(raw);
+    assert_eq!(
+        rewritten.as_deref(),
+        Some("- Un fait <!-- note: à revoir --> <!-- quand: inconnue=x --> ^01J9A\n")
+    );
+    assert_eq!(entries[0].text, "Un fait");
+    assert_eq!(entries[0].annotations.quand, None);
+    let (again, stable) = parse_entries(rewritten.as_deref().unwrap());
+    assert_eq!(
+        (again[0].annotations.clone(), stable),
+        (entries[0].annotations.clone(), None)
+    );
+
+    // Corrigé, le prédicat remplace sa forme illisible ; une valeur illisible ne chasse
+    // pas une valeur lue.
+    let mut fixed = entries[0].annotations.clone();
+    fixed.quand = Some(When::parse("tache=code").unwrap());
+    assert_eq!(
+        fixed.render(),
+        "<!-- quand: tache=code --> <!-- note: à revoir --> ^01J9A"
+    );
+    let kept = Annotations::parse("x <!-- importance: 4 --> <!-- importance: forte -->");
+    assert_eq!(kept.importance, Some(4));
+}

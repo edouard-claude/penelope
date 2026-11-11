@@ -37,7 +37,10 @@ impl Scan {
     /// Une note relue, telle qu'elle est sur le disque après la passe.
     pub fn note(&mut self, rel: &str, raw: &str) {
         self.notes.insert(rel.to_string());
-        for line in raw.lines() {
+        // Un identifiant dans un bloc de code ne porte pas d'entrée (#453) : celle qui en
+        // était née à tort quitte l'index comme une ligne effacée.
+        let mut fences = penelope_memory::fence::Fences::default();
+        for line in raw.lines().filter(|l| !fences.covers(l)) {
             self.uids.extend(vault::line_uid(line));
             self.uids.extend(vault::block_id(line));
             self.uids.extend(vault::standalone_block_id(line));

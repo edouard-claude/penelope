@@ -320,3 +320,57 @@ async fn a_reindex_two_hundred_days_later_only_dates_what_changed() {
     assert_eq!(maj(uids[2].clone()).await, later, "validée aujourd'hui");
     assert_eq!(maj(uids[0].clone()).await, born);
 }
+
+/// #453 : une note qui montre une liste dans un bloc de code. La réindexation donnait un
+/// uid à chaque ligne de l'exemple, réécrivait la note et en faisait des souvenirs.
+#[tokio::test]
+async fn a_list_inside_a_code_block_is_not_memory() {
+    let (_dir, s, vault) = services().await;
+    let uid = remember(
+        &s,
+        &vault,
+        Level::Cure,
+        "Le gabarit de note est en Markdown",
+        "s1",
+    )
+    .await
+    .unwrap();
+    let before = s.memory.count().await.unwrap();
+    let note = "# Gabarit\n\n## Exemple\n\n```md\n- un gabarit de fait\n## Un gabarit de titre\n```\n\n~~~\n* un autre gabarit\n~~~\n";
+    std::fs::create_dir_all(vault.join("notes")).unwrap();
+    std::fs::write(vault.join("notes/gabarit.md"), note).unwrap();
+
+    reindex(&s, &vault).await.unwrap();
+    reindex(&s, &vault).await.unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(vault.join("notes/gabarit.md")).unwrap(),
+        note,
+        "la note n'est pas réécrite"
+    );
+    assert_eq!(
+        s.memory.count().await.unwrap(),
+        before,
+        "aucune entrée créée"
+    );
+    assert_eq!(recalled(&s, "gabarit").await, std::slice::from_ref(&uid));
+
+    // Une entrée née à tort d'un exemple avant ce correctif : sa ligne est dans un bloc
+    // de code, identifiant compris. Elle quitte l'index comme une ligne effacée.
+    let file = s.memory.get(&uid).await.unwrap().unwrap().file;
+    let raw = std::fs::read_to_string(vault.join(&file)).unwrap();
+    let fenced: Vec<String> = raw
+        .lines()
+        .map(|l| match l.contains(&uid) {
+            true => format!("```md\n{l}\n```"),
+            false => l.to_string(),
+        })
+        .collect();
+    std::fs::write(vault.join(&file), fenced.join("\n") + "\n").unwrap();
+    reindex(&s, &vault).await.unwrap();
+    assert!(recalled(&s, "gabarit").await.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(vault.join(&file)).unwrap(),
+        fenced.join("\n") + "\n"
+    );
+}

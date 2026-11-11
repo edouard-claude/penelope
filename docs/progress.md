@@ -12,6 +12,36 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.107
+
+**Vault : une pratique ne perd plus ce qu'on y écrit à la main, et un bloc de code n'est
+plus lu comme des entrées (#453).**
+
+- `Practice::render` reconstruisait le fichier depuis trois listes (Défaut, Exceptions,
+  Écarts observés). Un paragraphe d'explication, une section « Notes », un exemple
+  ajoutés dans un éditeur disparaissaient à la première réécriture : un changement de
+  statut depuis Telegram, une exception ajoutée ou modifiée par le rêve.
+- La pratique garde son corps ligne à ligne (`vault/layout.rs`). Le rendu ne réécrit que
+  la ligne d'une entrée qui a changé, ajoute une entrée nouvelle après la dernière de
+  sa section, retire la ligne d'une entrée qui n'est plus là, et laisse le reste tel
+  quel : préambule, sections inconnues, texte libre entre les entrées, encadrés
+  intacts, entrées de « Défaut » au-delà de la première. Une section du gabarit absente
+  du fichier n'est ajoutée que le jour où elle reçoit une entrée.
+- `parse_entries` suit les clôtures de bloc de code (```` ``` ```` et `~~~`, longueur de
+  clôture respectée). Une ligne `- ` dans un bloc recevait un uid, la note était
+  réécrite et la ligne devenait un souvenir ; un `## ` y changeait la section des
+  entrées suivantes. Le wiki (liens, identifiants de bloc) partage le même suivi
+  (`fence::Fences`), et ne prend plus « ```x``` » sur une ligne pour une ouverture.
+- Annotations : la réécriture d'une ligne (uid ajouté ou migré) ne rendait que les clés
+  connues. Une clé inconnue (`<!-- note: … -->`) et une valeur illisible d'une clé
+  connue (`quand`, `importance`, `confiance`, `occurrences`) restent sur la ligne ; une
+  valeur illisible ne remplace plus une valeur lue.
+- Entrées déjà nées d'un bloc de code : compté sur une instance en service (344 notes,
+  11 avec un bloc de code), aucune. S'il y en a ailleurs, le relevé des identifiants
+  d'une réindexation ignore lui aussi les blocs de code : ces entrées quittent l'index
+  comme une ligne effacée (#449, avec son garde-fou) ; l'identifiant reste écrit dans
+  l'exemple, sans effet.
+
 ### 1.0.106
 
 **Ingestion HTML et DOCX : une esperluette devant un caractère accentué ne fait plus
