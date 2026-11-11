@@ -327,15 +327,6 @@ fn ask_source(io: &mut dyn Console, args: &mut RestoreArgs) -> CliResult<Source>
     }
 }
 
-/// Dossier de téléchargement effacé en fin de commande, succès ou échec.
-struct Download(PathBuf);
-
-impl Drop for Download {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// `penelope restore` : remonte une instance entière depuis une sauvegarde chiffrée
 /// (#42, #329). Se fait daemon arrêté ; finit par le service démarré et `doctor`.
 pub(super) async fn restore(cli: &Cli, args: RestoreArgs) -> CliResult<()> {
@@ -373,10 +364,9 @@ pub(super) async fn restore_with(
         Some(s) => s,
         None => ask_source(io, &mut args)?,
     };
-    let download = Download(dirs.data().join("backups").join(format!(
-        "telechargement-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%S")
-    )));
+    // Dossier de téléchargement effacé en fin de commande, succès ou échec ; coupée net,
+    // la commande le laisse au balayage du daemon (#465).
+    let mut download: Option<penelope_ops::backup::scratch::Scratch> = None;
     let archive = match &source {
         Source::File(p) if args.list => {
             return Err(CliError::Usage(format!(
@@ -386,8 +376,14 @@ pub(super) async fn restore_with(
         }
         Source::File(p) => p.clone(),
         Source::S3(s) => {
-            std::fs::create_dir_all(&download.0).map_err(|e| CliError::Io(e.to_string()))?;
-            match fetch_from_s3(dirs.as_ref(), &args, s, &download.0).await? {
+            let dir = dirs.data().join("backups").join(format!(
+                "telechargement-{}",
+                chrono::Utc::now().format("%Y%m%dT%H%M%S")
+            ));
+            let dir = penelope_ops::backup::scratch::Scratch::create(dir)
+                .map_err(|e| CliError::Io(e.to_string()))?;
+            let dir = download.insert(dir).path().to_path_buf();
+            match fetch_from_s3(dirs.as_ref(), &args, s, &dir).await? {
                 Some(p) => p,
                 None => return Ok(()),
             }

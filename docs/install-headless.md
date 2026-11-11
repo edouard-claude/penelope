@@ -3686,6 +3686,14 @@ réussie, il ne garde que la dernière archive et le dernier instantané de base
 (`backup.keep_local`, 1 par défaut). Quand le fournisseur `dir` est ce dossier même, c'est
 sa rotation qui vaut.
 
+Une sauvegarde travaille dans `backups/work-<date>`, une restauration dans
+`backups/restauration-<date>` et `backups/telechargement-<date>` : des dossiers en 0700,
+retirés à la fin du travail. Si le travail est coupé net (arrêt, `kill`, panne), le daemon
+retire le dossier à sa passe de maintenance suivante ou avant la sauvegarde suivante, dès
+que son propriétaire n'est plus là (#465). Tout autre contenu de `backups/` que Pénélope
+n'y range pas, comme l'ancienne destination git `repo` d'avant la 1.0.46, n'est jamais
+retiré d'office : `penelope doctor` le montre avec son poids et la commande pour l'effacer.
+
 ```bash
 penelope audit-verify
 ```

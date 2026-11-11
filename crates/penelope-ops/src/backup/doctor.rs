@@ -37,7 +37,7 @@ pub async fn status(s: &Services) -> Value {
 }
 
 /// Les contrôles `doctor` des sauvegardes : l'état général, le bucket S3 s'il y en a un,
-/// et une clé `backup.git_remote` restée dans le fichier.
+/// une clé `backup.git_remote` restée dans le fichier, et ce qui traîne dans `backups/`.
 pub async fn doctor_checks(s: &Services) -> Vec<DoctorCheck> {
     let mut checks = vec![doctor_check(s).await];
     if s.config.config().backup.effective_provider() == Some("s3") {
@@ -46,7 +46,48 @@ pub async fn doctor_checks(s: &Services) -> Vec<DoctorCheck> {
     if let Some(c) = retired_remote_check(s) {
         checks.push(c);
     }
+    if let Some(c) = leftovers_check(s).await {
+        checks.push(c);
+    }
     checks
+}
+
+/// Ce que `backups/` contient et que le code n'y range pas (#465) : l'ancienne destination
+/// git `repo`, restée après la 1.0.46, ou un dossier de travail que le balayage n'a pas pu
+/// retirer. Dit avec son poids et la commande ; rien n'est retiré d'office, ce dossier-là
+/// n'est peut-être pas le nôtre.
+async fn leftovers_check(s: &Services) -> Option<DoctorCheck> {
+    let dir = s.platform.dirs.data().join("backups");
+    let scanned = dir.clone();
+    let found = tokio::task::spawn_blocking(move || scratch::unexpected(&scanned))
+        .await
+        .ok()?;
+    if found.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = found
+        .iter()
+        .map(|(name, bytes)| format!("`{name}` ({})", scratch::human(*bytes)))
+        .collect();
+    // Entre apostrophes : le chemin des données porte une espace sous macOS.
+    let quoted: Vec<String> = found
+        .iter()
+        .map(|(name, _)| {
+            let path = dir.join(name).display().to_string();
+            format!("'{}'", path.replace('\'', "'\\''"))
+        })
+        .collect();
+    Some(DoctorCheck::fail(
+        "backup.leftovers",
+        "Sauvegarde : dossier local",
+        format!(
+            "{} contient ce qu'aucune sauvegarde n'y range : {}. Rien n'en est retiré \
+             d'office : à effacer si plus rien ne s'en sert.",
+            dir.display(),
+            list.join(", ")
+        ),
+        Some(format!("rm -rf {}", quoted.join(" "))),
+    ))
 }
 
 /// `backup.git_remote` encore dans `config.toml` (#327) : ignorée, et dite. Rien ne part

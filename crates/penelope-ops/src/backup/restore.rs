@@ -12,6 +12,7 @@
 //! phrase de passe, appelle [`restore_archive`], puis réinstalle le service et lance
 //! `doctor`. Le compte rendu ne garde que ce qui reste vraiment à faire.
 
+use super::scratch::Scratch;
 use super::*;
 use penelope_platform::{Directories, SecretStore};
 
@@ -43,16 +44,6 @@ fn plan(root: &Path, dirs: &dyn Directories) -> Vec<(String, PathBuf)> {
     .collect()
 }
 
-/// Dossier de travail effacé quand il sort de portée : succès, erreur ou panique, rien
-/// de déchiffré ne reste sur le disque.
-struct Scratch(PathBuf);
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Restaure `archive` dans les répertoires `dirs`. `store` : le magasin où ranger les
 /// secrets (`None` : ils sont listés à ressaisir). `dry_run` : le plan seul, rien
 /// d'écrit. `which` dit si une commande existe sur cette machine.
@@ -65,14 +56,14 @@ pub fn restore_archive(
     which: &dyn Fn(&str) -> bool,
 ) -> anyhow::Result<Value> {
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let scratch = Scratch(
+    // Dossier de travail en 0700, effacé quand il sort de portée : succès, erreur ou
+    // panique, rien de déchiffré ne reste sur le disque. Un `kill` le laisse : le daemon
+    // le retire à sa passe de maintenance suivante (#465).
+    let scratch = Scratch::create(
         dirs.data()
             .join("backups")
             .join(format!("restauration-{stamp}")),
-    );
-    let _ = std::fs::remove_dir_all(&scratch.0);
-    std::fs::create_dir_all(&scratch.0)?;
-    restrict(&scratch.0);
+    )?;
     // En flux (#341) : l'archive est lue bloc par bloc, trois fois (noms, types, puis
     // extraction), jamais chargée ; la phrase de passe est vérifiée à la première.
     let open = || penelope_platform::archive::open_reader(archive, passphrase);
@@ -84,9 +75,9 @@ pub fn restore_archive(
     })
     .map_err(|e| anyhow::anyhow!("lecture de l'archive : {e}"))?;
     check_entries(&entries)?;
-    penelope_platform::process::extract_tar_gz_from(open()?, &scratch.0)
+    penelope_platform::process::extract_tar_gz_from(open()?, scratch.path())
         .map_err(|e| anyhow::anyhow!("extraction : {e}"))?;
-    let root = scratch.0.join("penelope");
+    let root = scratch.path().join("penelope");
     let manifest: Value = std::fs::read_to_string(root.join("MANIFEST.json"))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -242,13 +233,4 @@ pub(crate) fn check_entries(entries: &[(char, String)]) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Dossier de travail en 0700 : ce qui y est extrait est en clair le temps de la copie.
-fn restrict(dir: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    }
 }
