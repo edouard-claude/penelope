@@ -85,3 +85,48 @@ async fn ten_wakes_without_the_owner_then_results_wait() {
         .unwrap();
     assert_eq!(wake_gate(&s, "s1").await.unwrap(), WakeGate::Wait);
 }
+
+/// #459 : `jobs --all` lit les jobs finis dans leur table, les plus récents d'abord,
+/// sans passer par une liste de sessions.
+#[tokio::test]
+async fn finished_jobs_are_listed_whatever_their_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::default());
+    let s = Services::for_tests(dir.path().to_path_buf(), clock.clone())
+        .await
+        .unwrap();
+    let jobs = store(&s);
+    let mut ids = Vec::new();
+    for session in ["s_ancienne", "s_recente", "s_vivante"] {
+        clock.advance_secs(1);
+        let job = jobs
+            .create(NewJob {
+                session_id: session.into(),
+                run_id: None,
+                turn_id: None,
+                call_id: None,
+                tool: "shell_exec".into(),
+                request: json!({}),
+                effect_id: None,
+            })
+            .await
+            .unwrap();
+        ids.push(job.id);
+    }
+    for id in &ids[..2] {
+        clock.advance_secs(1);
+        jobs.finish(id, TaskState::Completed, Some(json!("ok")))
+            .await
+            .unwrap();
+    }
+    let finished: Vec<String> = jobs
+        .finished(10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|j| j.id)
+        .collect();
+    assert_eq!(finished, vec![ids[1].clone(), ids[0].clone()]);
+    assert_eq!(jobs.finished(1).await.unwrap().len(), 1);
+    assert_eq!(jobs.live().await.unwrap().len(), 1);
+}

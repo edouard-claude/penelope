@@ -94,6 +94,7 @@ impl TelegramGateway {
                     )
                     .await?;
                     s.sessions.set_state(old.id.as_str(), "closed").await?;
+                    penelope_app::session_keys::closed(s, old.id.as_str(), false).await;
                     // `/new` clôt aussi l'épisode en cours : il est relu (§6.6).
                     penelope_vault::episodes::spawn_ingest(
                         d.services.clone(),

@@ -127,3 +127,71 @@ async fn exports_cover_every_session_and_refuse_the_unknown() {
         assert!(err.to_string().contains(why), "{what} : {err}");
     }
 }
+
+/// #459 : `session.list` rend les conversations ; un type se nomme, `all` les prend
+/// tous. Le type est choisi avant le plafond : cent cinquante tirs plus récents ne
+/// cachent pas la conversation.
+#[tokio::test]
+async fn the_session_list_picks_its_kind_before_its_cap() {
+    let (_dir, s) = services().await;
+    let sid = chat(&s, "Devis").await;
+    s.store
+        .write(|tx| {
+            for n in 0..150 {
+                tx.execute(
+                    "INSERT INTO sessions(id, kind, created_at, updated_at, closed_at, state)
+                     VALUES (?1, 'scheduled', ?2, ?2, ?2, 'closed')",
+                    [format!("s_tir_{n:03}"), "2099-01-01T00:00:00.000Z".into()],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let ids = |v: Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        ids(listing(&s, &json!({})).await.unwrap()),
+        vec![sid.clone()]
+    );
+    assert_eq!(
+        ids(listing(&s, &json!({"kind": null})).await.unwrap()),
+        vec![sid.clone()],
+        "la CLI envoie `kind: null` sans l'option"
+    );
+    let fired = ids(listing(&s, &json!({"kind": "scheduled"})).await.unwrap());
+    assert_eq!(fired.len(), 100);
+    assert!(fired.iter().all(|id| id.starts_with("s_tir_")));
+    let all = ids(listing(&s, &json!({"kind": "all"})).await.unwrap());
+    assert!(
+        all.len() == 100 && !all.contains(&sid),
+        "tous types : le plafond retombe"
+    );
+    let err = listing(&s, &json!({"kind": "tirs"})).await.unwrap_err();
+    assert!(err.to_string().contains("type de session inconnu"), "{err}");
+}
+
+/// #459 : fermer une conversation efface sa liste d'outils gelée, pas ses autres clés.
+#[tokio::test]
+async fn closing_a_session_drops_its_frozen_tool_list() {
+    let (_dir, s) = services().await;
+    let sid = chat(&s, "Devis").await;
+    penelope_app::frozen_tools::freeze(&s, &sid, &[]).await;
+    penelope_app::activity::commit(&s, &sid, &Default::default())
+        .await
+        .unwrap();
+    let providers = penelope_app::testing::MockProviders::new(Arc::new(
+        penelope_llm::mock::MockProvider::new(),
+    ));
+    close(&s, providers, &Bus::new(), &sid).await.unwrap();
+    assert!(penelope_app::frozen_tools::frozen(&s, &sid).await.is_none());
+    assert!(
+        penelope_app::activity::load(&s, &sid).await.is_some(),
+        "une conversation peut être rouverte : son repère d'activité reste"
+    );
+}

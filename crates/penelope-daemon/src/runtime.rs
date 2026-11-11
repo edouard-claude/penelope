@@ -393,13 +393,7 @@ impl Core {
             version: crate::VERSION.to_string(),
             uptime_s: self.handle.uptime_s(s.clock.now_ms()),
             config_generation: s.config.generation(),
-            sessions_active: s
-                .sessions
-                .list(None, 1000)
-                .await?
-                .iter()
-                .filter(|x| x.state == "active")
-                .count() as u64,
+            sessions_active: s.sessions.count_active().await?,
             runs_active: s
                 .runs
                 .list(Some(penelope_workflow::RunState::Running), 1000)

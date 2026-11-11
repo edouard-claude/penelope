@@ -27,6 +27,7 @@ async fn harness() -> (Harness, Arc<TestClock>, Arc<RecordingMessenger>) {
 
 mod agenda;
 mod alerts;
+mod closing;
 mod mcp_subscribe;
 mod quiet;
 mod quiet_merge;

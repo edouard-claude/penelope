@@ -44,6 +44,7 @@ pub mod plugin_report;
 pub mod ports;
 pub mod quiet;
 pub mod services;
+pub mod session_keys;
 pub mod steering;
 pub mod tasks;
 pub mod testing;

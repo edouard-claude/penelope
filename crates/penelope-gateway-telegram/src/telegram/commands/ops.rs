@@ -166,7 +166,9 @@ impl TelegramGateway {
             if tout {
                 // Sessions du chat, **et** sous-agents dont le parent est dans ce chat :
                 // une session de sous-agent n'a pas de chat Telegram, elle était sautée.
-                let all = s.sessions.list(None, 200).await?;
+                // Les sessions ouvertes, toutes : les 200 plus récentes tous types
+                // confondus n'étaient plus que des tirs de planification (#459).
+                let all = s.sessions.active().await?;
                 let here: std::collections::HashSet<String> = all
                     .iter()
                     .filter(|x| x.tg_chat_id == Some(chat_id))

@@ -103,10 +103,7 @@ impl Rpc {
                 self.daemon.services.kv_set("cli.session", &sid).await?;
                 Ok(json!({"session": sid}))
             }
-            method::SESSION_LIST => {
-                let sessions = s.sessions.list(None, 100).await?;
-                Ok(serde_json::to_value(sessions)?)
-            }
+            method::SESSION_LIST => penelope_ops::session_ops::listing(s, p).await,
             method::SESSION_NEW => {
                 let title = p.get("title").and_then(|t| t.as_str()).map(String::from);
                 let sess = s

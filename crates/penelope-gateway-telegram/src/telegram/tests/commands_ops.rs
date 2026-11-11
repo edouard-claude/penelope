@@ -237,3 +237,47 @@ async fn secrets_are_never_typed_in_the_chat() {
     let out = say(&g, &t, "/secret rm jeton").await;
     assert!(out[0].contains("Supprimer le secret"), "{out:?}");
 }
+
+/// #459 : 1 500 sessions de tir fermées, plus récentes que tout le reste, ne cachent
+/// plus les trois conversations. `/stop tout` vide leurs files, `status` les compte.
+#[tokio::test]
+async fn stop_everything_and_status_see_past_the_finished_firings() {
+    use penelope_kernel::session::SessionKind;
+    let (_d, g, t, _p) = gateway().await;
+    let s = g.daemon.services.clone();
+    let parent = g.daemon.chat_session_for(&owner()).await.unwrap();
+    let topic = s.sessions.create(SessionKind::Chat, None).await.unwrap();
+    s.sessions
+        .bind_telegram(topic.id.as_str(), OWNER, Some(7))
+        .await
+        .unwrap();
+    let child = s
+        .sessions
+        .create_with(SessionKind::Chat, None, Some(parent.clone()), None)
+        .await
+        .unwrap();
+    for sid in [topic.id.as_str(), child.id.as_str()] {
+        g.daemon
+            .enqueue_message(sid, "travail en file", &owner(), None)
+            .await
+            .unwrap();
+    }
+    s.store
+        .write(|tx| {
+            for n in 0..1_500 {
+                tx.execute(
+                    "INSERT INTO sessions(id, kind, created_at, updated_at, closed_at, state)
+                     VALUES (?1, 'scheduled', ?2, ?2, ?2, 'closed')",
+                    [format!("s_tir_{n:04}"), "2099-01-01T00:00:00.000Z".into()],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(s.turns.pending_count().await.unwrap(), 2);
+
+    say(&g, &t, "/stop tout").await;
+    assert_eq!(s.turns.pending_count().await.unwrap(), 0, "files vidées");
+    assert_eq!(g.daemon.status().await.unwrap().sessions_active, 3);
+}

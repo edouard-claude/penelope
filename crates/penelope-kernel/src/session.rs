@@ -239,6 +239,38 @@ impl SessionStore {
             .await?)
     }
 
+    /// Les sessions ouvertes, sans plafond : ce qu'un arrêt général doit atteindre. Une
+    /// liste plafonnée toutes sessions confondues finissait par ne plus contenir que des
+    /// tirs de planification (#459).
+    pub async fn active(&self) -> Result<Vec<Session>> {
+        Ok(self
+            .store
+            .read(move |c| {
+                let sql = format!(
+                    "{SELECT_SESSION_BASE} WHERE state = 'active' ORDER BY updated_at DESC"
+                );
+                let mut st = c.prepare(&sql)?;
+                let rows = st.query_map([], row_to_session)?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await?)
+    }
+
+    /// Nombre de sessions ouvertes, compté par la base (#459).
+    pub async fn count_active(&self) -> Result<u64> {
+        Ok(self
+            .store
+            .read(|c| {
+                let n: i64 = c.query_row(
+                    "SELECT count(*) FROM sessions WHERE state = 'active'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok(n as u64)
+            })
+            .await?)
+    }
+
     /// Modèle collant (§10.3) : figé pour la session.
     pub async fn set_model(&self, id: &str, alias: &str, model_id: &str) -> Result<()> {
         let (id, alias, model_id, now) = (
@@ -418,17 +450,44 @@ impl SessionStore {
                 Ok(updated > 0)
             })
             .await?;
-        if updated && let Some(events) = &self.events {
-            let event = crate::event::EventDraft::new(
-                "runtime.session.state",
-                json!({"state": event_state}),
-            )
-            .session(event_id);
-            if let Err(error) = events.append(event).await {
-                tracing::warn!(%error, "état de session sans événement runtime");
-            }
+        if updated {
+            self.state_event(event_id, &event_state).await;
         }
         Ok(())
+    }
+
+    /// Ferme une session finie, si elle est encore ouverte. `updated_at` n'est pas
+    /// touché : il reste la date de son dernier message, et la session garde sa place
+    /// dans les listes au lieu de remonter en tête le jour de sa fermeture (#459).
+    pub async fn close_finished(&self, id: &str) -> Result<bool> {
+        let (id, now) = (id.to_string(), self.clock.now_rfc3339());
+        let event_id = id.clone();
+        let closed = self
+            .store
+            .write(move |tx| {
+                let n = tx.execute(
+                    "UPDATE sessions SET state='closed', closed_at=?2
+                     WHERE id=?1 AND state='active'",
+                    params![id, now],
+                )?;
+                Ok(n > 0)
+            })
+            .await?;
+        if closed {
+            self.state_event(event_id, "closed").await;
+        }
+        Ok(closed)
+    }
+
+    async fn state_event(&self, id: String, state: &str) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        let event = crate::event::EventDraft::new("runtime.session.state", json!({"state": state}))
+            .session(id);
+        if let Err(error) = events.append(event).await {
+            tracing::warn!(%error, "état de session sans événement runtime");
+        }
     }
 
     pub async fn set_usage_anchor(&self, id: &str, anchor: &Value) -> Result<()> {
@@ -639,6 +698,40 @@ mod tests {
         let logged = events.range(1, 10).await.unwrap();
         assert_eq!(logged[0].kind, "runtime.session.state");
         assert_eq!(logged[0].payload["state"], "closed");
+    }
+
+    /// #459 : les sessions ouvertes se comptent et se listent sans plafond ; une session
+    /// finie se ferme sans changer de place dans les listes, une fois, avec son événement.
+    #[tokio::test]
+    async fn open_sessions_are_counted_and_finished_ones_close_in_place() {
+        let store = Store::open_memory().unwrap();
+        let clock = Arc::new(TestClock::default());
+        let events = crate::event::EventLog::new(store.clone(), clock.clone());
+        let s = SessionStore::new(store, clock.clone()).with_events(events.clone());
+        let chat = s.create(SessionKind::Chat, None).await.unwrap();
+        let fired = s.create(SessionKind::Scheduled, None).await.unwrap();
+        assert_eq!(s.count_active().await.unwrap(), 2);
+
+        clock.advance_hours(1);
+        assert!(s.close_finished(fired.id.as_str()).await.unwrap());
+        assert!(!s.close_finished(fired.id.as_str()).await.unwrap());
+        let after = s.require(fired.id.as_str()).await.unwrap();
+        assert_eq!(after.state, "closed");
+        assert_eq!(after.updated_at, fired.updated_at, "pas remontée");
+        assert!(after.closed_at.is_some());
+        let states = events
+            .range(0, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "runtime.session.state")
+            .count();
+        assert_eq!(states, 1, "un événement, pas deux");
+
+        assert_eq!(s.count_active().await.unwrap(), 1);
+        let open = s.active().await.unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, chat.id);
     }
 
     /// #47 : écrire les métadonnées d'une session inconnue ne réussit pas en silence.

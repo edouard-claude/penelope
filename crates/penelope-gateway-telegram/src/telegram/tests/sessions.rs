@@ -354,6 +354,7 @@ async fn new_says_what_it_would_lose_before_closing() {
 
     // Le bouton « Fermer » d'une autre question ferme la session du fil, avec sa file.
     d.enqueue_message(&b, "trois", &chat, None).await.unwrap();
+    penelope_app::frozen_tools::freeze(&s, &b, &[]).await;
     g.process_update(&updates::text_message(712, OWNER, OWNER, "/new"))
         .await
         .unwrap();
@@ -371,6 +372,10 @@ async fn new_says_what_it_would_lose_before_closing() {
     settle_click(&g).await;
     assert_eq!(s.sessions.get(&b).await.unwrap().unwrap().state, "closed");
     assert_eq!(s.turns.queued_for(&b).await.unwrap(), 0);
+    assert!(
+        penelope_app::frozen_tools::frozen(&s, &b).await.is_none(),
+        "#459 : la liste d'outils gelée part avec la session"
+    );
 }
 
 /// Issues #10 et #112 : après `/fork`, seul le fork répond dans le fil ; les messages
