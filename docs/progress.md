@@ -12,6 +12,46 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.97
+
+**shell_exec : une option qui écrit ou qui lance n'est plus classée lecture, sous aucune
+écriture (#443).**
+
+- Partaient sans carte en mode `reads` (le défaut) : `sort -osrc/main.rs /dev/null`, `sort
+  -uo fichier`, `sort --out=fichier` (le fichier est vidé), `uniq /dev/null src/main.rs`
+  (le second argument de `uniq` est sa sortie), `git grep -O<cmd>` et `git grep
+  --open-files-in-pager=<cmd>` (git lance la commande sur les fichiers trouvés), `tree
+  -osortie`, `fd -xsh`. La liste noire comparait des mots exacts : une option collée,
+  groupée, abrégée ou absente de la liste lui échappait. Trouvé à la relecture du code,
+  rejoué le 11/11 sur macOS (`sort`, `uniq`, `git grep` 2.54, `rg`), non observé en
+  production.
+- Rejoués et confirmés aussi, les deux « à confirmer » de l'issue : `rg
+  --hostname-bin=./script --hyperlink-format=default` lance le script, et `sort
+  --compress-program=./script` le lance dès que le tri déborde son tampon.
+- La question est retournée (`penelope_hitl::cmdline::options`) : `sort`, `uniq`, `find`,
+  `fd`, `rg`, `git`, `tree`, `date` et `file` ont chacun la liste des options sous
+  lesquelles ils ne font que lire, lettres courtes (seules, groupées, avec valeur collée)
+  et options longues entières. **Toute autre option demande une carte**, inconnue comprise :
+  une liste qui vieillit coûte une carte de trop, jamais une exécution de trop. Chaque mot
+  en `-` est jugé, même s'il est la valeur de l'option d'avant.
+- `uniq` n'est une lecture qu'avec un fichier au plus, en tête comme en fin de tube. `date`
+  ne l'est qu'avec un format `+…` (`date 010112002020` règle l'horloge sous root), sauf
+  `-j`. `file` perd `-C` (compile un fichier magique) et `-z` ; `rg` perd `-z`, `tree`
+  perd `-R`. `jq`, `sort`, `rg` et `uniq` en fin de tube passent par les mêmes listes : `…
+  | jq -rf prog.jq` et `… | sort -osortie` ne sont plus des lectures pures.
+- `git` : chaque sous-commande de lecture a sa liste (`log`, `diff`, `show` ; `grep` ;
+  `status` ; `ls-files` ; `blame` ; `rev-parse` ; `describe` ; `shortlog`). `git branch`
+  est une lecture sans nom de branche, avec ses options d'affichage (`--show-current`,
+  `--all --verbose --no-abbrev`), que l'ancienne forme exacte refusait.
+- Mesure sur les 7 643 `shell_exec` de l'instance du propriétaire : 1 225 lectures avant,
+  1 252 après. Aucune lecture ne reprend de carte ; les 27 gagnées sont des `git branch`
+  qui listent. Le test `the_options_seen_in_real_reads_stay_reads` reprend chaque option
+  relevée dans ces lectures.
+- Pas fait ici : `export VAR=… && cmd` et les variables qui détournent `git` ou `rg`
+  (`GIT_SSH`, `RIPGREP_CONFIG_PATH`) sont le lot #444. Un programme que la configuration
+  de git nomme (`diff.external`, `textconv`, `core.pager`) reste lancé par `git diff` :
+  c'est la configuration du dépôt, pas la ligne.
+
 ### 1.0.96
 
 **shell_exec : un mot que le shell développe ne fait plus classer une exécution en lecture

@@ -1411,9 +1411,9 @@ affectation d'environnement qui détourne ce qui sera exécuté (`PATH=`, `HOME=
 `cat f | grep x | head -20`, `ls | wc -l` : ce qui agit est la première étape, et les
 suivantes ne peuvent que lire. La famille est donc celle de la première étape (une règle
 `glab` couvre `glab api …` comme `glab api … | jq …`), et une lecture qui traverse un tel
-tube reste une lecture. Les étapes acceptées sont `jq` (sans `-f`, `--rawfile`,
-`--slurpfile`), `cat` (sans fichier), `grep`, `egrep`, `fgrep`, `rg` (sans `--pre`),
-`head`, `tail`, `cut`, `sort` (sans `-o`), `wc`, `uniq`, `tr`, `nl`, `rev`, `column`. Tout
+tube reste une lecture. Les étapes acceptées sont `cat` (sans fichier), `grep`, `egrep`,
+`fgrep`, `head`, `tail`, `cut`, `wc`, `tr`, `nl`, `rev`, `column`, et `jq`, `rg`, `sort`,
+`uniq` avec leurs seules options de lecture (voir plus bas, #443). Tout
 le reste — `| sh`, `| xargs`, `| tee`, `| python`, `| sed`, un `||`, une redirection —
 laisse la ligne composée.
 
@@ -1437,6 +1437,21 @@ préfixe de chemin (`git diff src/*.rs`) ne peut rendre que des chemins et reste
 lecture, comme les accolades entre guillemets (`find . -name '*.{rs,toml}'`) et celles qui
 ne développent rien (`git show HEAD@{1}`). Un mot développable ne nomme pas non plus de
 famille : `git {status,push}` s'autorise une fois, sans règle.
+
+**Une option inconnue demande une carte (#443).** `sort`, `uniq`, `find`, `fd`, `rg`,
+`git`, `tree`, `date` et `file` lisent, sauf avec une option qui écrit ou qui lance un
+programme : `sort -o`, `find -exec` ou `-delete`, `fd -x`, `rg --pre`, `git grep -O`, `tree
+-o`, `date -s`, `file -C`. Chacun a donc la liste des options sous lesquelles il ne fait
+que lire, et **toute autre option demande une carte**, qu'elle soit dangereuse, récente ou
+simplement absente de la liste. Les écritures détournées ne passent plus : collée (`sort
+-ofichier`, `fd -xsh`), groupée (`sort -uo fichier`), abrégée (`sort --out=fichier`, `git
+grep --open=less`). `uniq entrée sortie` écrit dans son second argument et `date
+010112002020` règle l'horloge : `uniq` n'est une lecture qu'avec un fichier au plus, `date`
+qu'avec un format `+…`. Les sous-commandes de `git` classées lecture sont `status`, `log`,
+`diff`, `show`, `grep`, `ls-files`, `blame`, `rev-parse`, `describe`, `shortlog`, `branch`
+sans nom de branche et `remote -v`. Une lecture qui reprend une carte à tort se règle par
+un « Toujours » sur sa famille ; la liste est dans
+`crates/penelope-hitl/src/cmdline/options.rs`.
 
 Un « Toujours » sur une commande composée (`ls; pwd`, `a > f`, `$(…)`) l'autorise cette
 fois, sans créer de règle. La carte le dit **avant** le clic, et depuis #150 **aucun

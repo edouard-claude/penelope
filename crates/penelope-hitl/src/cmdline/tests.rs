@@ -330,7 +330,7 @@ fn quoted_braces_and_plain_readers_stay_reads() {
         "git log --format='%h {%an,%ae}'",
         "rg 'a{1,3}' src",
         "rg \"fn [a-z]*\" src",
-        "find . -exec-pas-une-option{}",
+        "find . -name sans-virgule{}",
         "sort a,b}",
         // Lecture quels que soient les arguments : le développement n'y change rien.
         "ls *.rs",
@@ -386,7 +386,7 @@ fn real_shells_expand_exactly_what_is_flagged() {
             "find . -name '*.{rs,toml}'",
             "find . -name \"*.{rs,toml}\"",
             "git log --format='%h {%an,%ae}'",
-            "find . -exec-pas-une-option{}",
+            "find . -name sans-virgule{}",
             "sort a,b}",
             "cat {a,b}.rs",
         ])
@@ -433,4 +433,183 @@ fn real_shells_expand_exactly_what_is_flagged() {
     {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "-print -exec ");
     }
+}
+
+/// #443 : une option qui écrit ou qui lance, sous toutes ses écritures (collée, groupée,
+/// abrégée, ou inconnue de l'ancienne liste noire), n'est jamais une lecture.
+#[test]
+fn an_option_that_writes_or_runs_is_never_a_read_however_it_is_spelled() {
+    for line in [
+        // `sort` : fichier de sortie, programme de compression.
+        "sort -o out.txt in.txt",
+        "sort -osrc/main.rs /dev/null",
+        "sort -uo src/main.rs /dev/null",
+        "sort --output=src/main.rs /dev/null",
+        "sort --out=src/main.rs /dev/null",
+        "sort --o src/main.rs /dev/null",
+        "sort --compress-program=./script f",
+        "cat f | sort -osortie",
+        "cat f | sort --out=sortie",
+        // `uniq` : le second argument est la sortie.
+        "uniq /dev/null src/main.rs",
+        "uniq -c entrée sortie",
+        "uniq -f 1 entrée sortie",
+        "cat f | uniq - sortie",
+        // `git` : un programme lancé sur les fichiers trouvés, un fichier de sortie.
+        "git grep -Oless motif",
+        "git grep -O motif",
+        "git grep -nO motif",
+        "git grep '--open-files-in-pager=sh -c \"id\" x' motif",
+        "git grep --open-files-in-pager motif",
+        "git grep --open=less motif",
+        "git diff --output=x",
+        "git diff --outp=x",
+        "git log --ext-diff -p",
+        "git show --textconv HEAD:f",
+        "git log --show-signature",
+        "git branch nouvelle",
+        "git branch -v nouvelle",
+        "git branch -D main",
+        // `tree`, `fd`, `rg`, `date`, `file`, `find`.
+        "tree -o sortie",
+        "tree -osortie",
+        "tree -ao sortie",
+        "tree -Lo 2 sortie",
+        "tree -R -H .",
+        "fd -x rm",
+        "fd -xsh",
+        "fd -Hx rm",
+        "fd -X rm",
+        "fd --exec rm",
+        "fd --exec-batch=rm x",
+        "rg --pre ./script x",
+        "rg --pre=./script x",
+        "rg --hostname-bin=./script --hyperlink-format=default x",
+        "rg --hostname-bin ./script x",
+        "rg -z x archive.gz",
+        "cat f | rg --pre=./script x",
+        "date -s 2020-01-01",
+        "date -us 2020-01-01",
+        "date --set=2020-01-01",
+        "date 010112002020",
+        "date -u 010112002020.30",
+        "date -r 1700000000 010112002020",
+        "file -C -m magique",
+        "file --compile -m magique",
+        "file -z archive.gz",
+        "file -bz archive.gz",
+        "find . -delete",
+        "find . -exec rm {} +",
+        "find . -fprint sortie",
+        "find . -fls sortie",
+        "find . -okdir rm {} ';'",
+        // Dans le doute : une option inconnue de la table demande une carte.
+        "sort --option-de-demain f",
+        "git log --option-de-demain",
+        "rg --option-de-demain x",
+        "find . -primaire-de-demain",
+        "cat f | jq --rawfile a b .",
+        "cat f | jq -rf prog.jq",
+    ] {
+        assert!(!is_read_command(line), "{line}");
+    }
+}
+
+/// #443 : les lectures courantes le restent. La liste reprend chaque option relevée dans
+/// les `shell_exec` d'une instance réelle, le 11/11 : aucune n'a repris de carte.
+#[test]
+fn the_options_seen_in_real_reads_stay_reads() {
+    for line in [
+        "sort fichier",
+        "sort -u fichier",
+        "sort -rn -k2 fichier",
+        "sort -t, -k1,1 fichier",
+        "sort -to fichier",
+        "sort --reverse --key=2 fichier",
+        "uniq fichier",
+        "uniq -c",
+        "uniq -f 1 fichier",
+        "cat f | sort | uniq -c | sort -rn | head -5",
+        "cat f | uniq -c -",
+        "tree -L 2",
+        "tree -a -I node_modules --dirsfirst",
+        "fd motif",
+        "fd -e rs -t f motif src",
+        "fd -tx motif",
+        "fd --extension=rs --hidden",
+        "date -u",
+        "date -Iseconds",
+        "date -v-48H",
+        "date -j -f %s 0 +%Y",
+        "date -r 1700000000",
+        "date -r 1700000000 +%F",
+        "date -ju 010112002020 +%F",
+        "date -d yesterday +%F",
+        "date '+%Y-%m-%d %H:%M'",
+        "TZ=UTC date +%s",
+        "file --mime-type x",
+        "file -I x",
+        "find . -type f -maxdepth 2 -name '*.rs' -print",
+        "find . -path ./target -prune -o -not -iname '*.md' -print",
+        "find . -mmin -30 -newermt 2026-01-01 -perm -111",
+        "find . -newer Cargo.toml -mindepth 1 -size -10k",
+        "git status --short --branch",
+        "git status -sb --porcelain",
+        "git status -uno",
+        "git log --oneline --all --decorate --graph -30",
+        "git log --format=%h --pretty=oneline --date=short --since=1.week -n 5",
+        "git log --grep=x --author=y -i --regexp-ignore-case --stat --name-status",
+        "git log --left-right --simplify-by-decoration --topo-order -1 -- src",
+        "git log -S'fn main' -G regex -L 1,5:f",
+        "git diff --stat --check --unified=0 --name-status --find-renames --find-copies",
+        "git diff --exit-code --numstat --binary --cached --name-only --no-index a b",
+        "git diff --no-ext-diff -U5 -M90% -w HEAD~1 -- src",
+        "git diff --text",
+        "git show --stat --format=%s --oneline --decorate --summary --no-patch HEAD",
+        "git show --no-ext-diff --unified=3 --name-only --no-renames --patch HEAD@{1}",
+        "git grep -n motif",
+        "git grep -n -E -i -iE -e motif -- src",
+        "git grep -eOk -A3 --count",
+        "git branch -a",
+        "git branch -vv --all",
+        "git branch -avv",
+        "git branch --all --verbose --no-abbrev",
+        "git branch --show-current",
+        "git remote -v",
+        "git rev-parse --short HEAD",
+        "git rev-parse --abbrev-ref HEAD",
+        "git describe --always --tags",
+        "git ls-files -o --exclude-standard",
+        "git blame -L 10,20 -w f",
+        "rg -n -i --glob '*.rs' -g '!target' -l --hidden motif",
+        "rg -C 3 --files --iglob x --max-count 2 -ln -m 1 --no-heading --no-messages x",
+        "rg -A140 -A20 -S motif src",
+        "rg -e -motif src",
+        "cat f | rg -n motif",
+        "cat f | jq -r '.a'",
+        "cat f | jq -e -c --arg n v '.[$n]'",
+    ] {
+        assert!(is_read_command(line), "{line}");
+    }
+}
+
+/// #443 : `uniq` écrit dans son second argument, sous bash comme sous zsh. La forme que
+/// le classement refuse est bien celle qui écrit.
+#[cfg(unix)]
+#[test]
+fn uniq_really_writes_its_second_argument() {
+    let dir = tempfile::tempdir().expect("dossier");
+    std::fs::write(dir.path().join("entrée"), "a\na\n").expect("entrée");
+    let Ok(status) = std::process::Command::new("uniq")
+        .args(["entrée", "sortie"])
+        .current_dir(dir.path())
+        .status()
+    else {
+        return;
+    };
+    assert!(status.success());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("sortie")).expect("sortie"),
+        "a\n"
+    );
 }
