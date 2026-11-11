@@ -105,6 +105,20 @@ des groupes entiers (un appel d'outils et ses résultats ne sont jamais séparé
 budget, et toujours au moins `context.min_tail_user_messages` = `2` messages du
 propriétaire. Un lot de moins de 2 000 tokens n'appelle pas le résumeur, sauf `/compact`.
 
+**Un long tour d'outils (#460).** Garder deux messages du propriétaire suppose qu'il en
+existe deux. Quand cette garantie fait déborder la queue de son budget **et** laisse moins
+de 2 000 tokens devant elle (un seul message, puis quarante appels d'outils), la queue
+revient à son budget : elle est coupée à une frontière de groupe, après un résultat
+complet, et garde au moins le dernier groupe. La tête du tour part au résumé. Le message
+qui a ouvert le tour n'est alors plus en clair : il est cité tel quel en tête du résumé,
+sous « Consigne en cours », et repris à chaque résumé suivant tant qu'aucun autre message
+du propriétaire n'arrive (au-delà du budget de la queue, son début, sa fin et l'adresse
+`history_expand(seq:N)` qui le rend entier). Une conversation dont la coupe ordinaire
+laisse de quoi résumer garde cette coupe.
+
+Entre deux tours d'une mission, la même règle s'applique : la session est compactée avant
+le tour suivant si le dernier prompt facturé atteint le seuil de fond, pas avant.
+
 Le résumé suit un gabarit de neuf sections : objectif, contraintes et préférences, fait,
 en cours, bloqué, décisions clés, fichiers et ressources, prochaines étapes, contexte
 critique ; 4 000 caractères au plus par section, sortie structurée stricte quand le modèle
@@ -290,7 +304,10 @@ Le catalogue des événements `conv.*` et de leurs champs est dans
 
 Chaque décision laisse un événement : `context.compaction_requested` (avec la taille qui
 l'a déclenché), `context.compaction_skipped` (et sa raison : attente après échec, rien à
-compacter, réserve épuisée), `context.compaction_failed`, `context.compacted`. `/status`,
+compacter, réserve épuisée), `context.compaction_failed`, `context.compacted`. « Rien à
+compacter » dit pourquoi, avec ses nombres : trop peu de messages depuis le dernier
+résumé, tout tient dans la queue, lot sous le minimum de 2 000 tokens, ou pas de frontière
+où couper (un seul appel d'outils plus gros que la queue). `/status`,
 `/budget` et `self_status` donnent la taille réelle du contexte, les deux seuils et la
 dernière compaction ; le compteur `penelope_compactions_total` de `penelope metrics` les
 compte par déclencheur et par issue.

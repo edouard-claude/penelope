@@ -90,7 +90,7 @@ pub struct Context {
     pub tail_min_tokens: usize,
     /// Taille maximale de la fin d'historique gardée intacte, en jetons.
     pub tail_max_tokens: usize,
-    /// Messages du propriétaire gardés intacts au moins.
+    /// Messages du propriétaire gardés intacts au moins, tant que cela laisse de quoi résumer.
     pub min_tail_user_messages: usize,
     /// Part maximale de la fenêtre qu'un résultat d'outil peut occuper.
     pub max_tool_result_share: f64,

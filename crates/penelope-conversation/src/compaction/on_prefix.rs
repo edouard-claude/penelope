@@ -82,11 +82,8 @@ async fn request(d: &Context, job: &SummaryJob) -> Option<ChatRequest> {
     if !ctx.fits {
         return None;
     }
-    let landmark = entries
-        .iter()
-        .find(|e| e.seq == job.to_seq)
-        .map(|e| e.message.text())?;
-    let consigne = instruction(job, &landmark);
+    let at = entries.iter().position(|e| e.seq == job.to_seq)?;
+    let consigne = instruction(job, &entries[at].message, entries.len() - at - 1);
     if mode == PrefixCompaction::Auto && !cheaper(d, job, &model, ctx.tokens, &consigne) {
         return None;
     }
@@ -110,10 +107,13 @@ async fn request(d: &Context, job: &SummaryJob) -> Option<ChatRequest> {
 
 /// La consigne de résumé, en dernier message : les règles du résumeur, et la portée du
 /// lot repérée par le début de son dernier message, sans son bloc de contexte volatil.
-fn instruction(job: &SummaryJob, landmark: &str) -> String {
+/// Un lot coupé dans un tour d'outils finit sur un résultat, parfois vide ou pareil à ses
+/// voisins : la portée dit aussi ce qu'il est et combien de messages le suivent (#460).
+fn instruction(job: &SummaryJob, last: &ChatMessage, after: usize) -> String {
+    let landmark = last.text();
     let text = match landmark.split_once("</contexte>") {
         Some((_, rest)) if landmark.starts_with("<contexte>") => rest,
-        _ => landmark,
+        _ => landmark.as_str(),
     };
     let excerpt: String = text
         .split_whitespace()
@@ -127,12 +127,26 @@ fn instruction(job: &SummaryJob, landmark: &str) -> String {
     } else {
         "sans résumé antérieur"
     };
+    let what = match last.role {
+        penelope_llm::types::Role::Tool => "résultat d'outil",
+        _ => "message",
+    };
+    let landmark = match excerpt.is_empty() {
+        true => format!("jusqu'au {what} sans texte"),
+        false => format!("jusqu'au {what} qui commence par « {excerpt} »"),
+    };
+    let rest = match after {
+        0 => "Rien ne le suit.".to_string(),
+        n => format!(
+            "Les {n} derniers messages de la conversation, qui le suivent, restent en clair : \
+             ne les résume pas."
+        ),
+    };
     format!(
         "<consigne-de-compaction>\nCe message vient du harnais, pas du propriétaire : ne lui \
          réponds pas et n'appelle aucun outil.\n\n{SUMMARIZER_PROMPT}\n\nPortée : la \
-         conversation ci-dessus depuis son début ({previous}), jusqu'au message qui commence \
-         par « {excerpt} » inclus. Ce qui suit ce message reste en clair : ne le résume \
-         pas.\n</consigne-de-compaction>"
+         conversation ci-dessus depuis son début ({previous}), {landmark} inclus. \
+         {rest}\n</consigne-de-compaction>"
     )
 }
 

@@ -266,6 +266,30 @@ pub async fn compact(
     Ok(report)
 }
 
+/// Entre deux tours d'une mission (#365) : la session est compactée si le dernier prompt
+/// facturé atteint le seuil de fond, comme en fin de tour ordinaire. Sans cette garde,
+/// chaque fin de tour envoyait au résumeur tout ce que la queue ne retenait pas, bien
+/// avant le seuil (#460).
+pub async fn between_turns(d: &Context, session_id: &str) -> anyhow::Result<Option<Report>> {
+    let model = conversation_model(d, session_id).await;
+    let threshold = background_threshold(&d.services, &model);
+    match last_prompt(&d.services, session_id).await {
+        Some((prompt, _)) if prompt >= threshold => {}
+        last => {
+            tracing::debug!(
+                session = %session_id,
+                prompt_tokens = ?last.map(|(p, _)| p),
+                threshold,
+                "mission : sous le seuil de fond, pas de compaction entre deux tours"
+            );
+            return Ok(None);
+        }
+    }
+    compact(d, session_id, Trigger::Background, None)
+        .await
+        .map(Some)
+}
+
 /// Demande une compaction de fond pour la fin du tour, en le disant (issue #40).
 pub async fn request(
     d: &Context,
@@ -558,14 +582,19 @@ async fn compact_inner(
         CompactionParams::from_config(&cfg, s.catalog.window_of(&conversation), &conversation);
     let window = s.catalog.window_of(&model);
 
+    let mut nothing = None;
     for pass in 0..MAX_PASSES {
         let force = pass == 0 && matches!(trigger, Trigger::Manual | Trigger::Overflow);
-        let Some(job) = s
+        let job = match s
             .context
-            .prepare_summary(session_id, &params, window, &model, force)
+            .plan_summary(session_id, &params, window, &model, force, None)
             .await?
-        else {
-            break;
+        {
+            Ok(job) => job,
+            Err(why) => {
+                nothing = Some(why);
+                break;
+            }
         };
         report.remaining_batches = job.remaining_batches();
 
@@ -666,8 +695,12 @@ async fn compact_inner(
         save_cooldown(&d.services, session_id, &cooldown).await;
     }
     if report.published == 0 && !report.deferred && report.skipped.is_none() {
-        report.skipped =
-            Some("rien à compacter : la conversation tient dans la queue verbatim".into());
+        // La raison et ses nombres : « rien à compacter » seul ne disait pas si la queue
+        // couvrait tout ou si le lot était trop petit (#460).
+        report.skipped = Some(match nothing {
+            Some(why) => format!("rien à compacter : {why}"),
+            None => "rien à compacter".into(),
+        });
     }
     Ok(report)
 }
@@ -718,13 +751,15 @@ pub fn report_text(r: &Report) -> String {
     if r.deferred {
         return "🗜 Résumé prêt : publié à la fin du tour en cours.".into();
     }
-    format!(
-        "Rien à compacter : {}.",
-        r.skipped
-            .as_deref()
-            .unwrap_or("la conversation tient dans la queue verbatim")
-            .trim_start_matches("rien à compacter : ")
-    )
+    match r
+        .skipped
+        .as_deref()
+        .map(|s| s.trim_start_matches("rien à compacter"))
+        .map(|s| s.trim_start_matches(" : "))
+    {
+        Some(why) if !why.is_empty() => format!("Rien à compacter : {why}."),
+        _ => "Rien à compacter.".into(),
+    }
 }
 
 mod context;

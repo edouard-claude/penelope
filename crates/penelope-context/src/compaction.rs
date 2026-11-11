@@ -321,24 +321,60 @@ pub fn split_for_summary(entries: &[Entry], params: &CompactionParams) -> (usize
     (boundary, tail_tokens)
 }
 
+/// Un lot plus petit ne vaut pas un appel au résumeur, sauf compaction forcée.
+pub const MIN_SUMMARY_TOKENS: u64 = 2_000;
+
 /// Frontière dessinée par le seul budget de la queue : `0` quand toute l'entrée tient
 /// dans la queue verbatim. La compaction de fond s'en contente ; `/compact` force.
+///
+/// La queue garde `min_tail_user_messages` messages du propriétaire, quoi qu'ils coûtent,
+/// tant que cela laisse de quoi faire un résumé. Sur un long tour d'outils, il n'y a pas de
+/// second message à atteindre : la garantie couvrait tout, et rien n'était jamais résumé
+/// (#460). La queue revient alors à son budget, coupée à une frontière de groupe (après un
+/// résultat complet) ; le message du propriétaire passe dans le lot, et le résumé le
+/// reprend tel quel ([`task_quote`]).
 pub fn natural_split(entries: &[Entry], params: &CompactionParams) -> (usize, u64) {
     let groups = group(entries);
     let budget = params.tail_budget();
+    let (boundary, tail_tokens) = tail_walk(entries, &groups, budget, |_, users| {
+        users < params.min_tail_user_messages
+    });
+    if tail_tokens <= budget {
+        return (boundary, tail_tokens);
+    }
+    // Un résumé déjà publié, en tête d'une projection, n'est pas à résumer.
+    let head: u64 = entries[..boundary]
+        .iter()
+        .filter(|e| !(e.seq == 0 && e.role() == Role::System))
+        .map(|e| e.tokens)
+        .sum();
+    if head >= MIN_SUMMARY_TOKENS {
+        return (boundary, tail_tokens);
+    }
+    tail_walk(entries, &groups, budget, |taken, _| taken == 0)
+}
+
+/// Remonte les groupes depuis la fin tant que la queue tient sous `budget`. `held` reçoit
+/// le nombre de groupes et de messages du propriétaire déjà pris : vrai, le groupe suivant
+/// entre quoi qu'il coûte.
+fn tail_walk(
+    entries: &[Entry],
+    groups: &[crate::transcript::Group],
+    budget: u64,
+    held: impl Fn(usize, usize) -> bool,
+) -> (usize, u64) {
     let mut tail_tokens = 0u64;
     let mut user_messages = 0usize;
     let mut boundary = entries.len();
 
-    for g in groups.iter().rev() {
+    for (taken, g) in groups.iter().rev().enumerate() {
         let g_tokens: u64 = entries[g.range.clone()].iter().map(|e| e.tokens).sum();
         let g_users = entries[g.range.clone()]
             .iter()
             .filter(|e| e.role() == Role::User)
             .count();
 
-        let enough_users = user_messages >= params.min_tail_user_messages;
-        if tail_tokens + g_tokens > budget && enough_users {
+        if tail_tokens + g_tokens > budget && !held(taken, user_messages) {
             break;
         }
         tail_tokens += g_tokens;
@@ -478,10 +514,52 @@ pub const SUMMARY_HEADER: &str = "## Résumé des tours compactés";
 /// Titre du bloc des messages utilisateur conservés tels quels.
 pub const VERBATIM_HEADER: &str = "### Messages utilisateur conservés verbatim";
 
+/// Titre de la consigne reprise en tête d'un résumé (#460).
+pub const TASK_HEADER: &str = "### Consigne en cours (le message qui a ouvert ce tour, tel quel)";
+
+/// Le dernier message du propriétaire, quand un résumé le couvre et que plus aucun ne le
+/// suit : la consigne du tour en cours, reprise telle quelle en tête du résumé (#460). Au-delà
+/// de `budget_tokens`, son début et sa fin, avec l'adresse qui rend le message entier. Le
+/// bloc de contexte volatil du tour (date, heure) n'est pas repris : il daterait le résumé.
+pub fn task_quote(entry: &Entry, budget_tokens: u64) -> String {
+    let full = entry.message.text();
+    let text = match full.split_once("</contexte>") {
+        Some((_, rest)) if full.starts_with("<contexte>") => rest.trim_start().to_string(),
+        _ => full,
+    };
+    if entry.tokens <= budget_tokens {
+        return text;
+    }
+    let keep = (budget_tokens as usize).saturating_mul(3);
+    let (head, tail) = head_tail(&text, keep - keep / 3, keep / 3);
+    if tail.is_empty() {
+        return text;
+    }
+    format!(
+        "{head}\n[… consigne trop longue pour être reprise en entier : \
+         history_expand(seq:{}) rend le message complet …]\n{tail}",
+        entry.seq
+    )
+}
+
+/// Le corps d'un résumé rendu sans sa consigne : chaque ligne de la citation commence par
+/// `>`, quoi que le message contienne.
+fn without_task(body: &str) -> &str {
+    let Some(mut rest) = body.trim_start().strip_prefix(TASK_HEADER) else {
+        return body;
+    };
+    rest = rest.strip_prefix('\n').unwrap_or(rest);
+    while rest.starts_with('>') {
+        rest = rest.split_once('\n').map_or("", |(_, r)| r);
+    }
+    rest
+}
+
 /// Sections rédigées d'un résumé rendu, sans l'en-tête ni les blocs ajoutés
-/// mécaniquement (messages verbatim, ancres) : c'est ce que le résumeur met à jour.
+/// mécaniquement (consigne, messages verbatim, ancres) : c'est ce que le résumeur met à
+/// jour.
 pub fn summary_sections_only(rendered: &str) -> String {
-    let body = rendered.strip_prefix(SUMMARY_HEADER).unwrap_or(rendered);
+    let body = without_task(rendered.strip_prefix(SUMMARY_HEADER).unwrap_or(rendered));
     let mut cut = body.len();
     for marker in [format!("\n{VERBATIM_HEADER}"), "\nAncres :\n".to_string()] {
         if let Some(i) = body.find(&marker) {
@@ -499,9 +577,21 @@ pub fn section_key(section: &str) -> String {
         .replace('ç', "c")
 }
 
-/// Rend un résumé validé en texte injectable.
-pub fn render_summary(v: &serde_json::Value, anchors: &str, verbatim_users: &[String]) -> String {
+/// Rend un résumé validé en texte injectable. `task` : la consigne en cours, citée en
+/// tête ([`task_quote`]).
+pub fn render_summary(
+    v: &serde_json::Value,
+    anchors: &str,
+    verbatim_users: &[String],
+    task: Option<&str>,
+) -> String {
     let mut s = format!("{SUMMARY_HEADER}\n");
+    if let Some(task) = task.filter(|t| !t.trim().is_empty()) {
+        s.push_str(&format!("\n{TASK_HEADER}\n"));
+        for line in task.trim().lines() {
+            s.push_str(&format!("> {line}\n"));
+        }
+    }
     for section in SUMMARY_SECTIONS {
         let key = section_key(section);
         if let Some(t) = v.get(&key).and_then(|x| x.as_str())

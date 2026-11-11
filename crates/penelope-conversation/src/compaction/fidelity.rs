@@ -20,6 +20,7 @@ pub(super) fn observe_fidelity(job: &SummaryJob, summary: &Value) -> FidelityObs
         summary,
         &penelope_context::anchors::render(&job.anchors),
         &job.verbatim_users,
+        job.task.as_deref(),
     );
     let normalised_rendered = normalise_evidence(&rendered);
     let mut user_text = String::new();

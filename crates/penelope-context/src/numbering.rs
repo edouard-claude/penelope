@@ -171,6 +171,7 @@ mod tests {
             batches: vec![(5, 9)],
             chunk_messages: 2,
             previous_to_seq: Some(2),
+            task: None,
         }
     }
 
