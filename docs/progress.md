@@ -35,8 +35,8 @@ La charte et les spécifications sont dans `design/v1/`.
   que des chemins).
 - Une famille ne se construit plus sur un mot développable : `git {status,push}` n'écrit
   pas de règle, et une telle famille déclarée dans `tools.shell_allow` ne couvre rien.
-- Mesure sur les 7 643 `shell_exec` de l'instance du propriétaire : 1 225 lectures avant,
-  1 224 après ; la seule qui reprend une carte est `rg -n "…" *docker-compose.yml
+- Mesure sur les 7 643 `shell_exec` de l'instance du propriétaire : 1 226 lectures avant,
+  1 225 après ; la seule qui reprend une carte est `rg -n "…" *docker-compose.yml
   docker-compose.yml`.
 - Un test lance bash et zsh sur chaque forme et compare les mots réellement passés au
   programme à ceux qu'on lit : tout écart doit avoir été signalé. Les tests de `cmdline.rs`
