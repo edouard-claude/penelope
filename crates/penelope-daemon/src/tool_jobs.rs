@@ -290,6 +290,8 @@ pub async fn deliver_due(d: &Core) -> anyhow::Result<usize> {
     let s = &d.services;
     let now = s.clock.now_ms();
     let mut sent = 0;
+    // Une carte dont le demandeur a disparu retiendrait le réveil du parent (#464).
+    penelope_orchestrator::withdrawn::sweep(s, d.slots.messenger().as_deref()).await?;
     for job in store(s).undelivered(20).await? {
         let open = matches!(
             s.sessions.get(&job.session_id).await,

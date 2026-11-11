@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 pub struct RecordingMessenger {
     sent: Mutex<Vec<(Origin, String)>>,
     approvals: Mutex<Vec<String>>,
+    withdrawn: Mutex<Vec<(String, String)>>,
     /// Cartes et questions rangées à part plutôt que rendues en texte.
     separate: bool,
     questions: Mutex<Vec<(String, String, Vec<String>)>>,
@@ -53,6 +54,11 @@ impl RecordingMessenger {
         self.approvals.lock().unwrap().clone()
     }
 
+    /// Demandes retirées, avec la raison dite au canal (#464).
+    pub fn withdrawn(&self) -> Vec<(String, String)> {
+        self.withdrawn.lock().unwrap().clone()
+    }
+
     /// Questions d'étape : (`run|visite`, texte, choix). Avec `with_cards` seulement.
     pub fn questions(&self) -> Vec<(String, String, Vec<String>)> {
         self.questions.lock().unwrap().clone()
@@ -80,6 +86,12 @@ impl Messenger for RecordingMessenger {
 
     async fn send_approval(&self, _: &Origin, approval_id: &str) -> Result<(), String> {
         self.approvals.lock().unwrap().push(approval_id.to_string());
+        Ok(())
+    }
+
+    async fn approval_withdrawn(&self, approval_id: &str, why: &str) -> Result<(), String> {
+        let row = (approval_id.to_string(), why.to_string());
+        self.withdrawn.lock().unwrap().push(row);
         Ok(())
     }
 

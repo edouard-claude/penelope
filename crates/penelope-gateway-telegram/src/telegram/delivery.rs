@@ -563,6 +563,11 @@ impl Messenger for TelegramGateway {
             .await
             .map_err(|e| e.to_string())
     }
+
+    async fn approval_withdrawn(&self, approval_id: &str, why: &str) -> Result<(), String> {
+        let retired = self.retire_cards(approval_id, why).await;
+        retired.map(|_| ()).map_err(|e| e.to_string())
+    }
 }
 
 /// Démarrée par `Daemon::run`, qui la reçoit de la composition (`penelope-cli`).

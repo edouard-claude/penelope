@@ -12,6 +12,51 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.118
+
+**Demande d'accord : une carte dont le demandeur a disparu est retirée (#464).**
+
+Un sous-agent en arrière-plan attend un accord (#422). Le daemon redémarre, ou le job est
+annulé : le job est clos, mais sa demande restait `pending` et la clé `approval.child.<id>`
+restait en base. Le propriétaire tapait la carte, lisait « ✅ approve », et rien ne se
+passait : la décision n'allait nulle part. Pire, tant que la carte attendait, elle retenait
+le réveil du parent (`wake_gate`, #396), qui n'apprenait la perte de son sous-agent qu'à
+l'échéance de la carte, un jour plus tard, après deux rappels.
+
+- **Le retrait.** `penelope-orchestrator::withdrawn` constate qu'une demande n'a plus de
+  demandeur : le job de son sous-agent est terminé ou introuvable, son run est terminé
+  (fini, en échec, annulé), sa session est close. La demande passe `expired` avec sa
+  raison (`Approvals::withdraw`), la clé du job est retirée, un événement
+  `approval.withdrawn` le note. Trois moments : tout de suite quand le sous-agent est
+  arrêté pendant son attente, à chaque battement de la livraison des jobs (deux secondes,
+  avant la garde de réveil : le parent est prévenu au passage même), et au clic.
+- **La carte.** Le canal désarme les cartes déjà parties, rappels compris
+  (`Messenger::approval_withdrawn`) : boutons retirés, une ligne « ⌛ Demande retirée : … »
+  ajoutée, sans message nouveau. Telegram les retrouve par les jetons de leurs boutons.
+- **Le clic.** Sur une demande retirée, expirée ou annulée, la réponse est « ⌛ Plus rien à
+  approuver pour `<outil>` : <raison>. » au lieu d'un « Déjà tranché : expired » ; rien
+  n'est tranché, aucun tour n'est lancé. L'approbation par RPC (ligne de commande) refuse
+  de même, en disant pourquoi, une demande dont le demandeur vient de disparaître.
+- Un job encore `working` ou `input_required` garde sa carte, même si la session de son
+  parent se ferme entre-temps : un job seulement lent à reprendre après le démarrage n'est
+  pas touché. Un run ou une session introuvable ne retire rien non plus, seule une fin
+  constatée compte. Les
+  demandes qui se tranchent sans leur demandeur (effet incertain, proposition de mémoire ou
+  de skill, changement de configuration) ne sont pas concernées.
+
+Pas fait ici, et pourquoi :
+
+- le **délai dépassé** d'un sous-agent n'a pas de chemin propre : il finit son job, et le
+  passage suivant retire la demande, deux secondes plus tard au plus ;
+- une demande retirée compte comme une expiration pour le tour qui l'a posée
+  (`earlier_expiries`) : sans effet ici, ce tour est fini ou sa session est close.
+
+Tests : `withdrawn` (cœur : job perdu au démarrage, job annulé au moment du clic, run
+terminé et session close, et tout ce qui ne doit pas être retiré), `sub_agent_wait`
+(arrêt pendant l'attente), `withdrawn` (passerelle : le clic, les cartes désarmées),
+`tool_jobs_e2e` (redémarrage : la carte est retirée et le parent réveillé une fois, test
+rouge sans le correctif ; refus par RPC).
+
 ### 1.0.117
 
 **Envoi Telegram : un message destiné à un sujet supprimé arrive dans le fil général (#463).**

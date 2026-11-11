@@ -124,6 +124,14 @@ Une carte restée sans réponse revient : « ⏰ Rappel 1/2 » au bout d'une heu
 2/2 » au bout de six, chaque fois avec des boutons neufs, dans la conversation d'origine.
 Au bout de 24 h, la demande expire et le tour reprend en le disant au modèle.
 
+Une demande dont le demandeur a disparu est retirée sans attendre l'échéance (#464) : le
+sous-agent d'arrière-plan qui la posait a été arrêté ou perdu au redémarrage, son run est
+terminé, sa session est close. Ses cartes, rappels compris, perdent leurs boutons et
+gagnent une ligne « ⌛ Demande retirée : … » ; aucun message ne part. Une carte qui n'a pas
+pu être modifiée reste cliquable : le clic répond « ⌛ Plus rien à approuver pour
+`<outil>` : <raison>. », rien n'est tranché et aucun tour n'est lancé. Une carte expirée
+ou annulée répond de la même façon.
+
 Et `run_blocked`, qui porte la dernière sortie dans un bloc de code :
 
 ```

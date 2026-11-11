@@ -137,6 +137,54 @@ async fn a_refused_card_makes_the_sub_agent_conclude_without_the_tool() {
     assert!(!b.ws.join("fait.txt").exists());
 }
 
+/// #464 : le sous-agent est arrêté pendant qu'il attend. Sa demande est retirée tout de
+/// suite : `expired` avec la raison, la clé de son job oubliée, le canal prévenu.
+#[tokio::test]
+async fn a_sub_agent_stopped_during_the_wait_withdraws_its_request() {
+    let b = bench().await;
+    let s = &b.e.d.services;
+    let tools = ["shell_exec".to_string()];
+    let (state, cancel) = (s.platform.dirs.state(), CancelToken::new());
+    let task = SubAgentTask {
+        session_id: &b.sid,
+        run_id: None,
+        kind: "general",
+        prompt: "pose un fichier dans l'espace",
+        model_id: "mock:model",
+        tools: &tools,
+        workspaces: vec![b.ws.clone()],
+        limits: None,
+    };
+    let sub = live::scoped(&state, &b.job, run_sub_agent(&b.e.d, task, &cancel));
+    let owner = async {
+        // La carte est posée et le job attend : `job_cancel` arrive.
+        let a = loop {
+            if let Some(a) = s.approvals.pending(10).await.unwrap().into_iter().next()
+                && !b.e.r.approvals().is_empty()
+            {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        cancel.cancel();
+        a
+    };
+    let (out, a) = tokio::join!(sub, owner);
+    assert!(out.unwrap_err().contains("interrompu"));
+    assert!(!b.ws.join("fait.txt").exists());
+
+    let after = s.approvals.get(a.id.as_str()).await.unwrap().unwrap();
+    assert_eq!(after.state, penelope_hitl::ApprovalState::Expired);
+    let why = after.reason.clone().unwrap();
+    assert!(why.contains("a été arrêté"), "{why}");
+    let key = jobs::child_approval_key(a.id.as_str());
+    assert!(s.kv_get(&key).await.unwrap().is_none(), "clé retirée");
+    assert_eq!(b.e.r.withdrawn(), vec![(a.id.to_string(), why.clone())]);
+    // Un clic après coup : la raison, pas un « approuvé » sans suite.
+    let told = crate::withdrawn::nothing_to_decide(s, None, &after).await;
+    assert_eq!(told.unwrap().as_deref(), Some(why.as_str()));
+}
+
 #[tokio::test]
 async fn a_restart_during_the_wait_fails_the_job_in_plain_words() {
     let b = bench().await;
