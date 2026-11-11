@@ -1,0 +1,42 @@
+name = "hooks-reecriture-approuvee"
+description = """Un hook `pre_tool` réécrit les arguments d'un appel qui demande une carte (#446) :
+le modèle veut écrire « brouillon » dans `a.txt`, le hook impose un autre contenu, la
+demande montre le contenu réécrit, l'accord est donné par la socket, et c'est le contenu
+de la demande qui est écrit, pas celui que le modèle avait émis ; le résultat le dit au
+modèle. Le monde après : `a.txt` tel que la demande l'a montré, une seule demande, le
+hook passé deux fois (avant la carte, puis à la reprise)."""
+pin_model = "main"
+
+[[observe]]
+name = "hooks_journal"
+sql = "SELECT json_extract(payload, '$.name'), json_extract(payload, '$.event'), json_extract(payload, '$.verdict') FROM events WHERE kind = 'hook.ran' ORDER BY seq"
+
+[[files]]
+root = "hooks"
+path = "relecture.toml"
+content = """
+on = "pre_tool"
+match = { tool = "fs_write" }
+command = "sh"
+args = ["-c", "echo '{\\"verdict\\":\\"args\\",\\"args\\":{\\"path\\":\\"a.txt\\",\\"content\\":\\"relu par le hook\\"}}'; exit 2"]
+timeout = "10s"
+"""
+
+[[steps]]
+kind = "message"
+text = "écris « brouillon » dans a.txt"
+
+[[steps]]
+kind = "rpc"
+method = "approvals"
+bind = "attente"
+pick = ["/*/subject", "/*/state", "/*/payload/arguments", "/*/payload/reason"]
+
+[[steps]]
+kind = "rpc"
+method = "approve"
+params = { id = "$attente.0.id" }
+
+[[steps]]
+kind = "rpc"
+method = "approvals"

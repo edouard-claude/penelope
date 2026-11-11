@@ -1,0 +1,2 @@
+{"tool_calls": {"text": "", "calls": [{"id": "c1", "name": "fs_write", "arguments": {"path": "a.txt", "content": "brouillon\n"}}]}}
+{"text": "C'est écrit dans a.txt, avec le contenu imposé par le hook de relecture."}

@@ -140,6 +140,32 @@ async fn always_records_a_rule_marker() {
     assert_eq!(d.rule_created.as_deref(), Some("always"));
 }
 
+/// #446 : un appel peut porter plusieurs demandes (un accord donné à d'autres arguments
+/// est suivi d'une carte nouvelle). La reprise lit la dernière posée, même à la même
+/// milliseconde : la première rendue faisait redemander sans fin un accord déjà donné.
+#[tokio::test]
+async fn the_last_request_of_a_call_is_the_one_found() {
+    let a = approvals(TestClock::default());
+    for shown in ["un", "deux", "trois"] {
+        let r = a
+            .create(
+                ApprovalKind::ToolCall,
+                "shell_exec",
+                RiskClass::Write,
+                json!({"call_id": "c1", "arguments": {"command": shown}}),
+                vec!["Autoriser".into(), "Refuser".into()],
+                Some("s1"),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let found = a.find_for_call("s1", "c1").await.unwrap().unwrap();
+        assert_eq!(found.id.0, r.id.0, "{shown}");
+    }
+    assert!(a.find_for_call("s2", "c1").await.unwrap().is_none());
+}
+
 #[test]
 fn urgent_kinds_are_never_silenced() {
     assert!(ApprovalKind::EffectUnknown.is_urgent());
