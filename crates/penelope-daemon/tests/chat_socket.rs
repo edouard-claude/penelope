@@ -188,12 +188,17 @@ async fn a_request_without_the_session_token_is_refused() {
 /// #100 : un client de flux qui ferme sa connexion (Ctrl-C, terminal fermé, SSH coupé)
 /// arrête son tour : issue `cancelled` en moins de deux secondes, plus aucun appel au
 /// fournisseur ensuite.
+///
+/// Chaque appel au fournisseur dure 5 s. À 300 ms, le tour entier tenait en 0,9 s : sur une
+/// CI chargée il finissait avant le départ du client et le test rendait `Answered` (main,
+/// 12/11). La durée longue a montré le défaut que la courte cachait : le classifieur de
+/// complexité, premier appel du tour, ignorait l'annulation et se laissait attendre.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stream_client_that_leaves_cancels_its_turn() {
     use penelope_llm::mock::Scripted;
     use penelope_llm::types::ToolCall;
     let (_dir, d, p) = start().await;
-    p.slow(Duration::from_millis(300));
+    p.slow(Duration::from_secs(5));
     p.reply(r#"{"complexity":"low"}"#);
     p.push(Scripted::ToolCalls(
         String::new(),

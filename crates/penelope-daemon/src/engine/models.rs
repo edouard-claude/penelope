@@ -27,6 +27,7 @@ impl Core {
         session: &penelope_kernel::session::Session,
         text: &str,
         turn_id: &str,
+        cancel: &CancelToken,
     ) -> (String, String) {
         let s = &self.services;
         let cfg = s.config.config();
@@ -66,7 +67,10 @@ impl Core {
 
         let decision = match router.route_deterministic(&cfg, &input) {
             Some(d) => d,
-            None => match self.classify(text, session.id.as_str(), turn_id).await {
+            None => match self
+                .classify(text, session.id.as_str(), turn_id, cancel)
+                .await
+            {
                 Some(c) => router.route_with_classification(&cfg, &c),
                 None => router.default_decision(&cfg),
             },
@@ -155,7 +159,8 @@ impl Core {
         }
     }
 
-    /// Classifieur de complexité : un petit modèle, une réponse JSON, 8 s au plus.
+    /// Classifieur de complexité : un petit modèle, une réponse JSON, 8 s au plus, et
+    /// moins si le tour est annulé entre-temps.
     ///
     /// Raisonnement réduit au minimum que le modèle accepte, sortie structurée quand le
     /// modèle la supporte, et coût enregistré comme celui de la conversation.
@@ -164,6 +169,7 @@ impl Core {
         text: &str,
         session_id: &str,
         turn_id: &str,
+        cancel: &CancelToken,
     ) -> Option<Classification> {
         if text.trim().is_empty() {
             return None;
@@ -201,7 +207,7 @@ impl Core {
             ..Default::default()
         };
         let call = async {
-            let rx = provider.chat_stream(req, CancelToken::new()).await.ok()?;
+            let rx = provider.chat_stream(req, cancel.clone()).await.ok()?;
             collect_stream(rx, &model_id, provider.name(), &s.catalog)
                 .await
                 .ok()

@@ -193,7 +193,7 @@ impl Daemon {
         let asked = matches!(turn.kind, TurnKind::Message | TurnKind::Trigger);
         let (embedder, asked) = (self.embedder(), if asked { text.as_str() } else { "" });
         let ((alias, model_id), vector) = tokio::join!(
-            self.select_model(&session, &classified, &origin_turn),
+            self.select_model(&session, &classified, &origin_turn, &cancel),
             embeddings::query_vector(&embedder, asked)
         );
 

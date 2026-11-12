@@ -226,8 +226,15 @@ impl Provider for MockProvider {
             .push(req.clone());
 
         let latency = *self.latency.lock().unwrap_or_else(|p| p.into_inner());
-        if !latency.is_zero() {
-            tokio::time::sleep(latency).await;
+        // La latence cède à l'annulation, comme le flux d'un vrai fournisseur : un test
+        // peut alors la choisir longue sans que l'arrêt du tour l'attende.
+        let deadline = tokio::time::Instant::now() + latency;
+        while !cancel.is_cancelled() {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            tokio::time::sleep(left.min(std::time::Duration::from_millis(20))).await;
         }
         let responder = self
             .responder

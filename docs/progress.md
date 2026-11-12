@@ -12,6 +12,37 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.124
+
+**Annulation : le classifieur de complexité cède lui aussi, et le test du client parti ne
+tient plus à 0,9 s.**
+
+Le 12/11, la CI de `main` a échoué sur macOS après la fusion de la 1.0.118, sans rapport
+avec ce lot : `a_stream_client_that_leaves_cancels_its_turn` a rendu `Answered` au lieu de
+`Cancelled`, et la release a attendu une relance. Le test donnait 300 ms à chaque appel du
+faux fournisseur ; un tour de trois appels tenait donc en 0,9 s, et sur une machine chargée
+il finissait avant que le client soit parti. Le test avait déjà été durci une fois pour la
+même raison (1.0.63).
+
+Allonger la durée a montré ce que la durée courte cachait. À 5 s par appel, le tour ne
+s'arrêtait qu'après 4,98 s : le classifieur de complexité, premier appel d'un tour sans
+modèle collant, partait avec un jeton d'annulation neuf. Un `/stop`, un Ctrl-C ou un client
+parti pendant ce premier appel attendait donc sa fin, 8 s au plus, alors que #100 promet
+l'arrêt en moins de deux secondes.
+
+- `select_model` et `classify` reçoivent le jeton du tour : l'appel du classifieur s'arrête
+  avec lui, le tour retombe sur le routage par défaut et se clôt `cancelled` au premier
+  contrôle de la boucle.
+- La latence du faux fournisseur (`MockProvider::slow`) cède à l'annulation, comme le flux
+  d'un vrai fournisseur : un test peut la choisir longue sans que l'arrêt l'attende.
+- Le test passe à 5 s par appel : la fenêtre pendant laquelle le client doit partir passe
+  de 0,9 s à 5 s au moins, et l'assertion « moins de deux secondes » couvre désormais le
+  classifieur. Rouge avant le correctif (4,98 s), vert après.
+
+Pas fait : d'autres appels annexes partent encore avec un jeton neuf (description d'image,
+résumé de compaction, titre de session, narration de trace). Les deux premiers sont sur le
+chemin d'un tour : un arrêt demandé pendant l'un d'eux attend encore sa fin ou son délai.
+
 ### 1.0.123
 
 **`doctor` : quatre finitions, dont la ligne verte qui contredisait le journal (#469).**
