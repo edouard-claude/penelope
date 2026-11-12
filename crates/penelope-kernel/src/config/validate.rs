@@ -37,6 +37,26 @@ pub fn retired(key: &str) -> Option<&'static str> {
         .map(|(_, why)| *why)
 }
 
+/// Ce qu'une lecture tolérante a laissé de côté : `doctor` et `config validate` nomment
+/// les deux listes (#76, #469).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ignored {
+    /// Clés que ce binaire ne connaît pas : version plus récente, ou faute de frappe.
+    pub unknown: Vec<String>,
+    /// Clés retirées ([`RETIRED_KEYS`]) que le fichier porte encore.
+    pub retired: Vec<String>,
+}
+
+impl Ignored {
+    /// Une ligne de journal par clé retirée, avec la raison du retrait.
+    pub fn warn_retired(&self) {
+        for key in &self.retired {
+            let why = retired(key).unwrap_or_default();
+            tracing::warn!(cle = %key, "clé de configuration retirée, ignorée : {why}");
+        }
+    }
+}
+
 impl Config {
     /// Lecture **tolérante** (issue #76) : une clé que ce binaire ne connaît pas (écrite
     /// par une version plus récente, ou faute de frappe) est ignorée et renvoyée pour être
@@ -47,6 +67,14 @@ impl Config {
     /// Une clé retirée ([`RETIRED_KEYS`]) n'est pas inconnue : elle est ignorée avec un
     /// avertissement qui dit pourquoi, et n'est pas renvoyée.
     pub fn parse(s: &str) -> Result<(Config, Vec<String>)> {
+        let (cfg, ignored) = Config::read(s)?;
+        ignored.warn_retired();
+        Ok((cfg, ignored.unknown))
+    }
+
+    /// [`parse`](Self::parse), avec les clés retirées à part et sans rien écrire au
+    /// journal : ce que lit qui doit les **dire** (#469).
+    pub fn read(s: &str) -> Result<(Config, Ignored)> {
         let cfg: Config = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
         let raw: toml::Table = toml::from_str(s).map_err(|e| KernelError::config(e.to_string()))?;
         let known = toml::Value::try_from(&cfg).map_err(|e| KernelError::config(e.to_string()))?;
@@ -54,14 +82,8 @@ impl Config {
         if let Some(known) = known.as_table() {
             unknown_keys("", &raw, known, &mut unknown);
         }
-        unknown.retain(|key| match retired(key) {
-            Some(why) => {
-                tracing::warn!(cle = %key, "clé de configuration retirée, ignorée : {why}");
-                false
-            }
-            None => true,
-        });
-        Ok((cfg, unknown))
+        let (retired, unknown) = unknown.into_iter().partition(|key| retired(key).is_some());
+        Ok((cfg, Ignored { unknown, retired }))
     }
 
     /// Lecture **stricte** : toute clé inconnue est une erreur. Pour une saisie, pas pour

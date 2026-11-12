@@ -77,6 +77,20 @@ pub trait Directories: Send + Sync {
     fn db_path(&self) -> PathBuf {
         self.data().join("penelope.db")
     }
+    /// Les `penelope.db` posés à la racine d'un répertoire logique qui n'est pas celui de
+    /// la base (#469). Aucun code ne les crée : un `sqlite3` lancé sur un chemin deviné
+    /// suffit, et qui lit ce fichier ensuite lit une base vide.
+    fn stray_databases(&self) -> Vec<PathBuf> {
+        let db = self.db_path();
+        let mut out: Vec<PathBuf> = Dir::ALL
+            .iter()
+            .map(|d| self.resolve(*d).join("penelope.db"))
+            .filter(|p| *p != db && p.is_file())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
     fn config_file(&self) -> PathBuf {
         self.config().join("config.toml")
     }

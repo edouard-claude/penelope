@@ -743,6 +743,12 @@ pub async fn retention_tick(s: &Services) -> anyhow::Result<()> {
         return Ok(());
     }
     s.kv_set("retention.last", &now.to_string()).await?;
+    // Les flux des services, que le système écrit sans jamais les tourner (#469).
+    let logs = s.platform.dirs.logs();
+    let _ = tokio::task::spawn_blocking(move || {
+        penelope_observe::bound_stream_logs(&logs, penelope_observe::STREAM_LOG_MAX_BYTES)
+    })
+    .await;
     retention(s).await?;
     Ok(())
 }

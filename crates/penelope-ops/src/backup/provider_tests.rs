@@ -188,6 +188,7 @@ async fn a_leftover_git_remote_is_ignored_and_said() {
         c.detail.contains("ignorée") && c.detail.contains("Aucun fournisseur"),
         "{c:?}"
     );
+    assert_eq!(c.fix.as_deref(), Some("penelope backup setup"));
     // Envoi demandé : refusé faute de fournisseur, jamais vers un dépôt git.
     let err = run(&s, true, Some(false)).await.unwrap_err().to_string();
     assert!(err.contains("aucun fournisseur"), "{err}");

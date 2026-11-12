@@ -22,7 +22,10 @@ use logs::filter_log_lines;
 use logs::logs;
 #[cfg(test)]
 use offline::store_secret;
-use offline::{doctor, eval_local, paths, service, set_secret, validate_config, validate_workflow};
+use offline::{
+    doctor, eval_local, paths, service, set_secret, unset_config, validate_config,
+    validate_workflow,
+};
 use penelope_kernel::api::method as m;
 use plugin::PluginCmd;
 use render::*;
@@ -79,6 +82,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Command::Config(ConfigCmd::Validate { file }) => {
             return validate_config(&cli, file.clone());
         }
+        Command::Config(ConfigCmd::Unset { keys }) => return unset_config(&cli, keys).await,
         Command::Wf(WfCmd::Validate { file }) => return validate_workflow(&cli, file.clone()),
         Command::Eval { suite } => return eval_local(suite).await,
         Command::Local(cmd) => return local::run(&cli, cmd),

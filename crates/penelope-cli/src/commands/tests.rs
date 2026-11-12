@@ -320,6 +320,46 @@ fn config_validate_works_without_a_daemon() {
     validate_config(&cli, Some(futur)).unwrap();
 }
 
+/// #469 : `penelope config unset` ôte du fichier les clés que `doctor` nomme, sans
+/// daemon ; une clé absente est refusée et rien n'est écrit.
+#[tokio::test]
+async fn config_unset_removes_keys_without_a_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let home_arg = home.path().to_string_lossy().to_string();
+    let file = penelope_platform::resolve_directories(Some(home.path().to_path_buf()))
+        .unwrap()
+        .config_file();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let raw = "[owner]\ntelegram_user_id = 42\n\n[tools]\nci_hosts = [\"ci.exemple\"]\n";
+    std::fs::write(&file, raw).unwrap();
+
+    let cli = parse(&[
+        "--home",
+        &home_arg,
+        "config",
+        "unset",
+        "tools.ci_hosts",
+        "tools.absente",
+    ]);
+    let Command::Config(ConfigCmd::Unset { keys }) = &cli.command else {
+        panic!("{:?}", cli.command);
+    };
+    let e = unset_config(&cli, keys).await.unwrap_err();
+    assert_eq!(
+        e.exit_code(),
+        penelope_kernel::api::exit_code::VALIDATION_FAILED
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), raw);
+
+    unset_config(&cli, &keys[..1]).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "[owner]\ntelegram_user_id = 42\n\n[tools]\n"
+    );
+    // Sans clé, la commande ne se lit pas.
+    assert!(Cli::try_parse_from(["penelope", "config", "unset"]).is_err());
+}
+
 #[test]
 fn workflow_validate_works_without_a_daemon() {
     let dir = tempfile::tempdir().unwrap();

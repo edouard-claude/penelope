@@ -8,10 +8,12 @@
 pub mod injection;
 pub mod metrics;
 pub mod redact;
+mod streams;
 pub mod trajectory;
 
 pub use injection::{InjectionFinding, Severity, is_suspicious, scan, wrap_untrusted};
 pub use redact::{contains_secret, leaked_secret_kind, redact, redact_json, register_secret};
+pub use streams::{STREAM_LOG_MAX_BYTES, bound_stream_logs};
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

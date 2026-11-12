@@ -250,6 +250,17 @@ et le journal de démarrage, jamais fatale : un retour à la version précédent
 Une clé retirée n'est pas inconnue : elle est ignorée avec un avertissement au démarrage
 qui dit pourquoi, et la ligne peut être effacée. C'est le cas de la section `[history]`
 d'une version `1.0.0-alpha` (la conversation se relit toujours depuis le journal).
+`penelope doctor` nomme les unes et les autres sur la ligne « Clés de configuration »,
+avec la commande qui ôte les clés retirées :
+
+```bash
+penelope config unset backup.git_remote tools.ci_hosts
+```
+
+`config unset` retire les clés du fichier sans toucher au reste, avec ou sans daemon (il
+relit le fichier s'il tourne). Tout ou rien : une clé que le fichier ne porte pas, ou un
+reste qui ne se valide plus, et rien n'est écrit. Une clé connue ainsi retirée revient à
+sa valeur par défaut.
 `penelope config set` refuse toujours une clé qui n'existe pas.
 
 **Réglages qui s'annulent.** Un réglage qui annulerait sa propre intention est refusé,
@@ -3424,7 +3435,10 @@ penelope logs --turn t_01J9…
 
 (`--session` pour une session entière, sans filtre les 200 dernières lignes). Sous launchd,
 rien n'est plus recopié sur stderr (`daemon.err.log` ne garde que les paniques), et
-`observability.log_level` règle le niveau. `penelope metrics` donne les compteurs du daemon
+`observability.log_level` règle le niveau. Les flux des services (`*.out.log`,
+`*.err.log`, dont ceux d'un serveur d'inférence locale) sont écrits par le système et
+bornés une fois par jour : au-delà de 2 Mio, le fichier est copié en `<nom>.log.1` puis
+vidé en place, une seule génération gardée. `penelope metrics` donne les compteurs du daemon
 en texte Prometheus : tours par issue et leur durée, appels d'outils par outil,
 approbations en attente, effets incertains, mémoire résidente.
 

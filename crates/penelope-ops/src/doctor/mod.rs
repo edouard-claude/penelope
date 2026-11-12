@@ -130,6 +130,7 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
 
     // Intégrité de la base et chaîne d'audit.
     checks.push(integrity_check_of(s));
+    checks.extend(stray_database_checks(s));
     match s.events.verify().await {
         Ok(r) if r.ok => checks.push(DoctorCheck::ok(
             "audit",

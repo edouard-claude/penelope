@@ -224,7 +224,8 @@ pub(super) async fn doctor(cli: &Cli) -> CliResult<()> {
     ));
     let config = dirs.config_file();
     checks.push(match std::fs::read_to_string(&config) {
-        Ok(raw) => match penelope_kernel::Config::parse(&raw) {
+        // Les clés ignorées sont dites par le contrôle du daemon, pas par le journal (#469).
+        Ok(raw) => match penelope_kernel::Config::read(&raw) {
             Ok((cfg, _)) => match cfg.validate() {
                 Ok(()) => DoctorCheck::ok("config.file", "Fichier de configuration", "valide"),
                 Err(e) => DoctorCheck::fail(
@@ -276,11 +277,15 @@ pub(super) fn validate_config(cli: &Cli, file: Option<PathBuf>) -> CliResult<()>
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| CliError::Io(format!("{} : {e}", path.display())))?;
     // Tolérant comme le daemon (#76) : une clé inconnue est nommée, pas fatale.
-    let (cfg, unknown) =
-        penelope_kernel::Config::parse(&raw).map_err(|e| CliError::Validation(e.to_string()))?;
+    let (cfg, ignored) =
+        penelope_kernel::Config::read(&raw).map_err(|e| CliError::Validation(e.to_string()))?;
     cfg.validate()
         .map_err(|e| CliError::Validation(e.to_string()))?;
-    for k in &unknown {
+    for k in &ignored.retired {
+        let why = penelope_kernel::config::retired(k).unwrap_or_default();
+        println!("⚠️ clé retirée : {why}. Pour l'ôter : `penelope config unset {k}`");
+    }
+    for k in &ignored.unknown {
         println!(
             "⚠️ clé ignorée par cette version : {k} (écrite par une version plus récente, ou \
              faute de frappe)"
@@ -302,6 +307,34 @@ pub(super) fn validate_config(cli: &Cli, file: Option<PathBuf>) -> CliResult<()>
         println!("⚠️ {} ({})", c.message, c.keys.join(", "));
     }
     output::ok(&format!("{} est valide", path.display()), cli.json);
+    Ok(())
+}
+
+/// `penelope config unset <clé>…` (#469) : le fichier est réécrit sans ces clés, tout ou
+/// rien, puis relu par le daemon s'il tourne. Sans daemon, la commande suffit : c'est ce
+/// qu'on lance pour ôter une clé retirée que `doctor` nomme.
+pub(super) async fn unset_config(cli: &Cli, keys: &[String]) -> CliResult<()> {
+    let dirs = penelope_platform::resolve_directories(cli.home.clone())
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    let file = dirs.config_file();
+    penelope_kernel::config::unset_keys(&file, keys)
+        .map_err(|e| CliError::Validation(e.to_string()))?;
+    let reloaded = call(&dirs.socket_path(), m::CONFIG_RELOAD, json!({}))
+        .await
+        .is_ok();
+    output::ok(
+        &format!(
+            "{} retirée(s) de {}{}",
+            keys.join(", "),
+            file.display(),
+            if reloaded {
+                ", relu par le daemon"
+            } else {
+                " (daemon absent : lu au prochain démarrage)"
+            }
+        ),
+        cli.json,
+    );
     Ok(())
 }
 

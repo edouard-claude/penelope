@@ -237,24 +237,40 @@ pub(super) fn writer_panics_check() -> DoctorCheck {
     }
 }
 
-/// #76 : une clé que ce binaire ne connaît pas est ignorée au chargement, pas fatale ;
-/// elle est nommée ici (écrite par une version plus récente, ou faute de frappe).
+/// Les clés du fichier que ce binaire ignore, sur **une** ligne (#76, #469) : celles
+/// qu'il ne connaît pas (version plus récente, ou faute de frappe) et celles qui ont été
+/// retirées. Le 11/11, le journal avertissait de deux clés retirées pendant que cette
+/// ligne écrivait « toutes connues » : elle ne lisait que les premières.
 pub(super) fn config_unknown_check(s: &Services) -> DoctorCheck {
-    let unknown = s.config.unknown_keys();
-    if unknown.is_empty() {
-        DoctorCheck::ok("config.unknown", "Clés de configuration", "toutes connues")
-    } else {
-        DoctorCheck::fail(
-            "config.unknown",
-            "Clés de configuration",
-            format!(
-                "ignorée(s) par cette version : {} (écrite(s) par une version plus récente, \
-                 ou faute de frappe)",
-                unknown.join(", ")
-            ),
-            Some("penelope config validate".into()),
-        )
+    let ignored = s.config.ignored_keys();
+    let mut parts = Vec::new();
+    if !ignored.retired.is_empty() {
+        parts.push(format!(
+            "retirée(s), encore dans le fichier : {}",
+            ignored.retired.join(", ")
+        ));
     }
+    if !ignored.unknown.is_empty() {
+        parts.push(format!(
+            "ignorée(s) par cette version : {} (écrite(s) par une version plus récente, ou \
+             faute de frappe)",
+            ignored.unknown.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        return DoctorCheck::ok("config.unknown", "Clés de configuration", "toutes connues");
+    }
+    let fix = if ignored.retired.is_empty() {
+        "penelope config validate".to_string()
+    } else {
+        format!("penelope config unset {}", ignored.retired.join(" "))
+    };
+    DoctorCheck::fail(
+        "config.unknown",
+        "Clés de configuration",
+        parts.join(" ; "),
+        Some(fix),
+    )
 }
 
 /// #78 : ce que gardent les tables qui grossissent avec l'activité (arguments et

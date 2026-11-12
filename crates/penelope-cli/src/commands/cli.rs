@@ -544,6 +544,12 @@ pub enum ConfigCmd {
         path: String,
         value: String,
     },
+    /// Retire des clés du fichier : une clé retirée ou inconnue disparaît, une clé connue
+    /// revient à sa valeur par défaut. Le daemon relit le fichier s'il tourne.
+    Unset {
+        #[arg(required = true)]
+        keys: Vec<String>,
+    },
     Status,
     Reload,
     /// Valide un fichier de configuration **sans daemon**.

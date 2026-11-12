@@ -76,8 +76,8 @@ pub struct ConfigStore {
     /// publication sous un seul verrou, sinon deux mutations concurrentes s'écrasent et
     /// se volent leur fichier temporaire (issue #45).
     writing: std::sync::Mutex<()>,
-    /// Clés du fichier que ce binaire ne connaît pas, à la dernière lecture (#76).
-    unknown: std::sync::Mutex<Vec<String>>,
+    /// Clés du fichier ignorées à la dernière lecture : inconnues (#76) et retirées (#469).
+    ignored: std::sync::Mutex<Ignored>,
 }
 
 /// Les racines absolues existantes prennent la forme réelle du volume. Les chemins
@@ -124,7 +124,7 @@ impl ConfigStore {
             results: std::sync::Mutex::new(BTreeMap::new()),
             tx,
             writing: std::sync::Mutex::new(()),
-            unknown: std::sync::Mutex::new(Vec::new()),
+            ignored: std::sync::Mutex::new(Ignored::default()),
         }
     }
 
@@ -136,17 +136,18 @@ impl ConfigStore {
         owner_id: i64,
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut unknown = Vec::new();
+        let mut ignored = Ignored::default();
         let cfg = if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
-            let (mut c, u) = Config::parse(&raw)?;
-            if !u.is_empty() {
+            let (mut c, i) = Config::read(&raw)?;
+            i.warn_retired();
+            if !i.unknown.is_empty() {
                 tracing::warn!(
-                    cles = %u.join(", "),
+                    cles = %i.unknown.join(", "),
                     "clés de configuration inconnues de cette version : ignorées"
                 );
             }
-            unknown = u;
+            ignored = i;
             // L'ancien défaut d'embeddings visait un serveur local désactivé : la recherche
             // restait lexicale sans le dire (issue #11).
             if !c.providers.local.enabled
@@ -170,22 +171,28 @@ impl ConfigStore {
             c
         };
         let cs = ConfigStore::new(cfg, path, store, clock);
-        cs.set_unknown(unknown);
+        cs.set_ignored(ignored);
         Ok(cs)
     }
 
-    /// Clés du fichier ignorées à la dernière lecture : `doctor` les nomme (#76).
-    pub fn unknown_keys(&self) -> Vec<String> {
-        match self.unknown.lock() {
+    /// Clés du fichier ignorées à la dernière lecture, inconnues et retirées : `doctor`
+    /// les nomme sur une seule ligne (#76, #469).
+    pub fn ignored_keys(&self) -> Ignored {
+        match self.ignored.lock() {
             Ok(g) => g.clone(),
             Err(p) => p.into_inner().clone(),
         }
     }
 
-    fn set_unknown(&self, keys: Vec<String>) {
-        match self.unknown.lock() {
-            Ok(mut g) => *g = keys,
-            Err(p) => *p.into_inner() = keys,
+    /// Les clés que ce binaire ne connaît pas (#76).
+    pub fn unknown_keys(&self) -> Vec<String> {
+        self.ignored_keys().unknown
+    }
+
+    fn set_ignored(&self, ignored: Ignored) {
+        match self.ignored.lock() {
+            Ok(mut g) => *g = ignored,
+            Err(p) => *p.into_inner() = ignored,
         }
     }
 
@@ -297,13 +304,14 @@ impl ConfigStore {
     pub fn reload_from_disk(&self) -> Result<Arc<Generation>> {
         let _writing = self.lock_writing();
         let raw = std::fs::read_to_string(&self.path)?;
-        let (parsed, unknown) = Config::parse(&raw)?;
+        let (parsed, ignored) = Config::read(&raw)?;
+        ignored.warn_retired();
         let g = self.apply("file", false, move |c| {
             let changed = diff_paths(c, &parsed);
             *c = parsed;
             Ok(changed)
         })?;
-        self.set_unknown(unknown);
+        self.set_ignored(ignored);
         Ok(g)
     }
 

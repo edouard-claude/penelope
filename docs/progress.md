@@ -12,6 +12,68 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.123
+
+**`doctor` : quatre finitions, dont la ligne verte qui contredisait le journal (#469).**
+
+Un `penelope doctor` du 11/11 portait quatre défauts sans lien entre eux, relevés dans la
+même issue.
+
+- **Clés de configuration : une seule ligne, qui dit tout.** Le journal avertissait de deux
+  clés retirées (`backup.git_remote`, `tools.ci_hosts`) pendant que la ligne « Clés de
+  configuration » écrivait « toutes connues » : la lecture tolérante ôtait les clés
+  retirées de sa liste et ne les donnait qu'au journal. `Config::read` les rend à part
+  (`Ignored { unknown, retired }`), `ConfigStore::ignored_keys` les garde, et la ligne les
+  nomme, orange, avec le remède. `Config::parse` reste l'enveloppe qui journalise.
+- **`penelope config unset <clé>…`**, qui manquait : le remède d'une clé retirée était
+  « effacer la ligne à la main ». La commande retire les clés du fichier sans toucher au
+  reste (commentaires, ordre, clés inconnues), avec ou sans daemon, qui relit le fichier
+  s'il tourne. Tout ou rien : une clé que le fichier ne porte pas, ou un reste qui ne se
+  valide plus, et rien n'est écrit. Générique : elle ôte aussi une faute de frappe, ou
+  rend sa valeur par défaut à une clé connue. `config validate` dit les clés retirées avec
+  la commande ; le contrôle `backup.git_remote` la propose quand un fournisseur est en
+  place.
+- **Un `penelope.db` hors de l'emplacement de la base.** L'issue demandait de trouver qui
+  crée `state/penelope.db` et de corriger le chemin. Réponse : personne. Aucun chemin du
+  code ne l'écrit, ni aujourd'hui ni dans l'historique du dépôt (`git log -S`) ; la base
+  s'ouvre par `Directories::db_path` et par lui seul. Un outil SQLite lancé sur un chemin
+  deviné crée un fichier vide en l'ouvrant : c'est l'explication qui reste, non établie
+  au-delà. Il n'y avait donc pas de chemin à corriger. `doctor` gagne le contrôle
+  `db.stray` : tout `penelope.db` à la racine d'un répertoire logique qui n'est pas celui
+  de la base est nommé, avec `rm` s'il est vide, sans remède s'il ne l'est pas (à regarder
+  d'abord). Rien n'est effacé d'office. Absent quand il n'y a rien à dire.
+- **Les flux des services sont bornés.** `<service>.out.log` et `<service>.err.log` sont
+  écrits par launchd, pas par `tracing` : la rotation quotidienne des `.jsonl` ne les
+  voyait pas, et celui d'un serveur d'inférence pesait 4,9 Mo. Ils ne peuvent pas être
+  renommés (launchd garde son descripteur) : au-delà de 2 Mio, le fichier est copié en
+  `<nom>.log.1`, en `0600`, puis vidé en place. launchd ouvre ces fichiers en ajout, ce qui
+  a été vérifié sur les processus en service : l'écriture suivante repart du début. Une
+  seule génération, une passe par jour avec la rétention (`retention_tick`). Les quelques
+  lignes écrites entre la copie et la troncature sont perdues.
+- **La ligne du juge dit pourquoi.** « 4 échecs » ne permettait rien. L'événement
+  `approval.judged` portait déjà la cause (`failure`) ; la ligne ajoute la cause la plus
+  fréquente, sa part, et l'heure du dernier échec dans le fuseau du propriétaire :
+  « 4 échec(s) ; cause dominante : délai dépassé (3 sur 4), dernier échec le 10/11 à
+  14:32 ». Trois causes : délai dépassé, modèle indisponible ou refusé, réponse illisible.
+
+Tests : `retired_keys_are_kept_apart_and_unset_removes_only_them` (noyau : les deux listes,
+le fichier après `unset` au caractère près, tout ou rien, la relecture par un store
+ouvert), `a_retired_config_key_still_in_the_file_is_not_all_known` (le test de l'issue : la
+ligne n'est pas verte, puis le redevient une fois les clés ôtées),
+`config_unset_removes_keys_without_a_daemon` (CLI),
+`a_database_file_outside_its_place_is_named` (le test de l'issue : dossier neuf, aucun
+`penelope.db` hors de l'emplacement ; puis un vide et un non vide),
+`a_stream_log_beyond_the_bound_is_rotated_under_its_writer` (le test de l'issue : un
+descripteur gardé ouvert en ajout continue au début du fichier vidé),
+`a_missing_directory_or_a_symlink_is_left_alone`,
+`the_daily_pass_bounds_the_stream_logs_of_services`,
+`the_judge_line_names_the_main_cause_of_its_failures_and_the_last_one`.
+
+Pas fait : les serveurs MCP n'ont pas de journal sur disque (leur `stderr` reste en mémoire,
+borné) : rien à tourner. Une méthode RPC `config.unset` : la commande écrit le fichier puis
+demande `config.reload`, comme `backup setup`. Le service n'est livré que sous launchd :
+la borne s'applique à tout `*.log` du dossier des journaux, quel que soit ce qui l'écrit.
+
 ### 1.0.122
 
 **Base : `doctor` n'accuse plus un fichier sain, la cause du « lecteur qui ment » (#468).**

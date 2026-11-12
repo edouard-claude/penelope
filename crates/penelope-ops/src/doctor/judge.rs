@@ -12,6 +12,44 @@ pub struct JudgeWeek {
     pub judged_cards: i64,
     pub automatic: i64,
     pub failures: i64,
+    /// Les échecs par cause (`delai`, `indisponible`, `schema`), la plus fréquente en
+    /// tête (#469).
+    pub causes: Vec<(String, i64)>,
+    /// Horodatage du dernier échec.
+    pub last_failure: Option<String>,
+}
+
+/// La cause d'un échec, telle que la lit le propriétaire.
+fn cause_label(kind: &str) -> &'static str {
+    match kind {
+        "delai" => "délai dépassé",
+        "indisponible" => "modèle indisponible ou refusé",
+        "schema" => "réponse illisible",
+        _ => "cause non enregistrée",
+    }
+}
+
+/// « ; cause dominante : délai dépassé (3 sur 4), dernier échec le 10/11 à 14:32 » (#469).
+/// Le 11/11, la ligne disait « 4 échecs » sans dire lesquels : rien à en faire.
+fn failures_note(w: &JudgeWeek, timezone: &str) -> String {
+    let Some((kind, n)) = w.causes.first() else {
+        return String::new();
+    };
+    let last = w
+        .last_failure
+        .as_deref()
+        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+        .map(|at| match timezone.parse::<chrono_tz::Tz>() {
+            Ok(tz) => at.with_timezone(&tz).format("%d/%m à %H:%M").to_string(),
+            Err(_) => at.naive_utc().format("%d/%m à %H:%M UTC").to_string(),
+        })
+        .map(|at| format!(", dernier échec le {at}"))
+        .unwrap_or_default();
+    format!(
+        " ; cause dominante : {} ({n} sur {}){last}",
+        cause_label(kind),
+        w.failures
+    )
 }
 
 async fn judge_week(s: &Services) -> JudgeWeek {
@@ -34,11 +72,23 @@ async fn judge_week(s: &Services) -> JudgeWeek {
                 [&since],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
+            let mut by_cause = c.prepare(
+                "SELECT COALESCE(json_extract(payload, '$.failure'), ''), COUNT(*), MAX(ts)
+                 FROM events
+                 WHERE kind = 'approval.judged' AND ts >= ?1
+                   AND json_extract(payload, '$.outcome') = 'echec'
+                 GROUP BY 1 ORDER BY 2 DESC, 3 DESC",
+            )?;
+            let rows: Vec<(String, i64, String)> = by_cause
+                .query_map([&since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<_, _>>()?;
             Ok(JudgeWeek {
                 cards,
                 judged_cards,
                 automatic,
                 failures,
+                last_failure: rows.iter().map(|(_, _, ts)| ts.clone()).max(),
+                causes: rows.into_iter().map(|(k, n, _)| (k, n)).collect(),
             })
         })
         .await
@@ -69,11 +119,12 @@ pub async fn approval_judge_check(s: &Services) -> DoctorCheck {
     };
     let detail = format!(
         "mode {} (modèle de l'alias `{}`) ; 7 jours : {share}, {} ligne(s) passée(s) sans \
-         carte, {} échec(s)",
+         carte, {} échec(s){}",
         mode.as_str(),
         cfg.judge_alias(),
         w.automatic,
-        w.failures
+        w.failures,
+        failures_note(&w, &cfg.owner.timezone)
     );
     let calls = w.judged_cards + w.automatic + w.failures;
     if w.failures >= 3 && w.failures * 2 > calls {
@@ -176,6 +227,59 @@ mod tests {
             ))
             .await
             .unwrap();
+    }
+
+    async fn failed(s: &Services, failure: &str) {
+        s.events
+            .append(EventDraft::new(
+                "approval.judged",
+                json!({"outcome": "echec", "failure": failure, "detail": "…"}),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// #469 : « 4 échecs » ne disait ni lesquels ni quand. La ligne nomme la cause la plus
+    /// fréquente, sa part, et l'heure du dernier échec dans le fuseau du propriétaire.
+    #[tokio::test]
+    async fn the_judge_line_names_the_main_cause_of_its_failures_and_the_last_one() {
+        let (_d, s) = services().await;
+        let c = approval_judge_check(&s).await;
+        assert!(c.detail.ends_with("0 échec(s)"), "{}", c.detail);
+
+        for failure in ["delai", "schema", "delai", "delai"] {
+            failed(&s, failure).await;
+        }
+        let w = judge_week(&s).await;
+        assert_eq!(w.failures, 4);
+        assert_eq!(w.causes, vec![("delai".into(), 3), ("schema".into(), 1)]);
+        let c = approval_judge_check(&s).await;
+        assert!(
+            c.detail.contains(
+                "4 échec(s) ; cause dominante : délai dépassé (3 sur 4), dernier échec le "
+            ),
+            "{}",
+            c.detail
+        );
+
+        // L'heure est celle du propriétaire ; un échec d'avant #203 n'a pas de cause.
+        let week = JudgeWeek {
+            failures: 2,
+            causes: vec![(String::new(), 2)],
+            last_failure: Some("2026-11-10T10:32:00.000Z".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            failures_note(&week, "Indian/Reunion"),
+            " ; cause dominante : cause non enregistrée (2 sur 2), dernier échec le 10/11 à 14:32"
+        );
+        assert_eq!(
+            failures_note(&week, "nulle/part"),
+            " ; cause dominante : cause non enregistrée (2 sur 2), dernier échec le 10/11 à \
+             10:32 UTC"
+        );
+        assert_eq!(cause_label("indisponible"), "modèle indisponible ou refusé");
+        assert_eq!(cause_label("schema"), "réponse illisible");
     }
 
     /// `doctor` dit le mode du juge et la part des cartes jugées sur sept jours (#203).
