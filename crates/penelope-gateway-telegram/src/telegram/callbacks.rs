@@ -190,6 +190,13 @@ impl TelegramGateway {
         let (chat_id, topic_id) = self
             .approval_destination(&approval, chat_id, topic_id)
             .await;
+        // Demande retirée, expirée ou annulée (#464) : on le dit, rien n'est tranché.
+        if self
+            .nothing_to_approve(&approval, chat_id, topic_id, message_id)
+            .await?
+        {
+            return Ok(());
+        }
         let double = approval.payload["double"].as_bool().unwrap_or(false);
 
         match action.action.as_str() {

@@ -56,6 +56,7 @@ mod sessions_menu;
 mod subjects;
 mod trace;
 mod usage;
+mod withdrawn;
 
 use bursts::{Held, TextBurst};
 #[cfg(test)]

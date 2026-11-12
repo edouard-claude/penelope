@@ -235,6 +235,11 @@ pub trait Messenger: Send + Sync {
     async fn send_approval(&self, _origin: &Origin, _approval_id: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Une demande retirée parce que son demandeur a disparu (#464) : le canal désarme
+    /// ses cartes, sans bruit.
+    async fn approval_withdrawn(&self, _approval_id: &str, _why: &str) -> Result<(), String> {
+        Ok(())
+    }
     /// Présente le plan et son gate dans le canal d'origine.
     async fn send_plan_card(
         &self,

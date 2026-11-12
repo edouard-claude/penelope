@@ -6,7 +6,8 @@
 //! Aucun tour du parent n'est lancé pendant l'attente : la garde de #396 (pas de réveil
 //! avec une carte en attente) tient, et `job_status` montre l'état. La conversation du
 //! sous-agent vit dans le daemon : un redémarrage pendant l'attente fait échouer le job
-//! en le disant (`LOST_WAITING_ON_BOOT`).
+//! en le disant (`LOST_WAITING_ON_BOOT`). Arrêté ou perdu, sa demande est retirée
+//! (`crate::withdrawn`, #464) : sa carte ne reste pas cliquable pour rien.
 
 use super::*;
 use penelope_executor::jobs;
@@ -61,16 +62,20 @@ pub(super) async fn await_owner(
         "sous-agent en attente d'accord"
     );
     loop {
+        let asked = s.approvals.get(w.approval_id).await.ok().flatten();
+        let pending = asked
+            .as_ref()
+            .is_some_and(|a| a.state == penelope_hitl::ApprovalState::Pending);
         if cancel.is_cancelled() {
+            // Plus personne n'attend cette décision : la carte est retirée tout de suite,
+            // elle ne reste pas cliquable pour rien (#464).
+            if let Some(a) = asked.filter(|_| pending) {
+                let messenger = d.workflows.ports.messenger.get();
+                let why = "le sous-agent qui la posait a été arrêté";
+                let _ = crate::withdrawn::withdraw(s, messenger.as_deref(), &a, why).await;
+            }
             return Err("sous-agent interrompu pendant l'attente de ton accord".into());
         }
-        let pending = s
-            .approvals
-            .get(w.approval_id)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|a| a.state == penelope_hitl::ApprovalState::Pending);
         if !pending {
             break;
         }

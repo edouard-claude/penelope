@@ -519,6 +519,27 @@ impl ApprovalStore {
             .await?)
     }
 
+    /// Retire une demande dont le demandeur a disparu (#464) : `expired`, avec la raison.
+    /// Faux : elle n'était plus en attente.
+    pub async fn withdraw(&self, id: &str, reason: &str) -> Result<bool> {
+        let (id, reason) = (id.to_string(), reason.to_string());
+        let (now, now_ms) = (self.clock.now_rfc3339(), self.clock.now_ms());
+        Ok(self
+            .store
+            .write(move |tx| {
+                let n = tx.execute(
+                    "UPDATE approval_requests SET state='expired', reason=?2, decided_at=?3
+                     WHERE id=?1 AND state='pending'",
+                    params![id, reason, now],
+                )?;
+                if n > 0 {
+                    samples::settle_in(tx, &id, "expired", Some("retrait"), &now, now_ms)?;
+                }
+                Ok(n > 0)
+            })
+            .await?)
+    }
+
     /// Les demandes déjà expirées pour le même tour d'origine que `a`, `a` exclue : un tour
     /// qui a déjà repris une fois sur une expiration ne reprend plus (#399).
     pub async fn earlier_expiries(&self, a: &ApprovalRequest) -> Result<usize> {

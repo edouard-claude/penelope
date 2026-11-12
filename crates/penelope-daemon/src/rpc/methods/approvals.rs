@@ -85,10 +85,18 @@ impl Rpc {
         decision: &penelope_hitl::Decision,
     ) -> anyhow::Result<Value> {
         let s = self.services();
-        if s.approvals.get(id).await?.is_none() {
+        let Some(asked) = s.approvals.get(id).await? else {
             anyhow::bail!("demande {id} introuvable");
+        };
+        // Son demandeur a disparu (#464) : rien à trancher, et on le dit.
+        let messenger = self.daemon.slots.messenger();
+        let gone = penelope_orchestrator::withdrawn::nothing_to_decide;
+        if asked.state == penelope_hitl::ApprovalState::Pending
+            && let Some(why) = gone(s, messenger.as_deref(), &asked).await?
+        {
+            anyhow::bail!("demande {id} déjà tranchée : retirée, {why}");
         }
-        let before = s.approvals.get(id).await?.map(|a| a.state);
+        let before = Some(asked.state);
         crate::agent::decide_approval(s, id, decision).await?;
         let a = s
             .approvals

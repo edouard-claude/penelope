@@ -362,6 +362,98 @@ async fn a_restart_during_a_job_fails_it_and_says_so_without_a_card() {
 }
 
 /// Processus vivants dont la ligne de commande contient `pattern`.
+/// Un job de sous-agent en attente d'accord, tel que `await_owner` le laisse : sa demande
+/// en attente, la clé qui les lie, le job `input_required`. Rend (demande, job).
+async fn waiting_card(d: &Daemon, sid: &str) -> (String, String) {
+    use penelope_executor::jobs::{NewJob, child_approval_key};
+    let s = &d.services;
+    let job = NewJob {
+        session_id: sid.to_string(),
+        run_id: None,
+        turn_id: None,
+        call_id: None,
+        tool: "sub_agent_spawn".into(),
+        request: json!({"prompt": "range le dossier"}),
+        effect_id: None,
+    };
+    let job = store(s).create(job).await.unwrap().id;
+    let a = s
+        .approvals
+        .create(
+            penelope_hitl::ApprovalKind::ToolCall,
+            "fs_write",
+            penelope_kernel::risk::RiskClass::Write,
+            json!({}),
+            vec!["Autoriser".into(), "Refuser".into()],
+            Some(sid),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let key = child_approval_key(a.id.as_str());
+    s.kv_set(&key, &job).await.unwrap();
+    store(s).set_waiting(&job, true).await.unwrap();
+    (a.id.to_string(), job)
+}
+
+async fn approval(d: &Daemon, id: &str) -> penelope_hitl::ApprovalRequest {
+    d.services.approvals.get(id).await.unwrap().unwrap()
+}
+
+/// #464 : un redémarrage pendant qu'un sous-agent d'arrière-plan attend un accord. Sa
+/// carte retenait le réveil du parent jusqu'à son échéance, un jour plus tard, et un clic
+/// répondait « approuvé » sans suite. La demande est retirée avec le job, et le parent
+/// apprend tout de suite que son sous-agent est perdu.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_during_a_card_wait_withdraws_the_card_and_wakes_the_parent() {
+    use penelope_hitl::ApprovalState;
+    let dir = tempfile::tempdir().unwrap();
+    let (d, _p) = daemon_at(dir.path()).await;
+    let sid = session(&d).await;
+    let (id, job) = waiting_card(&d, &sid).await;
+    let key = penelope_executor::jobs::child_approval_key(&id);
+    // Le sous-agent attend : sa carte reste, rien n'est livré.
+    let due = penelope_daemon::tool_jobs::deliver_due;
+    assert_eq!(due(&d).await.unwrap(), 0);
+    assert_eq!(approval(&d, &id).await.state, ApprovalState::Pending);
+
+    let (after, _p) = daemon_at(dir.path()).await;
+    assert_eq!(after.recover().await.unwrap().tool_jobs_lost, 1);
+    assert_eq!(due(&after).await.unwrap(), 1, "le parent est réveillé");
+    let s = &after.services;
+    let gone = approval(&after, &id).await;
+    assert_eq!(gone.state, ApprovalState::Expired);
+    assert!(gone.reason.unwrap().contains(&job));
+    assert!(s.kv_get(&key).await.unwrap().is_none());
+    let nudge = s.turns.claim("test").await.unwrap().unwrap();
+    assert_eq!((nudge.kind, nudge.session_id), (TurnKind::Nudge, sid));
+    assert!(nudge.payload["text"].as_str().unwrap().contains(&job));
+    assert_eq!(due(&after).await.unwrap(), 0, "une seule fois");
+}
+
+/// #464 : approuver par la ligne de commande une demande dont le job vient d'être annulé.
+/// Avant, la réponse était un succès sans suite ; c'est un refus qui dit pourquoi, et la
+/// demande est retirée.
+#[tokio::test]
+async fn approving_the_card_of_a_cancelled_job_is_refused_in_plain_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, _p) = daemon_at(dir.path()).await;
+    let sid = session(&d).await;
+    let (id, job) = waiting_card(&d, &sid).await;
+    store(&d.services)
+        .finish(&job, TaskState::Cancelled, None)
+        .await
+        .unwrap();
+    let rpc = penelope_daemon::rpc::Rpc::new(d.core.clone());
+    let refused = rpc.call("approve", json!({"id": id})).await.unwrap_err();
+    let said = refused.to_string();
+    assert!(said.contains("retirée") && said.contains(&job), "{said}");
+    let after = approval(&d, &id).await;
+    assert_eq!(after.state, penelope_hitl::ApprovalState::Expired);
+    assert!(d.services.turns.claim("test").await.unwrap().is_none());
+}
+
 fn alive(pattern: &str) -> usize {
     std::process::Command::new("pgrep")
         .args(["-f", pattern])
