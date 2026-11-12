@@ -159,6 +159,8 @@ pub struct McpSupervisor {
     max_failures: u32,
     /// Changements d'outils à dire au propriétaire (#92).
     notices: std::sync::Mutex<Vec<String>>,
+    /// `mcp.d` a été lu au moins une fois (#466).
+    loaded: std::sync::atomic::AtomicBool,
 }
 
 impl Info {

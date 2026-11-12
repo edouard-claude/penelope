@@ -379,3 +379,52 @@ async fn a_server_from_a_shared_file_is_edited_by_hand() {
     let err = sup.edit("x", &json!({"timeout": "60s"})).await.unwrap_err();
     assert!(err.contains("plusieurs"), "{err}");
 }
+
+/// #466, le test de l'issue : le serveur d'autorisation refuse le jeton d'un serveur. Le
+/// propriétaire reçoit un seul message pour dix passes, et la reconnexion efface
+/// l'alerte. Avant le premier chargement de `mcp.d`, le superviseur le dit : sa liste
+/// vide ne veut pas encore dire « aucun serveur ».
+#[tokio::test]
+async fn a_revoked_token_is_told_once_and_cleared_by_reconnecting() {
+    use penelope_app::mcp_watch;
+    use penelope_app::ports::McpAdmin;
+    let (_d, s, clock, fake, sup) = setup().await;
+    // L'horloge de test démarre à 04:00 chez le propriétaire, dans ses heures calmes :
+    // midi, pour que l'alerte parte au lieu d'attendre.
+    clock.advance_hours(8);
+    fake.fail_open.lock().unwrap().insert(
+        "agenda".into(),
+        "autorisation requise : le renouvellement du jeton de `agenda` est refusé (HTTP 400) ; \
+         `penelope mcp auth agenda`, ou `/mcp auth agenda` dans la conversation"
+            .into(),
+    );
+    declare(&sup, "agenda", "");
+    assert!(!McpAdmin::loaded(&*sup));
+    sup.reload().await;
+    assert!(McpAdmin::loaded(&*sup));
+
+    let rec = penelope_app::testing::RecordingMessenger::new();
+    for _ in 0..10 {
+        mcp_watch::tick(&s, &sup.statuses().await, Some(rec.as_ref())).await;
+        clock.advance_secs(60);
+    }
+    let texts = rec.texts();
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].contains(
+            "`agenda` : autorisation requise. Cause : le renouvellement du jeton de `agenda` \
+             est refusé (HTTP 400). Pour le rebrancher : `/mcp auth agenda`"
+        ),
+        "{}",
+        texts[0]
+    );
+    assert!(mcp_watch::digest_line(&s).await.is_some());
+
+    fake.fail_open.lock().unwrap().clear();
+    fake.serve("agenda", server(two_tools()));
+    sup.restart("agenda").await.unwrap();
+    mcp_watch::tick(&s, &sup.statuses().await, Some(rec.as_ref())).await;
+    assert!(mcp_watch::standing(&s).await.is_empty());
+    assert_eq!(mcp_watch::digest_line(&s).await, None);
+    assert_eq!(rec.texts().len(), 1);
+}

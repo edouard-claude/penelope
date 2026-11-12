@@ -57,7 +57,8 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
     }
 
     if let Some(env) = crate::environment::cached(s).await {
-        out.extend(environment_checks(&env));
+        let blocked = penelope_app::mcp_watch::standing(s).await;
+        out.extend(environment_checks(&env, &blocked));
     }
 
     // Une forge installée mais déconnectée : le réflexe n'est pas émis, le modèle
@@ -79,7 +80,12 @@ pub async fn machine_checks(s: &Services) -> Vec<DoctorCheck> {
 }
 
 /// #260 : la carte de l'environnement, et ce qui a changé depuis la passe précédente.
-pub(super) fn environment_checks(env: &crate::environment::Environment) -> Vec<DoctorCheck> {
+/// `blocked` : les serveurs MCP déclarés mais hors d'usage (#466). Un serveur dont le jeton
+/// est révoqué n'est pas « branché ».
+pub(super) fn environment_checks(
+    env: &crate::environment::Environment,
+    blocked: &std::collections::BTreeMap<String, penelope_app::mcp_watch::Blocked>,
+) -> Vec<DoctorCheck> {
     let mut by_source: std::collections::BTreeMap<&str, usize> = Default::default();
     for t in &env.tools {
         *by_source.entry(t.source.as_str()).or_default() += 1;
@@ -93,10 +99,13 @@ pub(super) fn environment_checks(env: &crate::environment::Environment) -> Vec<D
         .capabilities
         .iter()
         .map(|c| {
+            let down =
+                c.id.strip_prefix("mcp.d/")
+                    .and_then(|name| blocked.get(name));
             let state = match (c.kind.as_str(), c.reachable, c.declared) {
                 ("inference", Some(true), _) => format!("{} modèle(s)", c.models.len()),
                 ("inference", Some(false), _) => "ne répond pas".into(),
-                (_, _, true) => "branché".into(),
+                (_, _, true) => down.map_or("branché", |b| b.label()).into(),
                 _ => "non branché".into(),
             };
             format!("{} {} ({state})", c.kind, c.name)

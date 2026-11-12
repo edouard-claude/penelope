@@ -127,7 +127,7 @@ fn doctor_says_what_changed_on_the_machine() {
         checked_at: "2026-09-29T10:00:00Z".into(),
         ..Default::default()
     };
-    let checks = environment_checks(&env);
+    let checks = environment_checks(&env, &Default::default());
     assert_eq!(checks[0].id, "machine.environment");
     assert!(
         checks[0].detail.contains("1 outil(s) (brew 1)"),
@@ -152,7 +152,7 @@ fn doctor_says_what_changed_on_the_machine() {
         disappeared: vec!["application Numbers".into()],
         updated: vec!["gh (brew) : 2.62.0 → 2.63.0".into()],
     });
-    let now = &environment_checks(&env)[1];
+    let now = &environment_checks(&env, &Default::default())[1];
     assert_eq!(
         now.detail,
         "depuis la passe du 2026-09-29T09:00:00Z : apparus : ollama (brew) ; disparus : \
@@ -160,12 +160,49 @@ fn doctor_says_what_changed_on_the_machine() {
     );
 
     env.checked_at = "2026-09-29T11:00:00Z".into();
-    let later = &environment_checks(&env)[1];
+    let later = &environment_checks(&env, &Default::default())[1];
     assert!(
         later
             .detail
             .starts_with("rien depuis la passe du 2026-09-29T10:00:00Z"),
         "{}",
         later.detail
+    );
+}
+
+/// #466 : un serveur MCP déclaré dont le jeton est révoqué n'est pas « branché ». La carte
+/// dit son état, et celui d'un voisin en panne.
+#[test]
+fn a_declared_mcp_server_out_of_use_is_not_shown_as_plugged() {
+    use crate::environment::{Capability, Environment};
+    use penelope_app::mcp_watch::Blocked;
+    let server = |name: &str| Capability {
+        kind: "mcp".into(),
+        id: format!("mcp.d/{name}"),
+        name: name.into(),
+        origin: "configuration".into(),
+        declared: true,
+        ..Default::default()
+    };
+    let env = Environment {
+        capabilities: vec![server("agenda"), server("notes"), server("fichiers")],
+        ..Default::default()
+    };
+    let down = |state: &str| Blocked {
+        state: state.into(),
+        ..Default::default()
+    };
+    let blocked = [
+        ("agenda".to_string(), down("auth_required")),
+        ("notes".to_string(), down("failed")),
+    ]
+    .into();
+    let detail = &environment_checks(&env, &blocked)[0].detail;
+    assert!(
+        detail.ends_with(
+            "capacités : mcp agenda (autorisation requise), mcp notes (en panne), \
+             mcp fichiers (branché)"
+        ),
+        "{detail}"
     );
 }

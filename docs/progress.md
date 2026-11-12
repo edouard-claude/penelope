@@ -12,6 +12,80 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.120
+
+**MCP : un serveur hors d'usage est dit une fois, puis rappelé par le digest (#466).**
+
+Sur une instance, deux serveurs d'agenda étaient en `auth_required` depuis six jours :
+jeton révoqué, vingt appels en échec chacun dans la semaine. Les planifications qui
+lisaient l'agenda tournaient sans lui.
+
+Le constat de l'issue était en partie faux, et la relecture des journaux le corrige :
+
+- « Aucun message au propriétaire » : il y en avait un par serveur et par jour. Le daemon
+  poussait un lien d'autorisation à la fin des heures calmes. Ce lien vaut dix minutes :
+  il était mort quand il était lu, et le message ne disait ni la cause ni depuis quand.
+  Six jours de suite, deux liens morts chaque matin.
+- « `doctor` les dit branchés » : son contrôle `mcp.<nom>` les montrait bien en échec.
+  C'est la carte de l'environnement, deux écrans plus haut, qui écrivait « branché » pour
+  tout serveur déclaré ; et le remède proposé était `penelope mcp restart`, qui ne rend
+  pas un jeton.
+- « Les tours planifiés concluent sans le dire » : 25 tours sur 28 disaient l'échec dans
+  leur réponse. Rien à corriger là (voir « Pas fait ici »).
+- Une panne durable (`failed`), elle, ne prévenait vraiment personne.
+
+Ce qui change :
+
+- **Une alerte, à l'entrée dans l'état.** `penelope_app::mcp_watch` tient dans `kv`
+  (`mcp.blocked`) les serveurs en `auth_required` ou en `failed`. La passe de maintenance
+  lui donne les états ; ce qui n'a pas encore été dit part en un message : le serveur,
+  ses outils perdus, la cause (sans le remède que l'erreur recopie), la commande
+  (`/mcp auth <nom>`, ou `penelope mcp logs` puis `restart` pour une panne) et le lien
+  vers l'écran des serveurs quand le canal en a un. Plusieurs serveurs tombés ensemble
+  font un seul message. Pendant les heures calmes, il attend dans la file.
+- **Plus de rappel tant que l'état ne change pas.** Ni à chaque appel raté, ni à chaque
+  passe, ni au redémarrage du daemon : `configured` et `connecting` ne ferment pas
+  l'entrée, parce qu'un daemon qui redémarre ne sait rien du jeton. Un serveur qui
+  retombe dans le même état moins d'un jour après son alerte ne sonne pas non plus : un
+  serveur qui clignote irait sinon de l'alerte au silence toute la journée.
+- **Le digest le rappelle** : « Serveurs MCP : ❌ `agenda` (autorisation requise depuis
+  6 j, `/mcp auth agenda`) », tant que ça dure.
+- **Le lien quotidien est retiré.** `/mcp auth <nom>` en donne un frais quand le
+  propriétaire est là pour le suivre.
+- **L'entrée se ferme** quand le serveur répond de nouveau (y compris un serveur
+  paresseux revenu au repos entre deux passes : son dernier succès le dit), quand il est
+  autorisé (`mcp auth` la ferme tout de suite), désactivé ou retiré de `mcp.d`. Une
+  révocation plus tard est une nouvelle alerte.
+- **`doctor`.** La carte de l'environnement écrit « autorisation requise » ou « en
+  panne » au lieu de « branché » ; le contrôle `mcp.<nom>` d'un serveur en
+  `auth_required` propose `penelope mcp auth <nom>`.
+- **Le premier chargement.** Le superviseur MCP dit s'il a lu `mcp.d` (`McpAdmin::loaded`) :
+  avant, sa liste est vide sans qu'aucun serveur n'ait été retiré, et la passe aurait
+  fermé toutes les entrées à chaque démarrage.
+
+Pourquoi le jeton mourait : les deux autorisations précédentes avaient tenu sept jours
+chacune. C'est la durée de vie d'un jeton de rafraîchissement quand le client OAuth est
+resté « en test » chez le fournisseur. `docs/mcp.md` l'écrit, avec le remède, qui est
+chez le fournisseur.
+
+Tests : `mcp_watch::tests` (dix passes, un message ; redémarrage ; reconnexion puis
+révocation une semaine après ; rechute du jour ; deux serveurs, un message ; heures
+calmes ; sans canal ; digest ; retrait, désactivation, serveur paresseux, autorisation),
+`a_revoked_token_is_told_once_and_cleared_by_reconnecting` (le vrai
+superviseur, un connecteur qui refuse le jeton), `the_morning_digest_reminds_of_mcp_servers_out_of_use`,
+`a_declared_mcp_server_out_of_use_is_not_shown_as_plugged`. Le contrat C-6.17, « aucun
+test » depuis la 0.3.0, en a.
+
+Pas fait ici :
+
+- Le point de l'issue sur les tours planifiés : ils disent déjà l'échec d'un outil dans
+  leur réponse. Les trois qui ne le disaient pas avaient une autre source pour la même
+  donnée.
+- Un message « le serveur est revenu » : l'autorisation le dit déjà (« autorisé : N
+  outils »), et une panne réparée par `mcp restart` a son compte rendu sous les yeux.
+- À l'installation, un serveur déjà hors d'usage reçoit son alerte à la première passe :
+  c'est voulu, c'est la dernière.
+
 ### 1.0.119
 
 **Sauvegarde : le dossier de travail d'une sauvegarde interrompue ne reste plus sur le disque (#465).**

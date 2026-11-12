@@ -31,6 +31,7 @@ pub mod jobs;
 pub mod journal;
 pub mod judge;
 pub mod machine;
+pub mod mcp_watch;
 pub mod media;
 pub mod mission;
 pub mod model_judge;

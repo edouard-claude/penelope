@@ -763,7 +763,8 @@ Code : `crates/penelope-store/src/migrations.rs` (`MIGRATIONS`), `lib.rs` (`Stor
   `codex.oauth`, `codex.quota`, `codex.refresh`, `codex.installation_id`, `dream.lock`,
   `dream.failed_nights`, `dream.failed_reason`, `machine.inventory`, `retention.last`,
   `backup.last`, `backup.cron.last`, `upgrade.health`, `mcp.oauth.pending.<state>`,
-  `mcp.oauth.client.<issuer>`, `mcp.oauth.notified.<nom>`, `memory.usage_since`.
+  `mcp.oauth.client.<issuer>`, `mcp.blocked` (#466 ; `mcp.oauth.notified.<nom>` avant),
+  `memory.usage_since`.
 - Vecteurs : `f32` little-endian en BLOB, cosinus en Rust, 0.0 si dimensions différentes
   (décision 0002 ; `roundtrip`, `cosine_bounds`, `mismatched_dimensions_are_not_similar`).
 - SQLite embarqué ≥ 3.50 (`the_bundled_sqlite_is_recent_enough`, #158).
@@ -1089,7 +1090,7 @@ dans le fichier de la colonne « code ».
 | C-6.14 | `mcp test [nom\|--file]` : connexion, négociation, liste des outils, appel d'un outil en lecture sans argument requis (`list`, `get`, `whoami` d'abord) ; faute de protocole = échec, refus métier = note ; `-32020` en conversation passe le serveur en `degraded` et le dit au modèle ; `mcp logs` rend stderr puis la fin du processus (sortie vide dite) | #114, #126 | `daemon/mcp.rs` | `mcp_test_really_calls_a_read_tool` (mcp.rs:2161) ; `degraded` sur `-32020` et `mcp logs` : partiel |
 | C-6.15 | Tool poisoning : descriptions et schémas rendus encadrés comme non fiables avec l'alerte du détecteur, description retirée d'un schéma `eager` suspect, `mcp_tool_suspicious` journalisé, carte d'approbation qui signale un outil suspect | #92 | `mcp/registry.rs` (`describe`, `flags`), `daemon/mcp.rs` | `fingerprints_and_exposed_descriptions` (registry.rs:1061), `poisoned_or_changed_tools_are_flagged_and_lose_their_rules` (mcp.rs) |
 | C-6.16 | Administration : `mcp.*` en RPC, `penelope mcp …`, `/mcp` (détail, redémarrer, tester, journal, activer, autoriser), `doctor` nomme les pannes et corrections, `self_status` section `mcp`, une ligne par serveur dans le prompt | 0.2.4 | `daemon/rpc.rs`, `daemon/telegram/screens.rs`, `mcp/lib.rs` (`server_summary_line`) | `mcp_servers_are_administered_over_rpc` (rpc.rs), `mcp_servers_are_visible_and_restartable_from_telegram`, `an_mcp_server_is_restarted_from_its_menu` (telegram.rs), `doctor_names_what_is_broken_and_how_to_fix_it` (mcp.rs), `summary_line_has_no_schema` (mcp/lib.rs) |
-| C-6.17 | Rappel quotidien des serveurs en attente d'autorisation (`mcp.oauth.notified.<nom>`) | 0.3.0 | `daemon/mcp_auth.rs`, `daemon/supervisor.rs` | aucun test |
+| C-6.17 | Serveur MCP hors d'usage (`auth_required`, `failed`) : une alerte à l'entrée dans l'état, groupée, retenue aux heures calmes ; rappel par le digest tant que ça dure ; rien au redémarrage ni à la rechute du jour (`mcp.blocked`). Remplace depuis #466 le lien d'autorisation poussé chaque jour (`mcp.oauth.notified.<nom>`, 0.3.0) | 0.3.0, #466 | `app/mcp_watch.rs`, `daemon/supervisor.rs` | `ten_passes_over_a_revoked_token_tell_the_owner_once`, `a_daemon_restart_does_not_tell_again`, `a_revoked_token_is_told_once_and_cleared_by_reconnecting`, `the_morning_digest_reminds_of_mcp_servers_out_of_use` |
 | C-6.18 | Erreurs MCP classées (réessayables ou non), codes JSON-RPC mappés, portées manquantes exposées sur 401 | §8 | `mcp/error.rs` | `retry_classification`, `unauthorized_exposes_missing_scopes`, `rpc_codes_are_mapped` (error.rs) |
 | C-6.19 | Client pré-enregistré Slack documenté (manifeste, `callback_host = localhost`, portées du manifeste), limites : `Mcp-Param-*` non couverts | #159 | `docs/mcp.md` | partiel : `the_callback_host_is_configurable`, `a_server_without_registration_names_the_command_to_run` (mcp_auth.rs) |
 
@@ -1373,7 +1374,7 @@ et le test qui la fixe existe déjà.
 
 | # | Capacité | Filet à écrire |
 |---|---|---|
-| C-6.17 | Rappel quotidien des serveurs MCP en attente d'autorisation OAuth (`mcp.oauth.notified.<nom>`) | Une passe d'entretien avec horloge fictive : un serveur `auth_required` est rappelé une fois par jour au foyer, pas deux fois le même jour, plus jamais après autorisation. |
+| C-6.17 | Alerte unique d'un serveur MCP hors d'usage et rappel au digest (`mcp.blocked`, #466) | Couvert depuis #466 : dix passes sur un serveur `auth_required` donnent un message, aucun après un redémarrage, plus aucun après autorisation ; le digest porte la ligne tant que ça dure. |
 | C-7.17 | `model.route_test` (simulation du routage d'un message) | Appel RPC avec un message simple et un complexe : alias rendu, raison, sans appel réel au modèle. |
 | C-10.8 | Tir manqué d'une planification pendant un arrêt rattrapé une fois au redémarrage | Planification `cron` due pendant l'arrêt, redémarrage : un seul tir, `runs` incrémenté une fois, `next_run` recalculé. |
 
@@ -1416,7 +1417,7 @@ et le test qui la fixe existe déjà.
 | C-11.10 | Notification `tail` : réception des `StreamEvent` (fragments, journaux) par un client RPC abonné. |
 | C-12.11 | Refus d'un dépôt de sauvegarde public (vérification `gh`). |
 | C-12.12 | `penelope restore <fichier>` (base actuelle mise de côté) et `restore-all --dry-run` (liste sans écrire). |
-| C-12.17 | Autocommit périodique du vault par la maintenance, inventaire machine horaire, rappel OAuth quotidien (voir C-6.17). |
+| C-12.17 | Autocommit périodique du vault par la maintenance, inventaire machine horaire, suivi des serveurs MCP hors d'usage (voir C-6.17). |
 | C-12.18 | Jobs CI `livraison` (tag posé une fois, jamais déplacé, `workflow_dispatch` de `release.yml`) et `scripts/bump.sh` (refus sur arbre sale, version déjà posée, section manquante). |
 | C-12.23 | `chat.send` synchrone (réponse finale dans le résultat RPC). |
 | C-13.12 | Refus d'un dépôt public à `backup --push` (même filet que C-12.11). |

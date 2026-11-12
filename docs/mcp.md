@@ -415,6 +415,17 @@ renouvelé, la connexion rouverte et l'appel rejoué une fois. Un renouvellement
 le serveur d'autorisation (jeton révoqué ou déjà consommé) range le serveur en
 « autorisation requise » et dit de refaire `penelope mcp auth <serveur>`.
 
+**Un jeton qui meurt tous les sept jours.** Si un serveur repasse en « autorisation
+requise » une semaine, jour pour jour, après chaque `mcp auth`, avec une erreur du genre
+« Token has been expired or revoked », la cause n'est ni Pénélope ni le serveur MCP : le
+client OAuth déclaré chez le fournisseur est resté en mode test. Google, par exemple,
+révoque au bout de sept jours les jetons de rafraîchissement d'une application dont
+l'écran de consentement est « En test » et le type d'utilisateur « Externe ». Le remède
+est chez le fournisseur : passer l'application « En production » (Google Cloud, « Écran
+de consentement OAuth », « Publier l'application » ; aucune validation n'est demandée
+pour un usage personnel sans portée sensible vérifiée), puis refaire `penelope mcp auth
+<serveur>` une dernière fois.
+
 Les portées demandées viennent, dans l'ordre : de `scopes` dans la déclaration du serveur,
 des portées manquantes annoncées par le défi 401, et à défaut de `scopes_supported` de la
 ressource protégée (RFC 9728). Ce dernier recours évite une demande sans portée, que
@@ -563,6 +574,20 @@ Un jeton rendu sous `authed_user` (réponse de `oauth.v2.access`) est lu là.
   retarde pas l'entretien des autres.
 - Backoff exponentiel borné après un échec, avec un plafond de tentatives : un serveur
   cassé ne mange pas la machine.
+- Un serveur hors d'usage se sait (1.0.120, #466). À son passage en `auth_required`
+  (jeton révoqué, autorisation jamais donnée) ou en `failed` (plafond de tentatives
+  atteint), le propriétaire reçoit **un** message : le serveur, le nombre d'outils perdus,
+  la cause, et la commande qui le rebranche (`/mcp auth <nom>` ou `penelope mcp restart
+  <nom>`). Plusieurs serveurs tombés ensemble font un seul message ; pendant les heures
+  calmes il attend la fin de la plage. Ensuite plus rien tant que l'état ne change pas :
+  ni à chaque appel raté, ni au redémarrage du daemon. Le digest du matin garde une ligne
+  « Serveurs MCP : ❌ … » tant que ça dure, et `penelope doctor` écrit l'état du serveur
+  dans la carte de l'environnement au lieu de « branché ». Un serveur qui retombe dans le
+  même état moins d'un jour après son alerte ne sonne pas une seconde fois : le digest le
+  dit. L'entrée se ferme quand le serveur répond de nouveau, quand il est autorisé,
+  désactivé ou retiré de `mcp.d`. Jusqu'à la 1.0.119, un serveur en attente
+  d'autorisation recevait chaque jour un lien valable dix minutes, mort quand il était
+  lu, et une panne ne prévenait personne.
 - Éviction LRU au-delà de `mcp.max_processes` (24 par défaut), sur le dernier usage ; un
   serveur qui a un appel en cours n'est pas évincé.
 - Quantiles de latence et taux d'erreur par serveur, visibles dans `penelope doctor`.
@@ -639,7 +664,8 @@ Pas encore couvert : les en-têtes `Mcp-Param-*` qu'un serveur peut exiger par
 Le daemon démarre le superviseur et sert toutes les méthodes `mcp.*` : `penelope mcp
 list|show|add|edit|rm|enable|disable|restart|test|auth|logs` en ligne de commande, `/mcp`
 sur Telegram. Un serveur qui demande une autorisation OAuth passe en
-`auth_required` ; le lien arrive sur Telegram (`/mcp auth <nom>` le redemande) et
+`auth_required` : le propriétaire en est prévenu une fois (voir « Supervision »),
+`/mcp auth <nom>` donne le lien, valable dix minutes, et
 l'adresse de retour se colle dans la conversation, avec ou sans `http://`. Le détail
 d'installation est dans [install-headless.md](install-headless.md), section « Serveurs
 MCP ».

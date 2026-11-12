@@ -240,8 +240,15 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
         .lock()
         .unwrap()
         .insert("panne".into(), "exécutable introuvable".into());
-    declare(&sup, "ok", "");
-    declare(&sup, "panne", "");
+    // #466 : un jeton refusé. Relancer le serveur ne lui en rend pas un.
+    let refused = "autorisation requise : jeton révoqué".to_string();
+    fake.fail_open
+        .lock()
+        .unwrap()
+        .insert("jeton".into(), refused);
+    for name in ["ok", "panne", "jeton"] {
+        declare(&sup, name, "");
+    }
     declare(
         &sup,
         "secret",
@@ -260,6 +267,9 @@ async fn doctor_names_what_is_broken_and_how_to_fix_it() {
         "{panne:?}"
     );
     assert!(panne.fix.unwrap().contains("penelope mcp logs panne"));
+    let jeton = by_id("mcp.jeton");
+    assert!(jeton.detail.starts_with("auth_required : "), "{jeton:?}");
+    assert_eq!(jeton.fix.as_deref(), Some("penelope mcp auth jeton"));
     let secret = by_id("mcp.secret");
     assert!(
         !secret.ok && secret.detail.contains("forge_token"),

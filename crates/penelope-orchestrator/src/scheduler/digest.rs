@@ -59,6 +59,8 @@ pub async fn digest_inputs_with(s: &Services, mcp: Option<Arc<dyn McpAdmin>>) ->
             .into_iter()
             // La sauvegarde de la nuit, réussie ou non (#330).
             .chain(penelope_app::backup_state::digest_line(s).await)
+            // Les serveurs MCP hors d'usage, tant que ça dure (#466).
+            .chain(penelope_app::mcp_watch::digest_line(s).await)
             .collect(),
         due_today: today.into_iter().map(|(_, line)| line).collect(),
         agenda_error,
