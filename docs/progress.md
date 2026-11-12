@@ -12,6 +12,90 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.121
+
+**Planifications : une exécution qui n'a rien à dire ne dit rien (#467).**
+
+L'issue relevait des « réponses vides du modèle » sur `codex:gpt-6.1-sol` (4 tokens
+produits, fin `Stop`), cause inconnue, et soupçonnait le décodeur ou un seuil vers 80 k
+tokens. La relecture de la base de l'instance donne la cause, et ce n'est ni l'un ni
+l'autre :
+
+- 54 réponses vides en huit jours, 6 à 8 par jour (l'issue en comptait 43). **Toutes**
+  dans la session d'une planification, aucune dans une conversation.
+- 51 sur 54 viennent de deux planifications dont le prompt demande de ne rien envoyer
+  sans nouveauté, et dont le livrable déclaré est un fichier d'état. 52 sur 54 arrivent
+  après quatre résultats d'outils ou plus : le modèle a regardé, n'a rien trouvé, et s'est
+  tu, comme demandé.
+- La taille du prompt n'y est pour rien : de 14 k à 165 k tokens, médiane 59 k ; 8 cas
+  sur 54 seulement dans la plage de 80 à 98 k annoncée.
+
+Le défaut était donc de notre côté. La boucle prenait ce silence pour un raté, rejouait
+le prompt avec « réponds maintenant, en texte », et le « rien de neuf » obtenu de force
+partait chez le propriétaire, environ six fois par jour, au prix d'un second appel.
+« La relance réussit, donc le propriétaire ne voit rien », écrivait l'issue : il voyait
+justement le message que son prompt interdisait.
+
+Ce qui change :
+
+- **Un tour que personne n'attend peut finir sans message.** Dans la session d'une
+  planification, une réponse sans texte ni appel d'outil, finie normalement (`Stop`),
+  **après au moins un outil exécuté dans le tour**, est la fin du tour
+  (`AgentLoop::may_end_silent`, `penelope-agent/src/turn.rs`). Pas de relance, pas de
+  second appel ; la réponse vide n'entre pas au transcript.
+- **Rien n'est envoyé.** Le runner ne livre pas une réponse vide d'exécution planifiée
+  (le canal écrivait « (réponse vide) » pour un texte vide). L'exécution compte (`runs`),
+  sans erreur.
+- **Qui garde la relance.** Une conversation, relance d'une tâche de fond comprise :
+  quelqu'un y attend. Une planification qui déclare `"livrable": "message"` : elle a
+  promis d'écrire (`scheduler::may_end_silent`). Une réponse vide au premier appel, sans
+  un seul outil : se taire sans avoir regardé n'est pas une décision. Une réponse coupée
+  par son plafond ou mangée par le raisonnement : ce n'est pas un silence.
+- **Les livrables `fichier:` et `run` sont vérifiés comme avant**, message ou non.
+- **L'événement `turn.empty_answer`** porte `silent` (vrai pour une fin sans message) et
+  `prompt_tokens`, que l'issue demandait.
+- **Flux `chat/completions` coupé sans marque de fin** (le point « à confirmer » de
+  l'issue, confirmé) : une connexion fermée sans `finish_reason` ni `[DONE]` était prise
+  pour une fin normale, et ce qui était arrivé jusque-là pour la réponse. C'est
+  maintenant une erreur rejouable (`StreamAccumulator::on_eof`) : flux coupé avant tout
+  texte, même modèle puis repli ; après du texte, échec dit. Un `finish_reason` sans
+  `[DONE]` reste une fin propre.
+- **Codex : ce qu'une réponse vide a reçu.** L'accumulateur du dialecte Responses compte
+  les types d'événements du flux (et le type de leur item, 32 au plus), sans aucun
+  contenu ; une réponse terminée sans texte ni appel les écrit au journal avec son
+  identifiant et son statut. Si un type d'événement porteur de texte était un jour
+  ignoré, il s'y lirait.
+- **La description de `schedule_create`** dit au modèle qu'un prompt qui ne doit écrire
+  qu'en cas de nouveauté ne déclare pas le livrable `message`. Le guide a son
+  paragraphe (« Se taire quand il n'y a rien à dire »).
+
+Tests : `a_scheduled_run_with_nothing_to_say_sends_nothing` (de bout en bout : la
+planification tire, le modèle lit son état puis rend une réponse vide ; deux appels au
+modèle, rien au canal, `runs` à 1, pas d'erreur), `a_scheduled_run_with_news_still_delivers_it`,
+`a_schedule_that_owes_a_message_keeps_its_retry` (`penelope-daemon/tests/silent_schedule.rs`) ;
+`penelope-agent/src/tests/silent_end.rs` (fin sans message après le travail ; la
+conversation garde sa relance ; réponse vide au premier appel ; réponse coupée par son
+plafond) ; `scheduler::tests::silence` (livrable absent, fichier, run, message ;
+conversation) ; `a_stream_cut_without_an_end_mark_is_a_retryable_error_not_an_answer`,
+`a_finish_reason_without_done_is_a_clean_end` ;
+`a_completed_answer_without_text_keeps_the_kinds_of_events_it_received`. Scénarios
+`reponse-vide-relancee` et `outils-soi` régénérés (les deux champs de l'événement, la
+description de l'outil).
+
+Pas fait ici :
+
+- « Un flux enregistré d'une réponse vide réelle, rejoué en test » : les journaux ne
+  gardent pas les événements bruts d'un flux. Le test rejoue la forme relevée (des appels
+  d'outils, puis une réponse terminée sans texte).
+- Le compteur `doctor` des réponses vides par modèle : sans objet une fois la cause
+  retirée. `turn.empty_answer` reste au journal, avec `silent` pour les distinguer.
+- Abaisser le seuil de compaction pour ce modèle : la taille du prompt n'était pas en
+  cause.
+- Une sentinelle de silence à écrire par le modèle (« [rien] ») : ce serait apprendre un
+  mot à chaque prompt planifié, quand la réponse vide dit déjà la chose.
+- Les 3 réponses vides sur 54 venues de planifications à livrable `message` restent
+  relancées : c'est leur contrat.
+
 ### 1.0.120
 
 **MCP : un serveur hors d'usage est dit une fois, puis rappelé par le digest (#466).**

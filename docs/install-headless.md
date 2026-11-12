@@ -2382,6 +2382,25 @@ finale (à la mise en forme ou à l'en-tête près), celle-ci ne repart pas, et 
 réponse finale. Une skill planifiée met donc son digest dans sa réponse finale, et
 consomme son état « déjà vu » en fin de tour.
 
+**Se taire quand il n'y a rien à dire (1.0.121, #467).** Un prompt planifié peut demander
+de n'écrire qu'en cas de nouveauté (« n'envoie rien s'il n'y a rien de neuf »). Le modèle
+le fait en terminant sans texte, après avoir regardé : l'exécution s'arrête là, rien n'est
+envoyé, elle compte (`runs`), et l'événement `turn.empty_answer` la note (`silent: true`).
+Avant, cette réponse vide passait pour un raté : le prompt était rejoué avec « réponds
+maintenant, en texte », et le « rien de neuf » partait quand même. Trois garde-fous :
+
+- une réponse vide au premier appel, sans un seul outil exécuté, reste un raté et est
+  relancée une fois : se taire sans avoir regardé n'est pas une décision ;
+- une planification qui doit écrire à chaque exécution le déclare (`"livrable":
+  "message"`) : sa réponse vide est relancée comme avant, et l'exécution sans message est
+  signalée ;
+- un livrable `fichier:` ou `run` est vérifié comme avant, message ou non.
+
+Une veille qui ne doit parler qu'en cas de nouveauté ne déclare donc pas le livrable
+`message` : son fichier d'état (`fichier:`), ou rien. Dans une conversation, rien ne
+change : une réponse vide y est toujours relancée une fois, relance d'une tâche de fond
+comprise.
+
 **Ce qu'une exécution doit livrer.** Un prompt planifié peut déclarer son livrable dans sa
 cible : `"livrable": "message"` (une réponse non vide dans le chat d'origine, ou un
 `send_message`), `"fichier:veille/2026-09-18.md"` (écrit pendant l'exécution) ou `"run"`

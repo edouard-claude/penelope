@@ -7,6 +7,16 @@ use super::*;
 use penelope_app::attempts::{Attempt, AttemptCause};
 use penelope_kernel::journal::CallRecord;
 
+/// Un refus explicite du modèle est une réponse : on la montre telle quelle.
+fn show_refusal(response: &mut penelope_llm::types::ChatResponse) {
+    if response.message.tool_calls.is_empty()
+        && response.message.text().trim().is_empty()
+        && let Some(refusal) = response.refusal.clone().filter(|r| !r.trim().is_empty())
+    {
+        response.message.content = vec![penelope_llm::types::Content::text(refusal)];
+    }
+}
+
 impl AgentLoop {
     /// Les itérations d'un tour, entre ses bornes (`turn_log`).
     pub(super) async fn run_steps(
@@ -23,6 +33,8 @@ impl AgentLoop {
         let mut cost = 0.0f64;
         // Une réponse vide a droit à une seule relance, puis devient une erreur explicite.
         let mut empty_retry = false;
+        // Le tour a exécuté au moins un outil : condition d'une fin sans message (#467).
+        let mut worked = false;
         // Un hook `turn_end` qui retient la réponse obtient une seule relance (#384).
         let mut hook_retried = false;
         let mut hook_note: Option<String> = None;
@@ -79,7 +91,8 @@ impl AgentLoop {
                         cost_usd: cost,
                     });
                 }
-                Pending::Nothing | Pending::Resolved => {}
+                Pending::Resolved => worked = true,
+                Pending::Nothing => {}
             }
             // 2. Gardes, dans l'ordre fixe : arrêt demandé, budget vérifié **avant** chaque
             // appel et pas après coup, puis le tour déjà long, reprises après approbation
@@ -174,21 +187,17 @@ impl AgentLoop {
             }
 
             let mut response = response;
-            // Un refus explicite est une réponse : on la montre telle quelle.
-            if response.message.tool_calls.is_empty()
-                && response.message.text().trim().is_empty()
-                && let Some(refusal) = response.refusal.clone().filter(|r| !r.trim().is_empty())
-            {
-                response.message.content = vec![penelope_llm::types::Content::text(refusal)];
-            }
+            show_refusal(&mut response);
 
             // Ni texte ni appel d'outil : on ne livre jamais une réponse vide en silence.
             if response.message.tool_calls.is_empty() && response.message.text().trim().is_empty() {
-                if let Some(failed) = self
-                    .empty_answer(spec, &response, empty_retry, &attempts)
+                // Sauf quand personne n'attend le tour et qu'il a travaillé (#467).
+                let silent = (self.silent_end && worked).then_some((iteration + 1, cost));
+                if let Some(end) = self
+                    .empty_answer(spec, &response, empty_retry, silent, &attempts)
                     .await?
                 {
-                    return Ok(failed);
+                    return Ok(end);
                 }
                 empty_retry = true;
                 continue;
@@ -377,38 +386,40 @@ impl AgentLoop {
         Ok(())
     }
 
-    /// Ni texte ni appel d'outil : une relance au plus, puis une erreur qui dit pourquoi.
-    /// `None` : relancer.
-    async fn empty_answer(
+    /// Trace d'une réponse sans texte ni appel d'outil : au journal du daemon et dans
+    /// `turn.empty_answer`. `silent` : le tour s'arrête là, sans message (#467).
+    async fn note_empty(
         &self,
         spec: &TurnSpec,
         response: &penelope_llm::types::ChatResponse,
-        empty_retry: bool,
-        attempts: &Attempts,
-    ) -> anyhow::Result<Option<TurnOutcome>> {
-        let s = &self.services;
-        // Budget de sortie mangé par le raisonnement : relancer ne changerait rien.
-        let reasoning_ate_budget = response.finish == FinishReason::Length
-            && response.usage.reasoning > 0
-            && response
-                .usage
-                .completion
-                .saturating_sub(response.usage.reasoning)
-                <= 2;
-        tracing::warn!(
-            session = %spec.session_id,
-            model = %response.model,
-            upstream = ?response.upstream,
-            finish = ?response.finish,
-            native_finish = ?response.native_finish,
-            prompt_tokens = response.usage.prompt,
-            completion_tokens = response.usage.completion,
-            reasoning_tokens = response.usage.reasoning,
-            reasoning_chars = response.reasoning.chars().count(),
-            retried = empty_retry,
-            "réponse vide du modèle"
-        );
-        s.events
+        retried: bool,
+        silent: bool,
+    ) -> anyhow::Result<()> {
+        if silent {
+            tracing::info!(
+                session = %spec.session_id,
+                model = %response.model,
+                prompt_tokens = response.usage.prompt,
+                completion_tokens = response.usage.completion,
+                "tour terminé sans message : personne ne l'attendait"
+            );
+        } else {
+            tracing::warn!(
+                session = %spec.session_id,
+                model = %response.model,
+                upstream = ?response.upstream,
+                finish = ?response.finish,
+                native_finish = ?response.native_finish,
+                prompt_tokens = response.usage.prompt,
+                completion_tokens = response.usage.completion,
+                reasoning_tokens = response.usage.reasoning,
+                reasoning_chars = response.reasoning.chars().count(),
+                retried,
+                "réponse vide du modèle"
+            );
+        }
+        self.services
+            .events
             .append(
                 TurnEventKind::EmptyAnswer
                     .draft(json!({
@@ -417,13 +428,52 @@ impl AgentLoop {
                         "generation_id": response.id,
                         "finish": format!("{:?}", response.finish),
                         "native_finish": response.native_finish,
+                        "prompt_tokens": response.usage.prompt,
                         "completion_tokens": response.usage.completion,
                         "reasoning_tokens": response.usage.reasoning,
-                        "retried": empty_retry,
+                        "retried": retried,
+                        "silent": silent,
                     }))
                     .session(&spec.session_id),
             )
             .await?;
+        Ok(())
+    }
+
+    /// Ni texte ni appel d'outil : une relance au plus, puis une erreur qui dit pourquoi.
+    /// `None` : relancer.
+    ///
+    /// `silent` (itérations, coût) : personne n'attend ce tour et il a exécuté au moins un
+    /// outil. N'avoir rien à dire après avoir travaillé est alors une fin, sans message
+    /// (#467) ; une réponse coupée par son plafond reste un raté.
+    async fn empty_answer(
+        &self,
+        spec: &TurnSpec,
+        response: &penelope_llm::types::ChatResponse,
+        empty_retry: bool,
+        silent: Option<(u32, f64)>,
+        attempts: &Attempts,
+    ) -> anyhow::Result<Option<TurnOutcome>> {
+        let s = &self.services;
+        if let Some((iterations, cost_usd)) =
+            silent.filter(|_| response.finish == FinishReason::Stop)
+        {
+            self.note_empty(spec, response, false, true).await?;
+            return Ok(Some(TurnOutcome::Answered {
+                text: String::new(),
+                iterations,
+                cost_usd,
+            }));
+        }
+        // Budget de sortie mangé par le raisonnement : relancer ne changerait rien.
+        let reasoning_ate_budget = response.finish == FinishReason::Length
+            && response.usage.reasoning > 0
+            && response
+                .usage
+                .completion
+                .saturating_sub(response.usage.reasoning)
+                <= 2;
+        self.note_empty(spec, response, empty_retry, false).await?;
         let retry = !empty_retry && !reasoning_ate_budget;
         attempts
             .record(

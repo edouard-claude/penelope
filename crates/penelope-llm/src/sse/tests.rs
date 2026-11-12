@@ -453,3 +453,65 @@ fn a_held_start_is_released_as_soon_as_it_cannot_be_a_call() {
     assert_eq!(deltas(end), "{x} est une variable.");
     assert_eq!(a.text, "{x} est une variable.");
 }
+
+/// #467 : la connexion tombe en route, sans `finish_reason` ni `[DONE]`. C'est une erreur
+/// de transport, rejouable, pas une réponse : avant, le texte tronqué (ou le vide)
+/// partait pour une fin normale.
+#[test]
+fn a_stream_cut_without_an_end_mark_is_a_retryable_error_not_an_answer() {
+    use serde_json::json;
+    for received in [
+        vec![],
+        vec![
+            json!({"id": "g1", "model": "m", "choices": [{"delta": {"content": "La moitié de"}}]}),
+        ],
+        vec![
+            json!({"id": "g1", "model": "m", "choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "shell_exec", "arguments": "{\"comm"}}
+            ]}}]}),
+        ],
+    ] {
+        let mut acc = StreamAccumulator::default();
+        for payload in &received {
+            let _ = acc.push_payload(&payload.to_string());
+        }
+        let out = EventAccumulator::on_eof(&mut acc);
+        assert!(
+            matches!(
+                out.as_slice(),
+                [StreamChunk::Error {
+                    retryable: true,
+                    ..
+                }]
+            ),
+            "{out:?}"
+        );
+    }
+}
+
+/// Un serveur qui donne son `finish_reason` puis ferme sans `[DONE]` a fini : la réponse
+/// est gardée, appel d'outil compris.
+#[test]
+fn a_finish_reason_without_done_is_a_clean_end() {
+    use serde_json::json;
+    let mut acc = StreamAccumulator::default();
+    let _ = acc.push_payload(
+        &json!({"id": "g1", "model": "m", "choices": [{"delta": {"content": "Bonjour"}}]})
+            .to_string(),
+    );
+    let _ = acc.push_payload(
+        &json!({"id": "g1", "model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}]})
+            .to_string(),
+    );
+    let out = EventAccumulator::on_eof(&mut acc);
+    assert!(
+        matches!(
+            out.last(),
+            Some(StreamChunk::Done {
+                finish: FinishReason::Stop
+            })
+        ),
+        "{out:?}"
+    );
+    assert_eq!(acc.text, "Bonjour");
+}

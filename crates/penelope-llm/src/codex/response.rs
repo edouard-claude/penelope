@@ -10,9 +10,17 @@ pub struct ResponsesAccumulator {
     saw_tool_call: bool,
     completed: bool,
     finish: Option<FinishReason>,
+    /// Un fragment de texte est parti.
+    wrote: bool,
+    /// Types d'événements reçus et leur nombre, jamais leur contenu : ce qu'il reste
+    /// pour comprendre une réponse terminée sans texte ni appel d'outil (#467).
+    seen: std::collections::BTreeMap<String, u32>,
     quota: Arc<Mutex<Quota>>,
     sink: Option<Arc<dyn QuotaSink>>,
 }
+
+/// Types d'événements distincts gardés : au-delà, le serveur invente et on ne suit plus.
+const SEEN_KINDS: usize = 32;
 
 impl ResponsesAccumulator {
     pub fn new(served_model: String, quota: Arc<Mutex<Quota>>) -> Self {
@@ -22,6 +30,8 @@ impl ResponsesAccumulator {
             saw_tool_call: false,
             completed: false,
             finish: None,
+            wrote: false,
+            seen: Default::default(),
             quota: quota.clone(),
             sink: None,
         }
@@ -63,6 +73,33 @@ impl ResponsesAccumulator {
             model,
         });
     }
+
+    /// Compte un événement par son type ; un élément de sortie porte aussi le sien.
+    fn count(&mut self, kind: &str, v: &Value) {
+        let item = v
+            .get("item")
+            .and_then(|i| i.get("type"))
+            .and_then(|t| t.as_str());
+        let key: String = match item {
+            Some(item) => format!("{kind}:{item}"),
+            None => kind.to_string(),
+        }
+        .chars()
+        .take(80)
+        .collect();
+        if self.seen.len() < SEEN_KINDS || self.seen.contains_key(&key) {
+            *self.seen.entry(key).or_default() += 1;
+        }
+    }
+
+    /// Les événements reçus, « type×nombre », dans l'ordre alphabétique.
+    pub fn seen_events(&self) -> String {
+        self.seen
+            .iter()
+            .map(|(k, n)| format!("{k}×{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 impl EventAccumulator for ResponsesAccumulator {
@@ -71,6 +108,7 @@ impl EventAccumulator for ResponsesAccumulator {
             return vec![];
         };
         let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+        self.count(kind, &v);
         let mut out: Vec<StreamChunk> = Vec::new();
         let text_of = |key: &str| {
             v.get(key)
@@ -83,6 +121,7 @@ impl EventAccumulator for ResponsesAccumulator {
             "response.output_text.delta" => {
                 self.start(&v, &mut out);
                 if let Some(text) = text_of("delta") {
+                    self.wrote = true;
                     out.push(StreamChunk::Delta { text });
                 }
             }
@@ -141,6 +180,18 @@ impl EventAccumulator for ResponsesAccumulator {
                 self.completed = true;
                 if let Some(u) = v.get("response").and_then(|r| r.get("usage")) {
                     out.push(StreamChunk::Usage(parse_responses_usage(u)));
+                }
+                // Terminée sans rien de lisible : les types reçus disent si le serveur a
+                // parlé dans un événement que ce décodeur ne lit pas (#467).
+                if !self.wrote && !self.saw_tool_call {
+                    let resp = v.get("response");
+                    let field = |k: &str| resp.and_then(|r| r.get(k)).and_then(|x| x.as_str());
+                    tracing::info!(
+                        id = field("id").unwrap_or("-"),
+                        status = field("status").unwrap_or("-"),
+                        events = %self.seen_events(),
+                        "réponse Codex terminée sans texte ni appel d'outil"
+                    );
                 }
                 let finish = self.finish.unwrap_or(if self.saw_tool_call {
                     FinishReason::ToolCalls

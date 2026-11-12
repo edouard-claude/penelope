@@ -31,6 +31,7 @@ mod closing;
 mod mcp_subscribe;
 mod quiet;
 mod quiet_merge;
+mod silence;
 mod wake;
 
 #[tokio::test]

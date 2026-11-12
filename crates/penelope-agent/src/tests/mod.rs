@@ -22,6 +22,7 @@ mod perseverance;
 mod policy;
 mod run_loop;
 mod samples;
+mod silent_end;
 mod steering;
 mod tool_images;
 mod turn_bounds;
