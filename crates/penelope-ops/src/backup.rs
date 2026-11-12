@@ -36,6 +36,7 @@ pub mod kit;
 pub mod provider;
 pub mod restore;
 pub mod s3;
+pub mod scratch;
 pub mod secrets;
 pub mod sigv4;
 
@@ -118,30 +119,7 @@ fn excluded(s: &Services, media: bool) -> Vec<Value> {
 /// somme) s'exécute sur un thread bloquant, et l'instantané ne prend pas l'écrivain : les
 /// tours, les battements de bail et Telegram continuent pendant la sauvegarde (#77).
 pub async fn build(s: &Services, media: bool) -> anyhow::Result<(PathBuf, Value)> {
-    let now = s.clock.now_rfc3339();
-    let job = BuildJob {
-        store: s.store.clone(),
-        platform: s.platform.clone(),
-        entries: entries(s, media),
-        excluded: excluded(s, media),
-        exclude: s.config.config().backup.exclude.clone(),
-        db_path: s.platform.dirs.db_path(),
-        mcp_commands: inventory::mcp_commands(&s.platform.dirs.data().join("mcp.d")),
-        // Les LaunchAgents de la machine ; en test (`Discovery::none`), elle n'est pas lue.
-        services: inventory::services(
-            s.platform
-                .discovery
-                .hardware
-                .then(penelope_platform::dirs::home_dir)
-                .flatten()
-                .as_deref(),
-        ),
-        out_dir: s.platform.dirs.data().join("backups"),
-        stamp: now.replace([':', '.'], "-"),
-        day: now.chars().take(10).collect(),
-        created_at: now,
-        media,
-    };
+    let job = BuildJob::of(s, media);
     let started = std::time::Instant::now();
     let (sealed, mut report, snapshot) = tokio::task::spawn_blocking(move || job.run())
         .await
@@ -183,10 +161,40 @@ struct BuildJob {
 }
 
 impl BuildJob {
+    fn of(s: &Services, media: bool) -> Self {
+        let now = s.clock.now_rfc3339();
+        BuildJob {
+            store: s.store.clone(),
+            platform: s.platform.clone(),
+            entries: entries(s, media),
+            excluded: excluded(s, media),
+            exclude: s.config.config().backup.exclude.clone(),
+            db_path: s.platform.dirs.db_path(),
+            mcp_commands: inventory::mcp_commands(&s.platform.dirs.data().join("mcp.d")),
+            // Les LaunchAgents de la machine ; en test (`Discovery::none`), elle n'est pas lue.
+            services: inventory::services(
+                s.platform
+                    .discovery
+                    .hardware
+                    .then(penelope_platform::dirs::home_dir)
+                    .flatten()
+                    .as_deref(),
+            ),
+            out_dir: s.platform.dirs.data().join("backups"),
+            stamp: now.replace([':', '.'], "-"),
+            day: now.chars().take(10).collect(),
+            created_at: now,
+            media,
+        }
+    }
+
     fn run(self) -> anyhow::Result<(PathBuf, Value, std::time::Duration)> {
         // Sans phrase de passe, rien n'est commencé.
         let passphrase = secret_passphrase(&self.platform)?;
         std::fs::create_dir_all(&self.out_dir)?;
+        // Le dossier de travail d'une sauvegarde interrompue (#465) : retiré avant de
+        // compter l'espace, il est parfois la raison pour laquelle il manque.
+        scratch::sweep(&self.out_dir);
         // Plus de plafond de taille (#341) : seul le disque borne la sauvegarde. Le volume
         // est compté sans rien copier, puis comparé à l'espace libre.
         let mut estimate = collect::Collect::dry(&self.exclude);
@@ -201,11 +209,10 @@ impl BuildJob {
             penelope_platform::host::free_bytes(&self.out_dir),
             &self.out_dir,
         )?;
-        // Répertoire de travail : tout y est copié, puis archivé et chiffré en flux.
-        let work = self.out_dir.join(format!("work-{}", self.stamp));
-        let result = self.assemble(&work, &passphrase);
-        let _ = std::fs::remove_dir_all(&work);
-        result
+        // Répertoire de travail : tout y est copié, puis archivé et chiffré en flux. En
+        // 0700, marqué de ce processus, retiré quand `work` tombe, panique comprise.
+        let work = scratch::Scratch::create(self.out_dir.join(format!("work-{}", self.stamp)))?;
+        self.assemble(work.path(), &passphrase)
     }
 
     fn assemble(
@@ -221,6 +228,7 @@ impl BuildJob {
         let db = root.join("penelope.db");
         let t = std::time::Instant::now();
         self.store.backup_to(&db)?;
+        scratch::restrict_file(&db)?;
         let full_bytes = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
         strip_derived(&db, &self.created_at)
             .map_err(|e| anyhow::anyhow!("allègement de l'instantané : {e}"))?;
@@ -241,8 +249,8 @@ impl BuildJob {
         // Les valeurs des secrets, sous leur seconde couche ; le manifeste n'en porte que
         // les noms, et ceux qui n'ont pas pu être lus (à ressaisir).
         let dump = secrets::dump(self.platform.secrets.as_ref());
-        std::fs::write(
-            root.join(secrets::FILE),
+        scratch::write_private(
+            &root.join(secrets::FILE),
             secrets::seal(&dump.values, passphrase)?,
         )?;
         let mut excluded = self.excluded.clone();
@@ -263,14 +271,17 @@ impl BuildJob {
             "mcp_commands": self.mcp_commands,
             "services": self.services,
         });
-        std::fs::write(
-            root.join("MANIFEST.json"),
+        scratch::write_private(
+            &root.join("MANIFEST.json"),
             serde_json::to_vec_pretty(&manifest)?,
         )?;
 
+        // L'archive en clair naît en 0600, et y revient si `tar` l'a recréée.
         let tar = work.join(format!("penelope-{}.tar.gz", self.stamp));
+        scratch::write_private(&tar, b"")?;
         penelope_platform::process::create_tar_gz(&tar, work, &["penelope".into()])
             .map_err(|e| anyhow::anyhow!("archive : {e}"))?;
+        scratch::restrict_file(&tar)?;
 
         let sealed = self
             .out_dir
@@ -520,11 +531,22 @@ fn iso_week(day: &str) -> String {
         .unwrap_or_else(|_| day.to_string())
 }
 
-/// Une sauvegarde par nuit, à l'heure de `backup.cron`, appelée par le superviseur.
+/// Retire de `backups/` les dossiers de travail que plus personne ne tient (#465).
+pub async fn sweep_scratch(s: &Services) -> Vec<(String, u64)> {
+    let dir = s.platform.dirs.data().join("backups");
+    tokio::task::spawn_blocking(move || scratch::sweep(&dir))
+        .await
+        .unwrap_or_default()
+}
+
+/// Une sauvegarde par nuit, à l'heure de `backup.cron`, appelée par le superviseur à
+/// chaque passe de maintenance. Avec ou sans sauvegarde programmée, la passe retire
+/// d'abord les dossiers de travail abandonnés (#465) : la première suit le démarrage.
 pub async fn nightly_tick(
     s: &Services,
     messenger: Option<Arc<dyn Messenger>>,
 ) -> anyhow::Result<()> {
+    sweep_scratch(s).await;
     if s.config.config().backup.cron.trim().is_empty() {
         return Ok(());
     }

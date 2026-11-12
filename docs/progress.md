@@ -12,6 +12,57 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.119
+
+**Sauvegarde : le dossier de travail d'une sauvegarde interrompue ne reste plus sur le disque (#465).**
+
+Une sauvegarde copie la base et les dossiers dans `backups/work-<date>` avant de les
+archiver et de les chiffrer. Ce dossier n'était retiré que par le processus qui l'avait
+créé, à la fin de son travail : un arrêt du daemon, un `kill`, une panne ou un disque plein
+pendant l'assemblage le laissait là, en clair, lisible de tous (0644), et rien ne le
+revoyait jamais. Le 11/11, une instance portait depuis le 13/10 un dossier de 3,1 Gio, dont
+une copie de la base (724 Mo) et l'archive avant chiffrement (1,2 Gio). À côté, l'ancienne
+destination git `backups/repo` (1,6 Gio), que plus rien ne lit depuis la 1.0.46.
+
+- **Un propriétaire.** `backup::scratch::Scratch` crée le dossier en 0700, y pose `.owner`
+  (le pid de son créateur) et le retire quand la valeur tombe : fin normale, erreur ou
+  panique. La restauration (`restauration-<date>`) et le téléchargement d'une archive
+  (`telechargement-<date>`) passent par le même type : même famille, même défaut.
+- **Le balayage.** Avant chaque sauvegarde (avant de compter l'espace libre : le reste est
+  parfois la raison pour laquelle il manque) et à chaque passe de maintenance du daemon, la
+  première suivant le démarrage, un dossier de travail est retiré quand son propriétaire
+  n'est plus là : pid mort, marque de plus d'un jour (un pid finit par être réattribué), ou
+  pas de marque depuis dix minutes (dossier d'une version d'avant, créateur coupé avant de
+  l'écrire). Le poids retiré est écrit au journal.
+- **Une sauvegarde ou une restauration en cours n'est pas balayée** : celle de ce processus
+  est tenue en mémoire, celle d'un autre (une restauration lancée à la main pendant que le
+  daemon démarre) par son pid vivant.
+- **Les modes.** Ce que la sauvegarde pose elle-même en clair (instantané de la base,
+  secrets sous leur seconde couche, manifeste, archive avant chiffrement) est en 0600. Les
+  copies du vault, du workspace et des autres dossiers gardent le mode de leur source, que
+  l'archive doit restituer : c'est le 0700 du dossier qui les couvre.
+- **`doctor`.** Un contrôle `backup.leftovers` montre ce que `backups/` contient et que le
+  code n'y range pas, avec son poids et la commande pour l'effacer : `repo`, ou un dossier
+  de travail que le balayage n'a pas pu retirer. Rien n'en est retiré d'office : un
+  dossier que le code ne connaît plus n'est peut-être pas le sien.
+
+Pas fait ici, et pourquoi :
+
+- les autres fichiers temporaires du daemon (`daemon-run.json.tmp`, `upgrade.json.tmp`, le
+  `.tmp` d'une écriture atomique) sont des fichiers de quelques octets, réécrits au passage
+  suivant : relevé fait, aucun autre dossier de travail ne reste après un arrêt ;
+- `avant-restauration-<date>.db`, la base mise de côté par `penelope restore <fichier.db>`,
+  reste en clair dans `backups/` et n'entre dans aucune rotation : c'est le filet du
+  propriétaire, il n'est pas retiré sans lui ;
+- la copie partielle `.penelope-….partiel` d'un envoi interrompu vers un dossier est
+  chiffrée et remplacée à l'envoi suivant de la même archive : laissée.
+
+Tests : `backup::scratch` (dossier privé, marqué, retiré avec son propriétaire ; ce qui est
+balayé et ce qui ne l'est pas, processus vivant d'un autre programme compris, lien non
+suivi ; la sauvegarde suivante retire le reste et `doctor` montre `repo` ; la passe de
+maintenance balaie sans sauvegarde programmée et sans toucher une sauvegarde en cours ; les
+modes des fichiers de travail).
+
 ### 1.0.118
 
 **Demande d'accord : une carte dont le demandeur a disparu est retirée (#464).**
