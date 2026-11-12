@@ -112,11 +112,13 @@ raison de la politique. Puis l'action telle qu'elle sera faite : la commande exa
 échappement JSON, ou l'outil et ses valeurs sur une ligne (`issue_id = 7653 · status =
 Résolu`). La dernière ligne regroupe les qualificatifs (réseau, sortie complète,
 répertoire, serveur MCP), la classe de risque et la politique. « Toujours » dit sur quoi il
-porte : une famille de commandes, un répertoire, un hôte. Quand la ligne n'a pas de famille
-(commande composée), il le dit avant le clic : le bouton devient « ✅ Autoriser (pas de
-règle possible) » et les qualificatifs portent « aucune règle possible : commande
-composée ». Une carte à seconde confirmation ne porte ni « Pour cette session » ni
-« Toujours » : elle se donne à chaque fois. Variables : `intention`,
+porte : une famille de commandes, un répertoire, un hôte, ou « cet outil » quand rien ne
+le borne (outil MCP). Quand la ligne n'a pas de famille (commande composée), la carte n'a
+pas de bouton « Toujours » et ses qualificatifs disent pourquoi (« pas de règle
+possible »). Une carte à seconde confirmation ne porte pas « Pour cette session » ; son
+« Toujours » mène à la seconde confirmation, qui dit ce que la règle couvrira avant de la
+poser (décision [0026](decisions/0026-toujours-vaut-toujours.md)). Un réglage sensible
+n'a pas de « Toujours » : il se confirme deux fois, à chaque fois. Variables : `intention`,
 `action`, `details`, `alerte` ; un gabarit surchargé plus ancien garde `outil`, `serveur`,
 `risque`, `arguments` et `raison`.
 

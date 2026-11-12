@@ -657,12 +657,12 @@ async fn a_family_rule_does_not_cover_its_command_behind_a_hijacking_setup() {
     }
 }
 
-/// #445 : une règle `Auto` n'abaisse pas une double confirmation. « Pour cette session »
-/// sur la carte d'un `mem_forget` posait une règle sur l'outil entier, et les oublis
-/// suivants partaient sans carte ; « Toujours » en faisait autant pour un outil MCP
-/// destructif. Le verdict reste `ask_twice`, sans règle, et nomme celle qu'il ignore.
+/// #445 : une règle de run ou de session n'abaisse pas une double confirmation. « Pour
+/// cette session » sur la carte d'un `mem_forget` posait une règle sur l'outil entier, et
+/// les oublis suivants partaient sans carte. Le verdict reste `ask_twice`, sans règle, et
+/// nomme celle qu'il ignore.
 #[tokio::test]
-async fn an_auto_rule_does_not_lower_a_double_confirmation() {
+async fn a_session_rule_does_not_lower_a_double_confirmation() {
     let e = engine();
     let cfg = McpPolicy::default();
     let session = e
@@ -683,8 +683,8 @@ async fn an_auto_rule_does_not_lower_a_double_confirmation() {
         Some("forge"),
         None,
         PolicyDecision::Auto,
-        PolicyWindow::Always,
-        None,
+        PolicyWindow::Run,
+        Some("r_1"),
     )
     .await
     .unwrap();
@@ -699,7 +699,7 @@ async fn an_auto_rule_does_not_lower_a_double_confirmation() {
                 server,
                 &json!({"id": "m_1"}),
                 RiskClass::Destructive,
-                None,
+                Some("r_1"),
                 Some("s_1"),
             )
             .await
@@ -764,20 +764,103 @@ async fn an_auto_rule_does_not_lower_a_double_confirmation() {
     assert_eq!(v.rule_id.as_deref(), Some(session.id.as_str()));
 }
 
+/// Décision 0026 : « Toujours » vaut toujours. La 1.0.99 ignorait toute règle `Auto` sous
+/// une double confirmation ; la règle « Toujours » qu'un propriétaire avait posée sur un
+/// outil MCP annoncé destructif, servie 523 fois, redemandait deux clics à chaque appel.
+/// Elle s'applique de nouveau, compte ses usages, et couvre aussi une liste `a && b`.
+#[tokio::test]
+async fn an_always_rule_holds_under_a_double_confirmation() {
+    let e = engine();
+    let cfg = McpPolicy::default();
+    let always = e
+        .create_rule(
+            RuleScope::Tool,
+            Some("mcp__forge__delete_repo"),
+            Some("forge"),
+            None,
+            PolicyDecision::Auto,
+            PolicyWindow::Always,
+            None,
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let v = e
+            .evaluate(
+                &cfg,
+                "mcp__forge__delete_repo",
+                Some("forge"),
+                &json!({"id": "r_1"}),
+                RiskClass::Destructive,
+                None,
+                Some("s_1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v.decision, PolicyDecision::Auto);
+        assert_eq!(v.rule_id.as_deref(), Some(always.id.as_str()));
+        assert!(!v.reason.contains("n'abaisse pas"), "{}", v.reason);
+    }
+    let rules = e.active_rules().await.unwrap();
+    assert_eq!(rules[0].hits, 2, "{rules:?}");
+
+    // Une liste : chaque étape sous une règle « Toujours », la ligne part ; une famille
+    // qui n'a qu'une règle de session redemande ses deux confirmations.
+    for (family, window, window_ref) in [
+        ("rm", PolicyWindow::Always, None),
+        ("shred", PolicyWindow::Session, Some("s_1")),
+    ] {
+        e.create_rule(
+            RuleScope::Tool,
+            Some("shell_exec"),
+            None,
+            Some(json!({"command": {CMD_PREFIX_OP: family}})),
+            PolicyDecision::Auto,
+            window,
+            window_ref,
+        )
+        .await
+        .unwrap();
+    }
+    for (command, expected) in [
+        ("rm -r a && rm -r b", PolicyDecision::Auto),
+        ("rm -r a", PolicyDecision::Auto),
+        ("shred a && shred b", PolicyDecision::AskTwice),
+        ("rm -r a && shred b", PolicyDecision::AskTwice),
+    ] {
+        let v = e
+            .evaluate(
+                &cfg,
+                "shell_exec",
+                None,
+                &json!({"command": command}),
+                RiskClass::Destructive,
+                None,
+                Some("s_1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v.decision, expected, "{command} : {}", v.reason);
+    }
+}
+
 /// Un refus, lui, reste une règle comme une autre sous une double confirmation (#445).
 #[tokio::test]
 async fn a_deny_rule_still_applies_under_a_double_confirmation() {
     let e = engine();
     let cfg = McpPolicy::default();
-    for decision in [PolicyDecision::Auto, PolicyDecision::Deny] {
+    for (decision, window, window_ref) in [
+        (PolicyDecision::Auto, PolicyWindow::Session, Some("s_1")),
+        (PolicyDecision::Deny, PolicyWindow::Always, None),
+    ] {
         e.create_rule(
             RuleScope::Tool,
             Some("mem_forget"),
             None,
             None,
             decision,
-            PolicyWindow::Always,
-            None,
+            window,
+            window_ref,
         )
         .await
         .unwrap();
@@ -790,7 +873,7 @@ async fn a_deny_rule_still_applies_under_a_double_confirmation() {
             &json!({}),
             RiskClass::Destructive,
             None,
-            None,
+            Some("s_1"),
         )
         .await
         .unwrap();

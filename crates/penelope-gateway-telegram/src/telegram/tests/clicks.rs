@@ -297,49 +297,104 @@ async fn a_panicking_click_task_leaves_no_click_in_flight() {
     assert!(g.clicks_idle());
 }
 
-/// #445 : la carte d'une double confirmation ne porte ni « Pour cette session » ni
-/// « Toujours ». Le jeton d'une fenêtre, resté sur une carte envoyée avant, mène à la
-/// seconde confirmation comme « Autoriser » : il ne tranche rien et ne pose aucune règle.
+/// #445 : la carte d'une double confirmation ne porte pas « Pour cette session ». Décision
+/// 0026 : elle garde « Toujours », qui passe par la seconde confirmation avant de poser sa
+/// règle. Le jeton de session d'une carte envoyée avant mène à la seconde confirmation et
+/// n'autorise qu'une fois ; un réglage sensible, redemandé à chaque fois, n'a pas de
+/// « Toujours ».
 #[tokio::test]
-async fn a_double_confirmation_card_offers_no_window() {
+async fn a_double_confirmation_card_keeps_always_behind_its_second_confirmation() {
     let (_d, g, t, _p) = gateway().await;
     let s = g.daemon.services.clone();
-    let id = request(
-        &g,
-        penelope_hitl::ApprovalKind::ToolCall,
-        "mem_forget",
-        json!({"double": true, "arguments": {"id": "m_1"}}),
+    let double = |subject: &'static str, payload: Value| {
+        let g = &g;
+        async move { request(g, penelope_hitl::ApprovalKind::ToolCall, subject, payload).await }
+    };
+    let last_buttons = || async {
+        g.flush_outbox().await.unwrap();
+        inline_buttons(&t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap())
+    };
+    let button = |buttons: &[(String, String)], label: &str| {
+        buttons
+            .iter()
+            .find(|(l, _)| l.contains(label))
+            .unwrap_or_else(|| panic!("{label} : {buttons:?}"))
+            .1
+            .clone()
+    };
+
+    let payload = json!({"double": true, "arguments": {"id": "r_1"}});
+    let id = double("mcp__forge__delete_repo", payload.clone()).await;
+    let a = s.approvals.get(&id).await.unwrap().unwrap();
+    g.send_approval_card(OWNER, None, &a).await.unwrap();
+    let card = last_buttons().await;
+    assert!(
+        card.iter().any(|(l, _)| l.contains("Autoriser")),
+        "{card:?}"
+    );
+    assert!(card.iter().any(|(l, _)| l.contains("Refuser")), "{card:?}");
+    assert!(
+        !card
+            .iter()
+            .any(|(l, _)| l.contains("session") || l.contains("run")),
+        "{card:?}"
+    );
+
+    // « Toujours » : rien n'est tranché au premier clic, la seconde carte dit ce qui suit.
+    press(&g, &button(&card, "Toujours pour cet outil")).await;
+    let confirm = last_buttons().await;
+    assert_eq!(state(&g, &id).await, penelope_hitl::ApprovalState::Pending);
+    assert!(s.policies.active_rules().await.unwrap().is_empty());
+    let sent = texts(&t.calls_to(tg::SEND_MESSAGE).await);
+    assert!(
+        sent.iter().any(|x| x.contains("Seconde confirmation")
+            && x.contains("« Toujours » pour cet outil")
+            && x.contains("sans carte")),
+        "{sent:?}"
+    );
+    press(&g, &button(&confirm, "Confirmer « Toujours »")).await;
+    assert_eq!(state(&g, &id).await, penelope_hitl::ApprovalState::Approved);
+    let rules = s.policies.active_rules().await.unwrap();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert_eq!(rules[0].tool.as_deref(), Some("mcp__forge__delete_repo"));
+    assert_eq!(rules[0].window, PolicyWindow::Always);
+
+    // Le jeton de session d'une ancienne carte : seconde confirmation, une seule fois.
+    let id = double("mcp__forge__delete_repo", payload).await;
+    press(&g, &button_for(&g, k::APPROVE_RUN, &id).await).await;
+    let confirm = last_buttons().await;
+    assert_eq!(state(&g, &id).await, penelope_hitl::ApprovalState::Pending);
+    press(&g, &button(&confirm, "Confirmer")).await;
+    assert_eq!(state(&g, &id).await, penelope_hitl::ApprovalState::Approved);
+    assert_eq!(s.policies.active_rules().await.unwrap().len(), 1);
+
+    // Un réglage sensible : ni « Toujours » sur la carte, ni règle par un ancien jeton.
+    let id = double(
+        "config_set",
+        json!({"double": true, "every_time": true,
+               "arguments": {"path": "sandbox.default_profile", "value": "full"}}),
     )
     .await;
     let a = s.approvals.get(&id).await.unwrap().unwrap();
     g.send_approval_card(OWNER, None, &a).await.unwrap();
-    g.flush_outbox().await.unwrap();
-    let card = t.calls_to(tg::SEND_MESSAGE).await.pop().unwrap();
-    let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
-    assert!(labels.iter().any(|l| l.contains("Autoriser")), "{labels:?}");
-    assert!(labels.iter().any(|l| l.contains("Refuser")), "{labels:?}");
+    let card = last_buttons().await;
     assert!(
-        !labels
-            .iter()
-            .any(|l| l.contains("session") || l.contains("run") || l.contains("Toujours")),
-        "{labels:?}"
+        card.iter().any(|(l, _)| l.contains("Autoriser")),
+        "{card:?}"
     );
-
-    for action in [k::APPROVE_RUN, k::APPROVE_ALWAYS] {
-        t.clear().await;
-        press(&g, &button_for(&g, action, &id).await).await;
-        g.flush_outbox().await.unwrap();
-        assert_eq!(
-            state(&g, &id).await,
-            penelope_hitl::ApprovalState::Pending,
-            "{action}"
-        );
-        assert!(
-            texts(&t.calls_to(tg::SEND_MESSAGE).await)
-                .iter()
-                .any(|x| x.contains("Seconde confirmation")),
-            "{action}"
-        );
-    }
-    assert!(s.policies.active_rules().await.unwrap().is_empty());
+    assert!(
+        !card
+            .iter()
+            .any(|(l, _)| l.contains("Toujours") || l.contains("session")),
+        "{card:?}"
+    );
+    press(&g, &button_for(&g, k::APPROVE_ALWAYS, &id).await).await;
+    let confirm = last_buttons().await;
+    assert!(
+        !confirm.iter().any(|(l, _)| l.contains("Toujours")),
+        "{confirm:?}"
+    );
+    press(&g, &button(&confirm, "Confirmer")).await;
+    assert_eq!(state(&g, &id).await, penelope_hitl::ApprovalState::Approved);
+    assert_eq!(s.policies.active_rules().await.unwrap().len(), 1);
 }

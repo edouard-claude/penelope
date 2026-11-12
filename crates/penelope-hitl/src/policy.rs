@@ -359,6 +359,12 @@ pub fn schedule_key(session_id: &str) -> String {
     format!("session.schedule.{session_id}")
 }
 
+/// Une autorisation de run ou de session : elle cède à une double confirmation, là où
+/// « Toujours » tient (#445, décision 0026).
+fn yields_to_twice(r: &PolicyRule) -> bool {
+    r.decision == PolicyDecision::Auto && r.window != PolicyWindow::Always
+}
+
 /// Une règle « pour cette session » est-elle ouverte ici : pour la session elle-même, ou
 /// pour sa planification (`scope`, #379).
 fn open_in(
@@ -448,17 +454,28 @@ impl PolicyEngine {
         // **chaque** étape l'est (issue #150). Les étapes sont jugées une par une, avec
         // les mêmes règles et le même réseau ; il suffit qu'une seule manque pour que la
         // ligne entière reparte en carte.
-        // Une règle `Auto` n'abaisse pas une double confirmation (#445) : un appel de classe
-        // destructive que la politique fait confirmer deux fois ne passe sous aucune
-        // règle. « Pour cette session » sur une carte double tranchait d'un clic et posait
-        // une règle sur l'outil entier : les `mem_forget` suivants partaient sans carte.
-        // Un refus, lui, reste une règle comme une autre.
+        // Une règle de run ou de session n'abaisse pas une double confirmation (#445) :
+        // « Pour cette session » sur une carte double tranchait d'un clic et posait une
+        // règle sur l'outil entier, les `mem_forget` suivants partaient sans carte.
+        // « Toujours », lui, vaut toujours (décision 0026) : la seconde confirmation a dit
+        // ce qu'il ouvrait, la règle est visible et révocable dans `/policies`.
+        // Un refus reste une règle comme une autre.
         let twice = Self::asks_twice(cfg, risk);
+        let durable: Vec<PolicyRule>;
+        let for_steps: &[PolicyRule] = if twice {
+            durable = rules
+                .iter()
+                .filter(|r| !yields_to_twice(r))
+                .cloned()
+                .collect();
+            &durable
+        } else {
+            &rules
+        };
         if tool == "shell_exec"
-            && !twice
             && let Some(steps) = separable_steps(args)
             && let Some(v) = self
-                .cover_each_step(cfg, &rules, &steps, args, risk, run_id, session_id)
+                .cover_each_step(cfg, for_steps, &steps, args, risk, run_id, session_id)
                 .await?
         {
             return Ok(v);
@@ -472,7 +489,7 @@ impl PolicyEngine {
             if !open_in(r, run_id, session_id, scope) {
                 continue;
             }
-            if twice && r.decision == PolicyDecision::Auto {
+            if twice && yields_to_twice(r) {
                 lowered.get_or_insert(r);
                 continue;
             }
@@ -519,10 +536,9 @@ impl PolicyEngine {
         })
     }
 
-    /// Vrai quand aucune règle `Auto` ne vaut pour cette classe : la politique la fait
-    /// confirmer deux fois (#445). `doctor` s'en sert pour nommer les règles mortes.
-    #[must_use]
-    pub fn asks_twice(cfg: &penelope_kernel::config::McpPolicy, risk: RiskClass) -> bool {
+    /// Vrai quand la politique fait confirmer cette classe deux fois : seule une règle
+    /// « Toujours » y vaut encore (#445, décision 0026).
+    fn asks_twice(cfg: &penelope_kernel::config::McpPolicy, risk: RiskClass) -> bool {
         risk == RiskClass::Destructive && Self::default_for(cfg, risk) == PolicyDecision::AskTwice
     }
 

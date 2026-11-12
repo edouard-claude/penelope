@@ -12,6 +12,56 @@ Une section `### x.y.z` par lot, la plus récente en tête (décision
 ont été écrites sur la branche `v1`, sans tag ni release, avant la bascule vers `main`.
 La charte et les spécifications sont dans `design/v1/`.
 
+### 1.0.125
+
+**« Toujours » vaut toujours : la règle tient sous une double confirmation, et les outils
+MCP retrouvent leur bouton (décision [0026](decisions/0026-toujours-vaut-toujours.md)).**
+
+Deux lots avaient retiré « Toujours » de là où le propriétaire s'en servait. Il a tranché :
+« Toujours = toujours ».
+
+- **Ce que #445 (1.0.99) faisait de trop.** Le défaut était le clic unique : sur une carte
+  double, « Pour cette session » et « Toujours » tranchaient sans la seconde carte. Le lot
+  a aussi fait ignorer au moteur toute règle `Auto` pour un appel de classe destructive.
+  La règle « Toujours » du propriétaire sur un outil MCP que son serveur annonce
+  destructif, alors qu'il ne fait que marquer un élément, servie 523 fois, aurait cessé de
+  valoir à l'installation : deux clics par appel. L'instance est restée en 1.0.98.
+- **Ce que #150 (0.17.31) avait cassé sans le voir.** La carte ne gardait « Toujours » que
+  si elle savait nommer sa portée ; un outil MCP n'a pas de motif, son bouton a disparu
+  avec celui des commandes composées. Relevé dans la base du propriétaire : la dernière
+  règle « Toujours » sur un outil MCP date du 20/09 au matin, le lot est du soir ; depuis,
+  aucune, et 272 règles « Pour cette session » sur 90 outils MCP.
+- Moteur (`PolicyEngine::evaluate_in`) : une règle « Toujours » s'applique quelle que soit
+  la classe, compte ses usages, et couvre une liste `a && b` étape par étape. Une règle de
+  run ou de session n'abaisse toujours pas une double confirmation ; le verdict la nomme.
+- Cœur (`decide_approval`) : une demande double accepte « Toujours » et refuse run et
+  session. `penelope approve <id> --always` y est accepté.
+- Canal : la carte double porte « Toujours » et pas « Pour cette session ». Le clic ne
+  tranche rien : la seconde confirmation dit ce que la règle couvrira et que les appels
+  suivants partiront sans carte, et « Confirmer « Toujours » » la pose. Le jeton de
+  session d'une ancienne carte mène à la seconde confirmation et n'autorise qu'une fois.
+- Un outil sans motif (outil MCP, outil natif sans argument qui le borne) retrouve son
+  bouton, qui dit sa portée : « ♾️ Toujours pour cet outil ». Une commande composée reste
+  sans bouton (#150).
+- Le plancher des réglages sensibles ne bouge pas : `config_set` sur le bac à sable, les
+  fournisseurs, le canal, les outils, les politiques ou le juge redemande deux fois quoi
+  que dise une règle. Sa demande porte `every_time` ; sa carte n'a pas de « Toujours » et
+  le cœur le refuse, plutôt que d'écrire une règle sans effet.
+- `doctor` : le contrôle `policy_dead_rules` est retiré, plus aucune règle « Toujours »
+  n'est morte.
+
+Tests : `an_always_rule_holds_under_a_double_confirmation`,
+`a_session_rule_does_not_lower_a_double_confirmation` (moteur),
+`a_double_confirmation_takes_always_but_no_session_window`,
+`a_sensitive_setting_takes_no_always` (cœur),
+`a_double_confirmation_card_keeps_always_behind_its_second_confirmation` et le bouton de
+`an_mcp_approval_card_names_its_server_as_a_qualifier` (canal).
+
+Pas fait : à spécificité égale, entre une règle qui autorise et une règle qui refuse le
+même outil, la plus ancienne l'emporte, comme avant ; les cartes ne peuvent pas produire
+ce cas. Le terminal interactif (`[t]oujours`) tranche une demande double sans seconde
+question, comme `penelope approve` : une commande tapée y vaut confirmation.
+
 ### 1.0.124
 
 **Annulation : le classifieur de complexité cède lui aussi, et le test du client parti ne

@@ -209,6 +209,15 @@ pub(crate) fn approval_card(a: &ApprovalRequest) -> ApprovalCard {
             ));
         }
     }
+    // Un outil sans motif (outil MCP, outil sans argument qui le borne) : la règle porte
+    // sur l'outil, et le bouton le dit. Depuis #150, ces cartes n'avaient plus de
+    // « Toujours » du tout : restait « Pour cette session », à redonner chaque jour.
+    if always.is_none()
+        && a.kind == penelope_hitl::ApprovalKind::ToolCall
+        && penelope_agent::always_covers_the_tool(&a.subject, a.payload.get("arguments"))
+    {
+        always = Some("cet outil".into());
+    }
     // Une commande composée n'a pas de famille : « Toujours » l'autoriserait une fois,
     // sans créer de règle (#111). La carte le dit avant le clic (#141).
     if !grant && penelope_agent::always_creates_no_rule(&a.subject, a.payload.get("arguments")) {

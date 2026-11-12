@@ -1510,16 +1510,21 @@ et `fs_edit`, au répertoire du fichier ; pour `git_push`, au couple remote et b
 répertoire, un autre hôte redemandent. `/policies` (et `penelope policies`) affiche la
 portée de chaque règle et permet de la retirer.
 
-Une **double confirmation** se donne à chaque fois. La carte d'un appel de classe
-destructive (`mem_forget`, un outil MCP annoncé destructif, un réglage sensible) ne porte
-ni « Pour cette session » ni « Toujours », `penelope approve <id> --always` y est refusé,
-et aucune règle n'en dispense l'appel suivant : une règle « Toujours » posée sur un tel
-outil par une version antérieure ne s'applique plus, la carte la nomme et `penelope doctor`
-la liste (`policy_dead_rules`). Un refus, lui, reste appliqué. Trois sorties, toutes
-écrites par le propriétaire : corriger la classe d'un outil MCP annoncé destructif à tort
-(`[tool_risk]` dans la déclaration du serveur, la règle vaut alors à nouveau), imposer sa
-politique à l'outil (`[tool_policy]`), ou ramener toute la classe à une confirmation
-(`mcp.policy.destructive = "ask"`).
+Un outil qui n'a rien de tel (outil MCP, outil natif sans argument qui le borne) reçoit
+une règle sur l'outil, et le bouton le dit : « ♾️ Toujours pour cet outil ».
+
+Une **double confirmation** (`mem_forget`, un outil MCP annoncé destructif) ne se donne
+pas « pour cette session » : sa carte n'en porte pas le bouton, et une règle de run ou de
+session n'en dispense pas l'appel suivant, la carte la nomme. « Toujours », lui, vaut
+toujours (décision [0026](decisions/0026-toujours-vaut-toujours.md)) : le bouton mène à la
+seconde confirmation, qui dit ce que la règle couvrira et que les appels suivants
+partiront sans carte, puis la pose ; `penelope approve <id> --always` fait de même. La
+règle s'applique ensuite quelle que soit la classe de l'appel, et se retire dans
+`/policies`. Un **réglage sensible** (`config_set` sur le bac à sable, les fournisseurs,
+le canal, les outils, les politiques, le juge) fait exception : il redemande deux fois à
+chaque fois, sans « Toujours ». Pour ne plus confirmer deux fois un outil MCP annoncé
+destructif à tort, corriger sa classe (`[tool_risk]` dans la déclaration du serveur) ; pour
+toute la classe, `mcp.policy.destructive = "ask"`.
 
 Une suite de tests (`cargo test`, `go test`, `npm|pnpm|yarn test`, Jest, Vitest, `pytest`,
 `make test`) ne renvoie au modèle que le résumé et les sections d'échec (nom, assertion,

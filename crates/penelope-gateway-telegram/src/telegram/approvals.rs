@@ -187,22 +187,26 @@ impl TelegramGateway {
         };
         // Le libellé « Pour ce run » du gabarit vaut « pour cette session » en conversation.
         // Sans arguments vus, pas de fenêtre ni de « Toujours » : une règle couvrirait
-        // l'outil entier (#83, régression de #67). Une double confirmation n'en porte pas
-        // non plus : elle se donne à chaque fois (#445).
-        let windows = a.payload.get("arguments").is_some() && !double;
+        // l'outil entier (#83, régression de #67). Une double confirmation ne porte pas
+        // « Pour cette session » (#445) ; elle garde « Toujours », qui passe par la
+        // seconde confirmation (décision 0026), sauf sur un réglage sensible, redemandé
+        // à chaque fois quoi que dise une règle.
+        let seen = a.payload.get("arguments").is_some();
+        let every_time = a.payload["every_time"].as_bool().unwrap_or(false);
         let session_label = self.session_grant_label(a).await;
-        let windowed = [
-            tokens.get(k::APPROVE_RUN).cloned().unwrap_or_default(),
-            tokens.get(k::APPROVE_ALWAYS).cloned().unwrap_or_default(),
-        ];
+        let run_token = tokens.get(k::APPROVE_RUN).cloned().unwrap_or_default();
+        let always_token = tokens.get(k::APPROVE_ALWAYS).cloned().unwrap_or_default();
         let buttons: Vec<Vec<ButtonSpec>> = rendered
             .buttons
             .iter()
             .map(|row| {
                 row.iter()
                     .filter(|b| {
-                        windows
-                            || !matches!(&b.action, penelope_telegram::render::ButtonAction::Callback { token } if windowed.contains(token))
+                        let penelope_telegram::render::ButtonAction::Callback { token } = &b.action else {
+                            return true;
+                        };
+                        (*token != run_token || (seen && !double))
+                            && (*token != always_token || (seen && !every_time))
                     })
                     // Aucune règle possible : pas de bouton dans la case de « Toujours ».
                     // Une coche verte à sa place se lisait comme un « Toujours » nouvelle
@@ -600,18 +604,23 @@ impl TelegramGateway {
         )
         .await
     }
+    /// La seconde confirmation d'une carte double. `always` : le premier clic était
+    /// « Toujours » ; la confirmation le dit, avec ce que la règle couvrira, et la pose
+    /// (décision 0026). Sans portée à nommer, elle n'autorise qu'une fois.
     pub(super) async fn send_destructive_confirm(
         &self,
         chat_id: i64,
         topic_id: Option<i64>,
         a: &ApprovalRequest,
+        always: bool,
     ) -> anyhow::Result<()> {
+        let scope = always.then(|| approval_card(a).always).flatten();
         let confirm = self
             .actions
             .create(
                 k::CONFIRM_DESTRUCTIVE,
                 a.id.as_str(),
-                json!({}),
+                json!({"always": scope.is_some()}),
                 600_000,
                 true,
             )
@@ -620,12 +629,22 @@ impl TelegramGateway {
             .actions
             .create(k::DENY, a.id.as_str(), json!({}), 600_000, true)
             .await?;
+        let (label, question) = match &scope {
+            Some(scope) => (
+                "⚠️ Confirmer « Toujours »",
+                format!(
+                    "Confirmer « Toujours » pour {scope} ? Les appels suivants partiront \
+                     sans carte ; la règle se retire dans /policies."
+                ),
+            ),
+            None => ("⚠️ Confirmer", "Confirmer ?".to_string()),
+        };
         let buttons = vec![vec![
-            ButtonSpec::callback("⚠️ Confirmer", &confirm.token, "danger"),
+            ButtonSpec::callback(label, &confirm.token, "danger"),
             ButtonSpec::callback("Annuler", &deny.token, ""),
         ]];
         let text = format!(
-            "⚠️ **Seconde confirmation**\n\n`{}` est une action destructive. Confirmer ?",
+            "⚠️ **Seconde confirmation**\n\n`{}` est une action destructive. {question}",
             a.subject
         );
         self.outbox_push(

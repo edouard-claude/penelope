@@ -690,6 +690,8 @@ async fn config_set_asks_twice_for_sensitive_settings_even_with_an_always_rule()
     };
     let a = s.approvals.get(&approval_id).await.unwrap().unwrap();
     assert_eq!(a.payload["double"], true);
+    // Le plancher redemande à chaque fois : sa carte ne propose pas « Toujours » (0026).
+    assert_eq!(a.payload["every_time"], true);
     assert_eq!(s.config.config().sandbox.default_profile, profile_before);
 
     // Un secret ne passe jamais, même approuvé.
