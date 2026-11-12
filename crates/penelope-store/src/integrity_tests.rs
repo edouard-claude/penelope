@@ -99,68 +99,29 @@ fn every_line_of_a_verdict_is_read() {
     assert_eq!(check_lines(&c, "PRAGMA integrity_check;").unwrap(), "ok");
 }
 
-/// #158 : le fichier fait foi, pas une connexion. Sur une base saine, les deux
-/// verdicts concordent et le rapport le dit sans ouvrir de connexion neuve.
+/// #158 : une base saine est dite saine, et rien n'est à reconstruire.
 #[test]
-fn a_sound_database_needs_no_second_opinion() {
+fn a_sound_database_is_sound() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("t.db")).unwrap();
     let r = store.integrity_report().unwrap();
-    assert_eq!(r.pool, "ok");
-    assert!(
-        r.fresh.is_none(),
-        "connexion neuve inutile quand le pool dit ok"
-    );
+    assert_eq!(r.verdict(), "ok");
     assert!(r.sound());
-    assert!(!r.reader_lied());
     assert_eq!(r.fts_only(), None);
     assert!(store.repaired_fts().is_empty());
 }
 
-/// #158 : un lecteur qui accuse une base que le fichier dément ne ment qu'une fois —
-/// il est fermé, et le pool en rouvre un à sa place.
+/// #158 : un verdict qui ne parle que d'un index dérivé nomme la table à reconstruire,
+/// et jamais rien à restaurer.
 #[test]
-fn a_lying_reader_is_recognised_and_replaced() {
-    let r = IntegrityReport {
-        pool: "malformed inverted index for FTS5 table main.mem_fts".into(),
-        fresh: Some("ok".into()),
-        reader: crate::pool::ReaderStats {
-            age_s: 11_000,
-            served: 4_200,
-        },
-    };
-    assert!(r.reader_lied(), "le fichier dément le lecteur");
-    assert!(r.sound(), "c'est le fichier qui fait foi");
-    assert_eq!(r.verdict(), "ok");
-    assert_eq!(r.fts_only(), None, "rien à reconstruire : rien n'est cassé");
-}
-
-/// #158 : quand les deux sont d'accord sur un index dérivé, il y a bien quelque chose
-/// à reconstruire — et toujours rien à restaurer.
-#[test]
-fn a_confirmed_index_fault_names_the_table() {
-    let bad = "malformed inverted index for FTS5 table main.messages_fts";
-    let r = IntegrityReport {
-        pool: bad.into(),
-        fresh: Some(bad.into()),
-        reader: crate::pool::ReaderStats {
-            age_s: 10,
-            served: 1,
-        },
-    };
+fn an_index_fault_names_the_table() {
+    let r = IntegrityReport::of("malformed inverted index for FTS5 table main.messages_fts");
     assert!(!r.sound());
-    assert!(!r.reader_lied());
     assert_eq!(r.fts_only(), Some(vec!["messages_fts".to_string()]));
 
     // Une atteinte aux données, elle, n'est pas reconstructible.
-    let hard = IntegrityReport {
-        pool: "row 12 missing from index messages_session".into(),
-        fresh: Some("row 12 missing from index messages_session".into()),
-        reader: crate::pool::ReaderStats {
-            age_s: 10,
-            served: 1,
-        },
-    };
+    let hard = IntegrityReport::of("row 12 missing from index messages_session");
+    assert!(!hard.sound());
     assert_eq!(hard.fts_only(), None);
 }
 
@@ -193,10 +154,10 @@ fn a_broken_search_index_does_not_stop_the_daemon() {
     assert_eq!(store.integrity().unwrap(), "ok");
 }
 
-/// #158 : un index abîmé **après** l'ouverture est vu par le pool, confirmé par une
-/// connexion neuve, et nommé comme seul dérivé à reconstruire.
+/// #158 : un index abîmé **après** l'ouverture est vu, et nommé comme seul dérivé à
+/// reconstruire.
 #[test]
-fn a_fault_seen_by_the_pool_is_confirmed_by_the_file() {
+fn a_fault_after_opening_is_seen_and_names_the_table() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.db");
     let store = Store::open(&path).unwrap();
@@ -209,17 +170,10 @@ fn a_fault_seen_by_the_pool_is_confirmed_by_the_file() {
         .unwrap();
     }
     let r = store.integrity_report().unwrap();
-    assert_ne!(r.pool, "ok");
-    assert_eq!(
-        r.fresh.as_deref(),
-        Some(r.pool.as_str()),
-        "le fichier confirme"
-    );
     assert!(!r.sound());
-    assert!(!r.reader_lied());
     assert_eq!(r.fts_only(), Some(vec!["messages_fts".to_string()]));
-    // Le lecteur qui a accusé la base n'est pas rendu au pool : le suivant répond encore.
-    assert_ne!(store.integrity().unwrap(), "ok");
+    // Le verdict ne s'use pas : le contrôle suivant dit la même chose.
+    assert_eq!(store.integrity().unwrap(), r.verdict());
 }
 
 /// #158 : un index si abîmé que SQLite ne construit plus sa table virtuelle est recréé
@@ -267,4 +221,76 @@ fn only_a_declared_fts5_table_is_recreated() {
         unconstructible_fts(&c, &StoreError::other("disk I/O error")),
         None
     );
+}
+
+/// Chaque lecteur du pool cherche une fois dans `messages_fts` : les quatre connexions
+/// sont tenues ensemble, aucune ne sert deux fois.
+fn every_reader_searches(store: &Store) -> Vec<i64> {
+    let n = store.inner.readers.capacity();
+    let together = std::sync::Arc::new(std::sync::Barrier::new(n));
+    let hands: Vec<_> = (0..n)
+        .map(|_| {
+            let (store, together) = (store.clone(), together.clone());
+            std::thread::spawn(move || {
+                store
+                    .read_blocking(move |c| {
+                        let hits = c.query_row(
+                            "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonjour'",
+                            [],
+                            |r| r.get(0),
+                        )?;
+                        together.wait();
+                        Ok(hits)
+                    })
+                    .unwrap()
+            })
+        })
+        .collect();
+    hands.into_iter().map(|h| h.join().unwrap()).collect()
+}
+
+fn say_hello(store: &Store, from: i64, count: i64) {
+    store
+        .write_blocking(move |tx| {
+            for i in from..from + count {
+                tx.execute(
+                    "INSERT INTO messages_fts(content, session_id, msg_id) \
+                     VALUES('bonjour à tous', 's1', ?1)",
+                    [i],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// #468 : la cause du « lecteur qui ment » de #158. FTS5 garde, par connexion, la
+/// structure de son index ; une recherche la revalide, le contrôle d'intégrité non. Une
+/// connexion qui a cherché (ou qui s'est déjà contrôlée) puis voit **une autre** connexion
+/// écrire dans l'index rend donc « corruption » sur un fichier sain, à tous les coups. Le
+/// daemon vit ainsi : quatre lecteurs qui cherchent, un écrivain qui range chaque message.
+/// Le contrôle se fait sur une connexion neuve, la seule qui n'ait rien en cache.
+#[test]
+fn a_reader_that_searched_before_a_write_does_not_accuse_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("t.db")).unwrap();
+    say_hello(&store, 0, 50);
+    assert_eq!(every_reader_searches(&store), [50; 4]);
+
+    say_hello(&store, 50, 1);
+    let r = store.integrity_report().unwrap();
+    assert!(r.sound(), "{}", r.verdict());
+    assert_eq!(store.integrity().unwrap(), "ok");
+
+    // Un contrôle laisse lui aussi la structure en cache : le suivant, après une
+    // écriture, accusait à son tour.
+    say_hello(&store, 51, 1);
+    assert_eq!(store.integrity().unwrap(), "ok");
+    assert!(store.integrity_report().unwrap().sound());
+
+    // Et la recherche, elle, n'a jamais menti.
+    assert_eq!(every_reader_searches(&store), [52; 4]);
+    // Le contrôle ne coûte aucun lecteur : avant, chaque faux verdict en fermait un sans
+    // le remplacer, et la lecture qui trouvait le pool vide attendait cinq secondes.
+    assert_eq!(store.inner.readers.idle(), store.inner.readers.capacity());
 }

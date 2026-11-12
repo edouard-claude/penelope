@@ -341,6 +341,44 @@ async fn database_and_audit_are_healthy_on_a_fresh_install() {
     assert!(audit.ok, "{}", audit.detail);
 }
 
+/// #468 : l'usage ordinaire du daemon, des recherches puis un message rangé, faisait
+/// dire à `doctor` qu'un lecteur du pool mentait, avec `penelope restart` pour remède. Le
+/// contrôle reste vert, autant de fois qu'on le lance.
+#[tokio::test]
+async fn searching_then_writing_does_not_turn_the_database_check_red() {
+    let (_d, s) = services().await;
+    let say = |id: i64| {
+        s.store.write(move |tx| {
+            tx.execute(
+                "INSERT INTO messages_fts(content, session_id, msg_id) \
+                 VALUES('bonjour à tous', 's1', ?1)",
+                [id],
+            )?;
+            Ok(())
+        })
+    };
+    say(1).await.unwrap();
+    for round in 2..5 {
+        // Chaque lecteur du pool cherche, puis l'écrivain range un message.
+        let searches = (0..8).map(|_| {
+            s.store.read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonjour'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+        });
+        for hits in futures::future::join_all(searches).await {
+            assert_eq!(hits.unwrap(), round - 1);
+        }
+        say(round).await.unwrap();
+        let db = integrity_check_of(&s);
+        assert!(db.ok, "passage {round} : {}", db.detail);
+        assert_eq!(db.detail, "intègre");
+    }
+}
+
 #[tokio::test]
 async fn a_missing_owner_is_critical_with_a_fix() {
     let dir = tempfile::tempdir().unwrap();

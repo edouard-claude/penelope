@@ -122,39 +122,31 @@ pub struct Store {
     inner: Arc<StoreInner>,
 }
 
-/// Ce que l'intégrité de la base dit, et de quelle bouche (issue #158).
-#[derive(Debug, Clone)]
+/// Ce que le contrôle d'intégrité dit du **fichier** (issues #158 et #468).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityReport {
-    /// Le verdict d'un lecteur du pool.
-    pub pool: String,
-    /// Celui d'une connexion neuve, demandé seulement si le pool a accusé la base. C'est
-    /// lui qui fait foi sur l'état du **fichier**.
-    pub fresh: Option<String>,
-    /// Âge et service de la connexion du pool interrogée.
-    pub reader: crate::pool::ReaderStats,
+    verdict: String,
 }
 
 impl IntegrityReport {
-    /// Le verdict qui fait foi : celui de la connexion neuve dès qu'on l'a demandé.
+    pub fn of(verdict: impl Into<String>) -> IntegrityReport {
+        IntegrityReport {
+            verdict: verdict.into(),
+        }
+    }
+
+    /// Toutes les lignes du contrôle, `ok` quand il n'a rien trouvé.
     pub fn verdict(&self) -> &str {
-        self.fresh.as_deref().unwrap_or(&self.pool)
+        &self.verdict
     }
 
-    /// Tout va bien, des deux côtés.
     pub fn sound(&self) -> bool {
-        self.verdict() == "ok"
+        self.verdict == "ok"
     }
 
-    /// Le pool accuse une base que le fichier dément : c'est la connexion qui ment.
-    pub fn reader_lied(&self) -> bool {
-        self.pool != "ok" && self.fresh.as_deref() == Some("ok")
-    }
-
-    /// Les index dérivés nommés par le verdict qui fait foi, s'il ne parle que d'eux.
+    /// Les index dérivés nommés par le verdict, s'il ne parle que d'eux.
     pub fn fts_only(&self) -> Option<Vec<String>> {
-        (!self.sound())
-            .then(|| fts_tables(self.verdict()))
-            .flatten()
+        (!self.sound()).then(|| fts_tables(&self.verdict)).flatten()
     }
 }
 
@@ -350,9 +342,19 @@ impl Store {
         self.inner.readers.with(f)
     }
 
-    /// `PRAGMA integrity_check` : utilisé par le mode `recovery` (§17).
+    /// `PRAGMA integrity_check` du fichier, sur une connexion ouverte pour l'occasion.
+    ///
+    /// Jamais sur une connexion qui a déjà servi (#468). FTS5 garde, par connexion, la
+    /// structure de son index : une recherche la revalide contre le fichier, le contrôle
+    /// d'intégrité la prend telle quelle. Une connexion qui a cherché, ou qui s'est déjà
+    /// contrôlée, puis voit une autre connexion écrire dans l'index rend « corruption »
+    /// sur un fichier sain. C'était le « lecteur qui ment » de #158 : quatre lecteurs qui
+    /// cherchent, un écrivain qui range chaque message, et `doctor` accusait la base à
+    /// chaque passage. Une connexion neuve n'a rien en cache ; comme `backup_to` (#77),
+    /// elle lit l'état commité sans occuper ni le pool ni l'écrivain.
     pub fn integrity(&self) -> Result<String> {
-        self.read_blocking(|c| check_lines(c, "PRAGMA integrity_check;"))
+        let c = open_connection(&self.inner.path, true)?;
+        check_lines(&c, "PRAGMA integrity_check;")
     }
 
     /// Les index FTS5 reconstruits à l'ouverture, s'il y en a eu (issue #158).
@@ -360,33 +362,10 @@ impl Store {
         &self.inner.repaired_fts
     }
 
-    /// `PRAGMA integrity_check`, **et ce qu'en dit une connexion neuve** si le pool
-    /// n'est pas d'accord (issue #158).
-    ///
-    /// Le 21/09, un lecteur ouvert depuis trois heures a rendu « malformed inverted index »
-    /// sur une base que sept connexions neuves relisaient intègre, en nommant une table
-    /// différente d'un appel à l'autre. C'est le fichier qui fait foi, pas une connexion :
-    /// comme `backup_to` (#77), on en ouvre une pour l'occasion. La connexion qui a menti
-    /// est fermée et remplacée.
+    /// [`integrity`](Self::integrity), avec de quoi trier le verdict : sain, index
+    /// dérivés à reconstruire, ou données atteintes (issue #158).
     pub fn integrity_report(&self) -> Result<IntegrityReport> {
-        let (pool, reader) = self.inner.readers.with_audit(|c| {
-            let v = check_lines(c, "PRAGMA integrity_check;")?;
-            // Une connexion qui accuse la base ne revient dans le pool que si le fichier
-            // lui donne raison ; le verdict du fichier est demandé juste après.
-            let keep = v == "ok";
-            Ok((v, keep))
-        })?;
-        let fresh = if pool == "ok" {
-            None
-        } else {
-            let c = open_connection(&self.inner.path, true)?;
-            Some(check_lines(&c, "PRAGMA integrity_check;")?)
-        };
-        Ok(IntegrityReport {
-            pool,
-            fresh,
-            reader,
-        })
+        self.integrity().map(IntegrityReport::of)
     }
 
     /// Copie cohérente de la base (sauvegarde §15 `penelope backup`), **sans occuper
