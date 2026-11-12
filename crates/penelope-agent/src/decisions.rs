@@ -117,19 +117,28 @@ pub async fn decide_approval(
         if a.kind == penelope_hitl::ApprovalKind::EffectUnknown {
             return decide_uncertain_effect(s, &a, decision).await;
         }
-        // Une double confirmation se donne à chaque fois (#445) : « Pour cette session »
-        // et « Toujours » y tranchaient d'un clic, sans seconde carte, et posaient une
-        // règle sur un outil destructif entier. Le refus est ici, pas dans le canal : un
-        // bouton d'une ancienne carte ou `approve --always` n'y échappent pas.
+        // Une double confirmation ne prend pas de fenêtre de run ou de session (#445) :
+        // « Pour cette session » y tranchait d'un clic et posait une règle sur un outil
+        // destructif entier. « Toujours », lui, vaut toujours (décision 0026), sauf sur un
+        // réglage sensible, que son plancher redemande quoi que dise une règle. Le refus
+        // est ici, pas dans le canal : un bouton d'une ancienne carte n'y échappe pas.
         if a.state == penelope_hitl::ApprovalState::Pending
             && a.payload["double"] == Value::Bool(true)
             && decision.approved
-            && decision.window != PolicyWindow::Once
         {
-            anyhow::bail!(
-                "demande {approval_id} à double confirmation : elle s'autorise une fois, \
-                 jamais « pour cette session » ni « Toujours »"
-            );
+            let every_time = a.payload["every_time"] == Value::Bool(true);
+            match decision.window {
+                PolicyWindow::Once => {}
+                PolicyWindow::Always if !every_time => {}
+                PolicyWindow::Always => anyhow::bail!(
+                    "demande {approval_id} sur un réglage sensible : elle s'autorise une \
+                     fois, à chaque fois"
+                ),
+                PolicyWindow::Run | PolicyWindow::Session => anyhow::bail!(
+                    "demande {approval_id} à double confirmation : elle s'autorise une fois \
+                     ou « Toujours », jamais « pour cette session »"
+                ),
+            }
         }
     }
     match s.approvals.decide(approval_id, decision).await {

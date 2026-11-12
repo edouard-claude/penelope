@@ -522,6 +522,9 @@ impl AgentLoop {
                             "why": why.as_ref().map(|(w, _)| w),
                             "why_from": why.as_ref().map(|(_, f)| f),
                             "double": double,
+                            // Le plancher des réglages sensibles redemande quoi que dise
+                            // une règle : sa carte ne propose pas « Toujours » (0026).
+                            "every_time": verdict.layer == policy::VerdictLayer::SensitiveConfig,
                             "call_id": context.call_id.0,
                             // Ce que l'accord couvre (#446) : ces arguments, avant masquage.
                             "args_digest": hooks::args_digest(&effective_args),

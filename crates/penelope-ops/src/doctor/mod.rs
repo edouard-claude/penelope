@@ -249,8 +249,6 @@ pub async fn run_with(s: &Services, daemon: Vec<DoctorCheck>) -> Vec<DoctorCheck
     checks.push(approval_judge_check(s).await);
     // Le jeu de décisions du juge, s'il est collecté (#233).
     checks.push(approval_dataset_check(s).await);
-    // Les règles « Toujours » qu'une double confirmation rend mortes (#445).
-    checks.push(penelope_app::dead_rules::doctor_check(s).await);
 
     // Le rédacteur rend, sur toutes les formes connues (#153).
     checks.push(redactor_check().await);

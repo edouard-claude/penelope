@@ -331,11 +331,13 @@ external = "ask"
 unknown = "ask"
 ```
 
-Tant que la classe destructive est à `ask_twice`, aucune règle « Toujours » ou « Pour cette
-session » ne dispense un outil destructif de ses deux confirmations, et la carte n'en
-propose pas. Un outil annoncé destructif à tort par son serveur se corrige dans la
-déclaration (`[tool_risk]`, par exemple `marquer = "write"`) : il retrouve alors la carte
-simple et ses règles.
+Tant que la classe destructive est à `ask_twice`, une règle « Pour cette session » ne
+dispense pas un outil destructif de ses deux confirmations, et la carte ne la propose pas.
+« Toujours », lui, vaut toujours (décision
+[0026](decisions/0026-toujours-vaut-toujours.md)) : la carte le propose, la seconde
+confirmation le fait confirmer, et les appels suivants partent sans carte. Un outil annoncé
+destructif à tort par son serveur se corrige dans la déclaration (`[tool_risk]`, par
+exemple `marquer = "write"`) : il retrouve alors la carte simple.
 
 Un résultat d'outil qui contient `isError: true` est transmis tel quel au modèle : c'est
 une réponse, pas une panne du harnais, et le modèle doit pouvoir la corriger seul.

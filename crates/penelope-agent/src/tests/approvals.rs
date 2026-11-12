@@ -639,23 +639,19 @@ async fn forget_card(
     (loop_, id)
 }
 
-/// #445 : une double confirmation se donne une fois. « Pour cette session » et « Toujours »
-/// tranchaient la carte d'un clic et posaient une règle sur l'outil destructif entier ; le
-/// cœur refuse maintenant toute fenêtre, d'où qu'elle vienne (bouton d'une ancienne carte,
-/// `penelope approve --always`), et la demande reste à trancher.
+/// #445 : une double confirmation ne prend pas de fenêtre de run ou de session, d'où
+/// qu'elle vienne ; la demande reste à trancher. Décision 0026 : « Toujours » y reste
+/// permis, pose sa règle sur l'outil, et l'appel suivant part sans carte.
 #[tokio::test]
-async fn a_double_confirmation_takes_no_window() {
+async fn a_double_confirmation_takes_always_but_no_session_window() {
     let (_d, s, p) = setup().await;
     let sid = session(&s).await;
     let (loop_, id) = forget_card(&s, &p, &sid).await;
     let card = s.approvals.get(&id).await.unwrap().unwrap();
     assert_eq!(card.payload["double"], true, "{:#}", card.payload);
+    assert_eq!(card.payload["every_time"], false, "{:#}", card.payload);
 
-    for window in [
-        PolicyWindow::Run,
-        PolicyWindow::Session,
-        PolicyWindow::Always,
-    ] {
+    for window in [PolicyWindow::Run, PolicyWindow::Session] {
         let d = Decision {
             window,
             ..Decision::approve_once("cli")
@@ -672,11 +668,59 @@ async fn a_double_confirmation_takes_no_window() {
 
     assert!(
         loop_
-            .decide_approval(&id, &Decision::approve_once("telegram"))
+            .decide_approval(&id, &Decision::approve_always("telegram"))
             .await
             .unwrap()
             .approved()
     );
+    let rules = s.policies.active_rules().await.unwrap();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert_eq!(rules[0].tool.as_deref(), Some("mem_forget"));
+    assert_eq!(rules[0].window, PolicyWindow::Always);
+
+    // L'oubli suivant ne demande plus rien : « Toujours » vaut toujours.
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call("c2", "mem_forget", json!({"id": "m_2"}))],
+    ));
+    p.push(Scripted::Text("Oublié.".into()));
+    let out = loop_.run_memory(request(&sid), &exec(false)).await.unwrap();
+    assert!(
+        !matches!(out, TurnOutcome::AwaitingApproval { .. }),
+        "{out:?}"
+    );
+    assert_eq!(s.policies.active_rules().await.unwrap()[0].hits, 1);
+}
+
+/// Décision 0026 : le plancher des réglages sensibles, lui, redemande quoi que dise une
+/// règle. Sa demande refuse « Toujours », qui écrirait une règle sans effet.
+#[tokio::test]
+async fn a_sensitive_setting_takes_no_always() {
+    let (_d, s, p) = setup().await;
+    let sid = session(&s).await;
+    p.push(Scripted::ToolCalls(
+        String::new(),
+        vec![call(
+            "c1",
+            "config_set",
+            json!({"path": "approval.judge", "value": "off"}),
+        )],
+    ));
+    let loop_ = AgentLoop::new(s.clone(), p.clone());
+    let id = match loop_.run_memory(request(&sid), &exec(false)).await.unwrap() {
+        TurnOutcome::AwaitingApproval { approval_id } => approval_id,
+        other => panic!("{other:?}"),
+    };
+    let card = s.approvals.get(&id).await.unwrap().unwrap();
+    assert_eq!(card.payload["double"], true, "{:#}", card.payload);
+    assert_eq!(card.payload["every_time"], true, "{:#}", card.payload);
+    let err = loop_
+        .decide_approval(&id, &Decision::approve_always("cli"))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("réglage sensible"), "{err}");
+    let card = s.approvals.get(&id).await.unwrap().unwrap();
+    assert_eq!(card.state, penelope_hitl::ApprovalState::Pending);
     assert!(s.policies.active_rules().await.unwrap().is_empty());
 }
 

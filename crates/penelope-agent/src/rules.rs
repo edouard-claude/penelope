@@ -10,6 +10,15 @@ pub fn always_creates_no_rule(subject: &str, args: Option<&Value>) -> bool {
     args.is_some() && subject == "shell_exec" && arg_patterns(subject, args).is_empty()
 }
 
+/// Vrai quand un « Toujours » sur cet appel écrira une règle sur l'outil entier : un outil
+/// MCP, un outil natif sans argument qui le borne. La carte le dit sur son bouton, que
+/// #150 avait retiré avec celui des commandes composées (décision 0026).
+pub fn always_covers_the_tool(subject: &str, args: Option<&Value>) -> bool {
+    args.is_some()
+        && !matches!(subject, "shell_exec" | "git_clone")
+        && arg_patterns(subject, args).is_empty()
+}
+
 /// Nombre de familles qu'un seul clic peut autoriser. Au-delà, la carte ne peut plus les
 /// nommer toutes d'un coup de lecture : le propriétaire autoriserait sans savoir quoi.
 pub const MAX_FAMILIES_PER_CLICK: usize = 3;

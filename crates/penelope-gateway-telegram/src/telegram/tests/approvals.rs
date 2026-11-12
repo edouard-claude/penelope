@@ -161,7 +161,8 @@ async fn an_approval_card_says_the_intention_first() {
     );
 }
 
-/// #116 : un appel MCP rend la même carte, le serveur en qualificatif.
+/// #116 : un appel MCP rend la même carte, le serveur en qualificatif. Décision 0026 : son
+/// « Toujours », disparu avec #150, est revenu et dit qu'il porte sur l'outil.
 #[tokio::test]
 async fn an_mcp_approval_card_names_its_server_as_a_qualifier() {
     let (_d, g, t, _p) = gateway().await;
@@ -202,6 +203,11 @@ async fn an_mcp_approval_card_names_its_server_as_a_qualifier() {
         "{text}"
     );
     assert!(!text.contains("null"), "{text}");
+    let labels: Vec<String> = inline_buttons(&card).into_iter().map(|(l, _)| l).collect();
+    assert!(
+        labels.iter().any(|l| l == "♾️ Toujours pour cet outil"),
+        "{labels:?}"
+    );
 }
 
 /// #129 : une commande qui porte un gabarit Go (`{{.Name}}`) part sur la carte telle
